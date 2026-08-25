@@ -1940,6 +1940,14 @@ export default function TrainingApp() {
           letter-spacing: 0.3px;
           text-transform: uppercase;
         }
+        .folder-drag-handle {
+          display: flex;
+          align-items: center;
+          color: var(--text-dim);
+          flex-shrink: 0;
+          margin-left: -2px;
+          cursor: grab;
+        }
         .folder-header .btn-icon {
           width: 26px;
           height: 26px;
@@ -2422,10 +2430,24 @@ export default function TrainingApp() {
         }
         /* Die Liste ist jetzt die Hauptflaeche des ersten Schritts, deshalb
            bekommt sie so viel Hoehe wie der Bildschirm hergibt. */
+        /* Step 1 is laid out as a column that fills the visible area exactly.
+           Guessing a max-height for the list never held up: the search field
+           can be open or closed, and the status bar inset differs per device -
+           any fixed number pushed the buttons under the navigation bar in some
+           combination. Letting the list take whatever is left over is exact. */
+        .picker-step {
+          display: flex;
+          flex-direction: column;
+          min-height: 0;
+          height: calc(100dvh - env(safe-area-inset-top) - env(safe-area-inset-bottom) - 150px);
+        }
         .exercise-picker-list {
-          max-height: calc(100vh - 300px);
-          min-height: 280px;
+          flex: 1;
+          min-height: 140px;
           overflow-y: auto;
+        }
+        .picker-actions {
+          flex-shrink: 0;
         }
         .pr-badge {
           position: absolute;
@@ -2733,6 +2755,7 @@ export default function TrainingApp() {
           ) : (
             <PlansView
             onManageGyms={() => setGymManagerOpen(true)}
+            onReorderFolders={persistFolders}
             onOpenBackup={() => setBackupOpen(true)}
               plans={allPlans}
               exBy={allExBy}
@@ -5167,7 +5190,7 @@ function PlanBuilder({
       )}
 
       {step === 1 ? (
-        <>
+        <div className="picker-step">
       {searchOpen && (
         <div className="search-box">
           <Search size={16} color="var(--text-dim)" />
@@ -5261,7 +5284,7 @@ function PlanBuilder({
               Wähle mindestens eine Übung aus.
             </div>
           )}
-          <div style={{ display: "flex", gap: 8, marginTop: 4 }}>
+          <div className="picker-actions" style={{ display: "flex", gap: 8, marginTop: 4 }}>
             <button className="btn btn-ghost" style={{ flex: 1 }} onClick={onCancel}>
               <X size={16} /> Abbrechen
             </button>
@@ -5275,7 +5298,7 @@ function PlanBuilder({
               <ChevronRight size={16} />
             </button>
           </div>
-        </>
+        </div>
       ) : (
         <>
           <div className="card" style={{ marginBottom: 10 }}>
@@ -5824,6 +5847,7 @@ function PlansView({
   onMovePlan,
   onManageGyms = () => {},
   onOpenBackup = () => {},
+  onReorderFolders = () => {},
 }) {
   const [creatingFolder, setCreatingFolder] = useState(false);
   const [newFolderName, setNewFolderName] = useState("");
@@ -5877,6 +5901,27 @@ function PlansView({
   // Only folders belonging to the currently selected program are shown, and
   // a plan only counts as "in" a folder of this program.
   const programFolders = folders.filter((f) => f.programId === activeProgramId);
+  // Folders can be reordered by press-and-drag, same feel as the exercises
+  // in the plan builder. Only the folders of the active program move; the
+  // rest of the list keeps its order.
+  const {
+    draggingId: draggingFolderId,
+    itemRefs: folderRefs,
+    dragHandleProps: folderDragProps,
+  } = useDragReorder({
+    items: programFolders,
+    getId: (f) => f.id,
+    // The hook hands over the already reordered list, not two indices.
+    onReorder: (reordered) => {
+      // Write the new order back into the positions the program's folders
+      // occupy in the full list, so folders of other programs stay put.
+      const positions = [];
+      folders.forEach((f, i) => { if (f.programId === activeProgramId) positions.push(i); });
+      const next = [...folders];
+      positions.forEach((pos, i) => { next[pos] = reordered[i]; });
+      onReorderFolders(next);
+    },
+  });
   const programFolderIds = programFolders.map((f) => f.id);
   const customPlans = plans;
   // A plan with no folder still belongs to exactly one program, otherwise
@@ -6118,12 +6163,25 @@ function PlansView({
         const folderPlans = customPlans.filter((p) => p.folderId === f.id);
         const collapsed = !!collapsedFolders[f.id];
         return (
-          <div style={{ marginBottom: 18 }} key={f.id}>
+          <div
+            style={{ marginBottom: 18 }}
+            key={f.id}
+            ref={(el) => { folderRefs.current[f.id] = el; }}
+            className={draggingFolderId === f.id ? "is-dragging" : ""}
+          >
             <div
               className="folder-header"
               style={{ cursor: "pointer" }}
               onClick={() => toggleFolderCollapsed(f.id)}
             >
+              <span
+                className="drag-handle folder-drag-handle"
+                title="Gedrückt halten, um den Ordner zu verschieben"
+                onClick={(e) => e.stopPropagation()}
+                {...folderDragProps(f.id)}
+              >
+                <GripVertical size={15} />
+              </span>
               <ChevronRight
                 size={15}
                 color="var(--text-dim)"

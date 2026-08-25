@@ -36,6 +36,7 @@ import {
   YAxis,
   CartesianGrid,
   Tooltip,
+  Legend,
   ResponsiveContainer,
 } from "recharts";
 
@@ -147,8 +148,22 @@ const entrySets = (entry) => (Array.isArray(entry?.sets) ? entry.sets.filter(Boo
 // A subgroup assignment always comes from the override map (works the same
 // way for built-in and custom exercises), so there is exactly one place
 // that decides an exercise's subgroup.
+// Returns ALL subgroups of an exercise. Older data stored a single id as a
+// plain string; that is read as a one-element list here so existing
+// assignments keep working without a migration step.
+function getExerciseSubgroups(exercise, subgroupOverrides) {
+  const raw = subgroupOverrides && subgroupOverrides[exercise.id];
+  if (!raw) return [];
+  return Array.isArray(raw) ? raw.filter(Boolean) : [raw];
+}
+
+// Kept for the places that only need one value (e.g. a compact tag).
 function getExerciseSubgroup(exercise, subgroupOverrides) {
-  return (subgroupOverrides && subgroupOverrides[exercise.id]) || null;
+  return getExerciseSubgroups(exercise, subgroupOverrides)[0] || null;
+}
+
+function exerciseHasSubgroup(exercise, subgroupOverrides, subgroupId) {
+  return getExerciseSubgroups(exercise, subgroupOverrides).includes(subgroupId);
 }
 
 const EXERCISES = [
@@ -326,11 +341,29 @@ function getMonthMatrix(year, month) {
 // Liefert für eine Übung: die zuletzt protokollierten Sätze (aus vergangenen
 // Logs, jüngste zuerst) sowie den bisherigen Bestwert (schwerster Satz +
 // meiste Wdh. bei diesem Gewicht), um "Letzte Leistung" & PR-Badges anzuzeigen.
-function getExerciseHistory(logs, exerciseId, excludeSessionId, isTimeBased = false) {
-  const past = logs
+// An exercise counts as time-based when it is flagged globally OR when its
+// recorded sets were done on time (automatic mode writes targetUseTime into
+// the log). Without this, a HIT workout would show up as a weight exercise
+// with 0 kg in the stats and charts.
+function isTimeBasedInLogs(logs, exerciseId, timeBasedExercises) {
+  if (timeBasedExercises && timeBasedExercises[exerciseId]) return true;
+  return (logs || []).some((l) =>
+    logEntries(l).some((e) => e.exerciseId === exerciseId && e.targetUseTime)
+  );
+}
+
+function getExerciseHistory(logs, exerciseId, excludeSessionId, isTimeBased = false, gymId = null) {
+  const all = logs
     .filter((l) => l.id !== excludeSessionId)
     .slice()
     .sort((a, b) => new Date(b.date) - new Date(a.date));
+
+  // Weights differ between gyms, so a personal record only means something
+  // within the same gym. When a gym is given we look at that gym only; if
+  // there is nothing there yet (first visit) we fall back to everything,
+  // otherwise the first workout in a new gym would start from scratch.
+  const sameGym = gymId ? all.filter((l) => l.gymId === gymId) : all;
+  const past = gymId && sameGym.length > 0 ? sameGym : all;
 
   let lastSets = null;
   let lastDate = null;
@@ -624,6 +657,74 @@ async function saveJSON(key, value) {
   }
 }
 
+// Every key the app persists. Kept in one place so a backup can never
+// silently miss a feature that was added later - if something new is stored,
+// it belongs in this list.
+const BACKUP_KEYS = [
+  "training-plans",
+  "workout-logs",
+  "custom-exercises",
+  "plan-folders",
+  "exercise-notes",
+  "exercise-name-overrides",
+  "exercise-time-based",
+  "exercise-subgroup-overrides",
+  "exercise-equipment-overrides",
+  "training-programs",
+  "active-program-id",
+  "calendar-entries",
+  "calendar-categories",
+  "gyms",
+  "active-gym-id",
+  "app-theme",
+  "active-workout",
+];
+
+async function buildBackup() {
+  const data = {};
+  for (const key of BACKUP_KEYS) {
+    data[key] = await loadJSON(key, null);
+  }
+  return {
+    app: "iron-log",
+    formatVersion: 1,
+    exportedAt: new Date().toISOString(),
+    data,
+  };
+}
+
+// Restores a backup. Deliberately strict: a file that isn't a backup, or is
+// missing the data block, is rejected rather than half-applied - a partial
+// restore would be worse than none at all.
+async function restoreBackup(parsed) {
+  if (!parsed || typeof parsed !== "object" || !parsed.data || typeof parsed.data !== "object") {
+    throw new Error("Das ist keine gültige Sicherungsdatei.");
+  }
+  const keys = Object.keys(parsed.data).filter((k) => BACKUP_KEYS.includes(k));
+  if (keys.length === 0) throw new Error("Die Datei enthält keine bekannten Daten.");
+  for (const key of keys) {
+    // A key present in the file is applied even when its value is null -
+    // otherwise a workout still running locally would survive a restore of a
+    // state that had none, and keep referring to data that no longer exists.
+    // Keys absent from the file (older backup) are left untouched.
+    await saveJSON(key, parsed.data[key]);
+  }
+  return keys.length;
+}
+
+function summarizeBackup(parsed) {
+  const d = parsed?.data || {};
+  const count = (v) => (Array.isArray(v) ? v.length : 0);
+  return {
+    plans: count(d["training-plans"]),
+    logs: count(d["workout-logs"]),
+    exercises: count(d["custom-exercises"]),
+    folders: count(d["plan-folders"]),
+    gyms: count(d["gyms"]),
+    exportedAt: parsed?.exportedAt || null,
+  };
+}
+
 // ---------------------------------------------------------------------------
 // Small UI atoms
 // ---------------------------------------------------------------------------
@@ -636,11 +737,20 @@ function GroupTag({ group }) {
 // Shown next to the main muscle group whenever an exercise has been given a
 // more specific subgroup, so the finer categorization is visible at a glance
 // in the list rather than only inside the detail sheet.
-function SubgroupTag({ group, subgroupId }) {
-  if (!subgroupId) return null;
-  const label = (SUBGROUPS[group] || []).find((s) => s.id === subgroupId)?.label;
-  if (!label) return null;
-  return <span className="tag tag-subgroup">{label}</span>;
+function SubgroupTag({ group, subgroupId, subgroupIds }) {
+  const ids = subgroupIds && subgroupIds.length ? subgroupIds : subgroupId ? [subgroupId] : [];
+  if (ids.length === 0) return null;
+  const labels = ids
+    .map((id) => (SUBGROUPS[group] || []).find((s) => s.id === id)?.label)
+    .filter(Boolean);
+  if (labels.length === 0) return null;
+  return (
+    <>
+      {labels.map((label) => (
+        <span className="tag tag-subgroup" key={label}>{label}</span>
+      ))}
+    </>
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -653,6 +763,11 @@ export default function TrainingApp() {
   const [tab, setTab] = useState("plans");
   const [plans, setPlans] = useState([]);
   const [logs, setLogs] = useState([]);
+  // Same exercise, different gym, different weights: a leg press at 60kg in
+  // one gym is not the leg press at 60kg in another. Tagging each workout
+  // with a gym keeps suggestions, PRs and charts from mixing the two.
+  const [gyms, setGyms] = useState([]);
+  const [activeGymId, setActiveGymId] = useState(null);
   const [loading, setLoading] = useState(true);
   const [customExercises, setCustomExercises] = useState([]);
   const [folders, setFolders] = useState([]);
@@ -703,7 +818,7 @@ export default function TrainingApp() {
 
   useEffect(() => {
     (async () => {
-      const [p, l, c, f, en, no, tb, active, prog, activeProg, sg, ce, cc, eq, th] = await Promise.all([
+      const [p, l, c, f, en, no, tb, active, prog, activeProg, sg, ce, cc, eq, th, gy, activeGy] = await Promise.all([
         loadJSON("training-plans", []),
         loadJSON("workout-logs", []),
         loadJSON("custom-exercises", []),
@@ -719,6 +834,8 @@ export default function TrainingApp() {
         loadJSON("calendar-categories", []),
         loadJSON("exercise-equipment-overrides", {}),
         loadJSON("app-theme", "light"),
+        loadJSON("gyms", []),
+        loadJSON("active-gym-id", null),
       ]);
       // Migration: users who already had folders before "programs" existed
       // get one default program that all their existing folders are
@@ -747,18 +864,51 @@ export default function TrainingApp() {
       setExerciseSubgroupOverrides(sg);
       setTimeBasedExercises(tb);
       setSession(active || null);
+      // Landing on the plans list while a workout is still running means
+      // hunting for the way back - on a phone the app gets reloaded between
+      // sets often enough that this should just resume where it left off.
+      if (active) setTab("log");
       setPrograms(migratedPrograms);
       setActiveProgramId(resolvedActiveProgramId);
       setCalendarEntries(ce);
       setCalendarCategories(cc);
+      setGyms(gy);
+      setActiveGymId(activeGy && gy.some((g) => g.id === activeGy) ? activeGy : gy[0]?.id || null);
       setExerciseEquipmentOverrides(eq);
       setTheme(th === "light" ? "light" : "dark");
       setLoading(false);
     })();
   }, []);
 
+  // Tapping a number field should let you type the new value straight away
+  // instead of clearing the old one first. Selecting the content on focus
+  // does that, and leaving without typing keeps the previous value. Done
+  // globally so fields added later behave the same way automatically.
   useEffect(() => {
-    const saveOnLeave = () => { if (session) saveJSON("active-workout", session); };
+    const selectNumberOnFocus = (e) => {
+      const el = e.target;
+      if (!el || el.tagName !== "INPUT") return;
+      const isNumeric = el.type === "number" || el.inputMode === "decimal";
+      if (!isNumeric) return;
+      // A frame later, otherwise Safari places the caret after selecting.
+      requestAnimationFrame(() => {
+        try { el.select(); } catch (_) { /* field already left */ }
+      });
+    };
+    document.addEventListener("focusin", selectNumberOnFocus);
+    return () => document.removeEventListener("focusin", selectNumberOnFocus);
+  }, []);
+
+  // While a backup is being restored the page reloads on purpose. The
+  // unload handler below would otherwise write the still-in-memory workout
+  // back to storage and undo part of the restore.
+  const restoringRef = useRef(false);
+
+  useEffect(() => {
+    const saveOnLeave = () => {
+      if (restoringRef.current) return;
+      if (session) saveJSON("active-workout", session);
+    };
     window.addEventListener("beforeunload", saveOnLeave);
     const onVisibility = () => { if (document.visibilityState === "hidden") saveOnLeave(); };
     document.addEventListener("visibilitychange", onVisibility);
@@ -810,6 +960,15 @@ export default function TrainingApp() {
     setCalendarEntries(next);
     await saveJSON("calendar-entries", next);
   };
+  const persistGyms = async (next) => {
+    setGyms(next);
+    await saveJSON("gyms", next);
+  };
+  const persistActiveGymId = async (id) => {
+    setActiveGymId(id);
+    await saveJSON("active-gym-id", id);
+  };
+
   const persistCalendarCategories = async (next) => {
     setCalendarCategories(next);
     await saveJSON("calendar-categories", next);
@@ -835,17 +994,31 @@ export default function TrainingApp() {
     await saveJSON("exercise-time-based", next);
   };
 
-  const createSessionFromPlan = (plan) => ({
+  const createSessionFromPlan = (plan, gymId = null) => ({
     id: uid(),
     planId: plan.id,
     planName: plan.name,
+    gymId: gymId || null,
     date: new Date().toISOString(),
     entries: plan.items.map((it) => {
       const targetSets = it.sets || 1;
-      const targetReps = it.reps || 10;
-      const targetWeight = it.weight || 0;
+      // Start from what was actually achieved last time rather than the
+      // numbers stored in the plan - the plan holds the starting point, the
+      // last workout holds the current state. With a gym selected the search
+      // prefers that gym (weights differ between gyms).
+      const history = getExerciseHistory(logs, it.exerciseId, null, !!it.useTime, gymId);
+      const lastWorking = history?.lastSets?.find((set) => !set.warmup);
+      const targetReps =
+        lastWorking && toNum(lastWorking.reps) > 0 ? toNum(lastWorking.reps) : it.reps || 10;
+      const targetWeight =
+        lastWorking && toNum(lastWorking.weight) > 0
+          ? toNum(lastWorking.weight)
+          : it.weight || 0;
       const targetUseTime = !!it.useTime;
-      const targetDuration = it.duration || 0;
+      const targetDuration =
+        lastWorking && toNum(lastWorking.duration) > 0
+          ? toNum(lastWorking.duration)
+          : it.duration || 0;
       // Pre-create the number of sets the plan asks for, already filled
       // in with the target reps/weight/duration, so a workout starts
       // ready-to-go instead of empty every time.
@@ -854,7 +1027,9 @@ export default function TrainingApp() {
       const warmupCount = Math.max(0, Math.round(toNum(it.warmupSets)));
       const makeSet = (warmup) => ({
         reps: targetReps,
-        weight: warmup ? 0 : targetWeight,
+        // Pre-filled the German way too, so a workout doesn't start showing
+        // "62.5" and only switch to "62,5" once the field has been touched.
+        weight: warmup ? 0 : fmtDecimal(targetWeight),
         duration: targetDuration,
         done: false,
         warmup,
@@ -874,17 +1049,23 @@ export default function TrainingApp() {
         // Rest per exercise comes from the plan; null means "use the
         // workout-wide value" and is a meaningful state, so it is kept.
         restSeconds: it.restSeconds != null ? it.restSeconds : null,
+        autoRun: it.autoRun === true || it.autoRun === false ? it.autoRun : null,
+        autoSeconds: it.autoSeconds != null ? it.autoSeconds : null,
         sets,
         notes: "",
       };
     }),
     restSeconds: plan.restSeconds != null ? plan.restSeconds : 90,
+    autoRun: !!plan.autoRun,
+    autoSetSeconds: plan.autoSetSeconds != null ? plan.autoSetSeconds : 30,
+    autoOrder: plan.autoOrder || "circuit",
+    roundRestSeconds: plan.roundRestSeconds != null ? plan.roundRestSeconds : 60,
     notes: "",
     startedAt: new Date().toISOString(),
   });
 
-  const startSession = async (plan, calendarEntryId = null) => {
-    const next = createSessionFromPlan(plan);
+  const startSession = async (plan, calendarEntryId = null, gymId = undefined) => {
+    const next = createSessionFromPlan(plan, gymId === undefined ? activeGymId : gymId);
     if (calendarEntryId) next.calendarEntryId = calendarEntryId;
     setSession(next);
     await saveJSON("active-workout", next);
@@ -912,10 +1093,21 @@ export default function TrainingApp() {
   const handleRenameExercise = async (exerciseId, name) => {
     await persistExerciseNameOverrides({ ...exerciseNameOverrides, [exerciseId]: name });
   };
+  // subgroupId === null clears every assignment; otherwise the given
+  // subgroup is toggled, so an exercise can belong to several at once.
   const handleSetExerciseSubgroup = async (exerciseId, subgroupId) => {
     const next = { ...exerciseSubgroupOverrides };
-    if (subgroupId) next[exerciseId] = subgroupId;
-    else delete next[exerciseId];
+    if (!subgroupId) {
+      delete next[exerciseId];
+    } else {
+      const raw = next[exerciseId];
+      const current = Array.isArray(raw) ? raw.filter(Boolean) : raw ? [raw] : [];
+      const updated = current.includes(subgroupId)
+        ? current.filter((id) => id !== subgroupId)
+        : [...current, subgroupId];
+      if (updated.length === 0) delete next[exerciseId];
+      else next[exerciseId] = updated;
+    }
     await persistExerciseSubgroupOverrides(next);
   };
   const handleSetExerciseEquipment = async (exerciseId, equipment) => {
@@ -976,8 +1168,101 @@ export default function TrainingApp() {
     await saveJSON("app-theme", next);
   };
   const startScheduledWorkout = async (plan, calendarEntryId) => {
-    await startSession(plan, calendarEntryId);
+    requestStart(plan, calendarEntryId);
+  };
+
+  // Asking which gym before the workout begins is what makes the whole
+  // thing work: it is the only moment where the answer is certain, and
+  // everything downstream (suggestions, PRs, charts) depends on it.
+  const [pendingStart, setPendingStart] = useState(null);
+  const [gymManagerOpen, setGymManagerOpen] = useState(false);
+  const [finishSummary, setFinishSummary] = useState(null);
+  const [backupOpen, setBackupOpen] = useState(false);
+  const [backupBusy, setBackupBusy] = useState(false);
+  const [backupMessage, setBackupMessage] = useState(null);
+  const backupFileRef = useRef(null);
+
+  const handleExportBackup = async () => {
+    setBackupBusy(true);
+    setBackupMessage(null);
+    try {
+      const backup = await buildBackup();
+      const stamp = new Date().toISOString().slice(0, 10);
+      const blob = new Blob([JSON.stringify(backup, null, 2)], { type: "application/json" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `iron-log-sicherung-${stamp}.json`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      // Give Safari a moment to pick up the blob before it is released.
+      setTimeout(() => URL.revokeObjectURL(url), 4000);
+      const s = summarizeBackup(backup);
+      setBackupMessage({
+        kind: "ok",
+        text: `Sicherung erstellt: ${s.plans} Pläne, ${s.logs} Trainings, ${s.exercises} eigene Übungen.`,
+      });
+    } catch (e) {
+      setBackupMessage({ kind: "error", text: "Sicherung fehlgeschlagen: " + e.message });
+    } finally {
+      setBackupBusy(false);
+    }
+  };
+
+  const handleImportFile = async (file) => {
+    if (!file) return;
+    setBackupBusy(true);
+    setBackupMessage(null);
+    try {
+      const text = await file.text();
+      const parsed = JSON.parse(text);
+      const info = summarizeBackup(parsed);
+      // Confirm with real numbers from the file, so it is obvious what is
+      // about to replace the current data.
+      askConfirm(
+        `Sicherung einspielen? Enthalten sind ${info.plans} Pläne, ${info.logs} absolvierte Trainings und ${info.exercises} eigene Übungen. Deine aktuellen Daten werden dabei ersetzt.`,
+        async () => {
+          try {
+            restoringRef.current = true;
+            await restoreBackup(parsed);
+            window.location.reload();
+          } catch (e) {
+            restoringRef.current = false;
+            setBackupMessage({ kind: "error", text: e.message });
+          }
+        }
+      );
+    } catch (e) {
+      setBackupMessage({
+        kind: "error",
+        text: "Datei konnte nicht gelesen werden. Ist es eine Sicherungsdatei dieser App?",
+      });
+    } finally {
+      setBackupBusy(false);
+      if (backupFileRef.current) backupFileRef.current.value = "";
+    }
+  };
+  const [gymDraftName, setGymDraftName] = useState("");
+  const [renamingGymId, setRenamingGymId] = useState(null);
+  const [newGymName, setNewGymName] = useState("");
+  const requestStart = (plan, calendarEntryId = null) => {
+    setPendingStart({ plan, calendarEntryId });
+    setNewGymName("");
+  };
+  const confirmStart = async (gymId) => {
+    if (!pendingStart) return;
+    if (gymId) await persistActiveGymId(gymId);
+    await startSession(pendingStart.plan, pendingStart.calendarEntryId, gymId);
+    setPendingStart(null);
     setTab("log");
+  };
+  const createGymAndStart = async () => {
+    const name = newGymName.trim();
+    if (!name) return;
+    const gym = { id: uid(), name };
+    await persistGyms([...gyms, gym]);
+    await confirmStart(gym.id);
   };
 
   return (
@@ -1376,6 +1661,11 @@ export default function TrainingApp() {
           padding: 8px 6px calc(8px + env(safe-area-inset-bottom));
           transition: transform 0.25s ease;
           transform: translateY(0);
+          /* The bar carries a transform, which creates its own stacking
+             context. Pinning it to a low layer makes sure overlays (200+)
+             are always drawn on top, no matter how the browser orders
+             transformed siblings. */
+          z-index: 10;
         }
         .fab-nav.nav-hidden {
           transform: translateY(100%);
@@ -1505,20 +1795,6 @@ export default function TrainingApp() {
           gap: 6px;
           align-items: center;
           margin-bottom: 6px;
-        }
-        .time-row {
-          display: flex;
-          align-items: center;
-          gap: 8px;
-          margin: -2px 0 8px 76px;
-        }
-        .time-row .field-label {
-          margin: 0;
-          white-space: nowrap;
-          flex-shrink: 0;
-        }
-        .time-row input {
-          max-width: 90px;
         }
         .entry-card {
           transition: box-shadow 160ms ease;
@@ -1698,10 +1974,25 @@ export default function TrainingApp() {
           padding: calc(16px + env(safe-area-inset-top)) 16px
                    calc(16px + env(safe-area-inset-bottom));
           z-index: 300;
+          /* The popup used to snap in; a short fade of the backdrop and a
+             gentle rise of the card make it land instead of jump. */
+          animation: modal-fade 220ms ease-out both;
+        }
+        @keyframes modal-fade {
+          from { opacity: 0; }
+          to { opacity: 1; }
+        }
+        @keyframes modal-rise {
+          from { opacity: 0; transform: translateY(12px) scale(0.98); }
+          to { opacity: 1; transform: translateY(0) scale(1); }
+        }
+        @media (prefers-reduced-motion: reduce) {
+          .modal-overlay, .modal-card { animation: none; }
         }
         .modal-card {
           width: 100%;
           max-height: 100%;
+          animation: modal-rise 260ms cubic-bezier(0.22, 0.8, 0.3, 1) both;
           background: var(--surface);
           border: 1px solid var(--border);
           border-radius: 16px;
@@ -1806,6 +2097,10 @@ export default function TrainingApp() {
           /* Hoehe am sichtbaren Bereich ausrichten und den Rand unten
              (Home-Indikator) freihalten, damit das Ende erreichbar bleibt. */
           max-height: calc(100dvh - env(safe-area-inset-top) - 24px);
+          /* Opens at a usable size right away. Sizing itself to its content
+             meant the tabs sat just above the navigation bar and everything
+             below had to be scrolled into view first. */
+          min-height: min(72dvh, calc(100dvh - env(safe-area-inset-top) - 24px));
           background: var(--surface);
           border-top: 1px solid var(--border);
           border-radius: 18px 18px 0 0;
@@ -2108,6 +2403,14 @@ export default function TrainingApp() {
           position: relative;
           flex-shrink: 0;
         }
+        .item-menu-wrap.drop-up .program-menu {
+          top: auto !important;
+          bottom: calc(100% + 4px);
+        }
+        .entry-menu-wrap.drop-up .program-menu {
+          top: auto !important;
+          bottom: calc(100% + 4px);
+        }
         .superset-connector {
           display: flex;
           align-items: center;
@@ -2139,6 +2442,33 @@ export default function TrainingApp() {
           box-shadow: 0 0 0 2px var(--surface);
         }
 
+        .auto-run-bar {
+          background: var(--surface);
+          border: 1px solid var(--accent);
+          border-radius: 14px;
+          padding: 14px;
+          margin-bottom: 12px;
+          text-align: center;
+        }
+        .auto-run-phase {
+          font-family: 'Oswald', sans-serif;
+          font-size: 12px;
+          letter-spacing: 0.08em;
+          text-transform: uppercase;
+          color: var(--text-dim);
+        }
+        .auto-run-time {
+          font-family: 'Oswald', sans-serif;
+          font-size: 44px;
+          font-weight: 600;
+          line-height: 1.05;
+          color: var(--accent);
+        }
+        .auto-run-what {
+          font-size: 12.5px;
+          color: var(--text-dim);
+          margin-top: 2px;
+        }
         .rest-timer {
           position: sticky;
           top: 0;
@@ -2182,7 +2512,11 @@ export default function TrainingApp() {
 
 
         .undo-snackbar{position:fixed;left:50%;bottom:82px;transform:translateX(-50%);z-index:30;background:var(--surface-alt);border:1px solid var(--border);border-radius:12px;padding:8px 10px;display:flex;align-items:center;gap:12px;box-shadow:0 8px 30px rgba(0,0,0,.3);font-size:13px}
-        .confirm-overlay{position:absolute;top:0;right:0;bottom:0;left:0;background:rgba(0,0,0,.55);display:flex;align-items:center;justify-content:center;z-index:60;padding:24px}
+        /* Die Rueckfrage muss ueber allem liegen - auch ueber Popups (z-index 300),
+   sonst laesst sie sich nicht bestaetigen, wenn sie aus einem Popup
+   heraus ausgeloest wurde. Fixed statt absolute, damit sie nicht vom
+   scrollenden Inhaltsbereich beschnitten wird. */
+        .confirm-overlay{position:fixed;top:0;right:0;bottom:0;left:0;background:rgba(0,0,0,.55);display:flex;align-items:center;justify-content:center;z-index:400;padding:calc(24px + env(safe-area-inset-top)) 24px calc(24px + env(safe-area-inset-bottom))}
         .confirm-card{background:var(--surface);border:1px solid var(--border);border-radius:14px;padding:18px;max-width:320px;width:100%}
         .confirm-card p{margin:0 0 16px;font-size:14px;line-height:1.5}
         .confirm-actions{display:flex;gap:8px}
@@ -2345,6 +2679,7 @@ export default function TrainingApp() {
           />
         ) : tab === "exercises" ? (
           <ExercisesView
+            gyms={gyms}
             exercises={allExercises}
             logs={logs}
             exerciseNotes={exerciseNotes}
@@ -2365,6 +2700,8 @@ export default function TrainingApp() {
         ) : tab === "plans" ? (
           building ? (
             <PlanBuilder
+              gyms={gyms}
+              activeGymId={activeGymId}
               initialPlan={editingPlan}
               exercises={allExercises}
               folders={folders}
@@ -2395,6 +2732,8 @@ export default function TrainingApp() {
             />
           ) : (
             <PlansView
+            onManageGyms={() => setGymManagerOpen(true)}
+            onOpenBackup={() => setBackupOpen(true)}
               plans={allPlans}
               exBy={allExBy}
               folders={folders}
@@ -2459,10 +2798,7 @@ export default function TrainingApp() {
                   plans.map((p) => (p.id === planId ? { ...p, folderId } : p))
                 );
               }}
-              onStart={async (plan) => {
-                await startSession(plan);
-                setTab("log");
-              }}
+              onStart={(plan) => requestStart(plan)}
             />
           )
         ) : tab === "log" ? (
@@ -2481,9 +2817,10 @@ export default function TrainingApp() {
             onUpdateExerciseNote={handleUpdateExerciseNote}
             onRenameExercise={handleRenameExercise}
             onToggleTimeBased={handleToggleTimeBased}
-            onStartFromPlan={startSession}
+            onStartFromPlan={(plan) => requestStart(plan)}
             onUpdateSession={updateSession}
             onRequestConfirm={askConfirm}
+            gyms={gyms}
             onFinish={async () => {
               if (!session) return;
               const durationMinutes = session.startedAt
@@ -2502,16 +2839,75 @@ export default function TrainingApp() {
                   .filter((e) => e.sets.some((s) => s.done))
                   .map((e) => ({
                     ...e,
+                    // Record that this exercise ran on time. The automatic
+                    // mode is a property of the session, which is gone once
+                    // the workout is saved - without this flag the history,
+                    // records and charts would later read it as a weight
+                    // exercise with 0 kg.
+                    targetUseTime:
+                      (session.autoRun && e.autoRun !== false) || !!e.targetUseTime,
+                    // toNum, not Number: weights are held as typed ("62,5"),
+                    // and Number("62,5") is NaN - which would silently store
+                    // the set as 0 kg.
                     sets: e.sets.map((s) => ({
                       ...s,
-                      reps: Math.max(0, Number(s.reps) || 0),
-                      weight: Math.max(0, Number(s.weight) || 0),
-                      duration: Math.max(0, Number(s.duration) || 0),
+                      reps: Math.max(0, toNum(s.reps)),
+                      weight: Math.max(0, toNum(s.weight)),
+                      duration: Math.max(0, toNum(s.duration)),
                     })),
                   })),
                 durationMinutes,
               };
               if (cleaned.entries.length > 0) {
+                // Work out the summary against the logs as they were BEFORE
+                // this workout is added, otherwise every set would compare
+                // against itself and nothing would ever count as a record.
+                let totalVolume = 0;
+                let totalSeconds = 0;
+                let doneSets = 0;
+                const records = [];
+                cleaned.entries.forEach((entry) => {
+                  // Same rule the workout screen uses. Checking only the
+                  // global setting missed every exercise that ran on time
+                  // because of the automatic mode - so no record was ever
+                  // recognised in a HIT workout.
+                  const isTimeBased =
+                    (session.autoRun && entry.autoRun !== false) ||
+                    !!timeBasedExercises[entry.exerciseId] ||
+                    !!entry.targetUseTime;
+                  const best = getExerciseHistory(
+                    logs, entry.exerciseId, cleaned.id, isTimeBased, cleaned.gymId
+                  );
+                  let bestOfEntry = null;
+                  entry.sets.forEach((set) => {
+                    if (!set.done || set.warmup) return;
+                    doneSets += 1;
+                    if (isTimeBased) totalSeconds += toNum(set.duration);
+                    else totalVolume += toNum(set.weight) * toNum(set.reps);
+                    if (isNewPR(set, best, isTimeBased)) {
+                      const label = isTimeBased
+                        ? `${toNum(set.duration)} Sek.`
+                        : `${toNum(set.reps)} × ${fmtDecimal(set.weight)} kg`;
+                      bestOfEntry = label;
+                    }
+                  });
+                  if (bestOfEntry) {
+                    records.push({
+                      name: allExBy[entry.exerciseId]?.name || "Übung",
+                      label: bestOfEntry,
+                    });
+                  }
+                });
+                setFinishSummary({
+                  planName: cleaned.planName,
+                  durationMinutes,
+                  totalVolume,
+                  totalSeconds,
+                  doneSets,
+                  exercises: cleaned.entries.length,
+                  gymName: gyms.find((g) => g.id === cleaned.gymId)?.name || null,
+                  records,
+                });
                 await persistLogs([...logs, cleaned]);
               }
               // If this workout was started from a calendar entry, link the
@@ -2567,6 +2963,7 @@ export default function TrainingApp() {
           />
         ) : (
           <ProgressView
+            gyms={gyms}
             logs={logs}
             exBy={allExBy}
             exercises={allExercises}
@@ -2584,6 +2981,262 @@ export default function TrainingApp() {
         )}
         </div>
       </div>
+
+      {finishSummary && (
+        <Modal title="Training abgeschlossen" onClose={() => setFinishSummary(null)}>
+          <div className="plan-title" style={{ marginBottom: 10 }}>
+            {finishSummary.planName}
+            {finishSummary.gymName && (
+              <span className="tag tag-equipment" style={{ marginLeft: 8 }}>
+                {finishSummary.gymName}
+              </span>
+            )}
+          </div>
+          <div className="stats-grid">
+            <div className="stat-item">
+              <span className="stat-value">
+                {finishSummary.durationMinutes ? `${finishSummary.durationMinutes}` : "–"}
+              </span>
+              <span className="stat-label">
+                {finishSummary.durationMinutes === 1 ? "Minute" : "Minuten"}
+              </span>
+            </div>
+            {/* A timed workout has no volume worth showing (weight is 0),
+                so the time actually spent under tension takes that slot. */}
+            {finishSummary.totalVolume > 0 || finishSummary.totalSeconds === 0 ? (
+              <div className="stat-item">
+                <span className="stat-value">{Math.round(finishSummary.totalVolume)}</span>
+                <span className="stat-label">kg Volumen</span>
+              </div>
+            ) : (
+              <div className="stat-item">
+                <span className="stat-value">
+                  {finishSummary.totalSeconds >= 60
+                    ? `${Math.round(finishSummary.totalSeconds / 60)}`
+                    : finishSummary.totalSeconds}
+                </span>
+                <span className="stat-label">
+                  {finishSummary.totalSeconds >= 60 ? "Min. unter Spannung" : "Sek. unter Spannung"}
+                </span>
+              </div>
+            )}
+            <div className="stat-item">
+              <span className="stat-value">{finishSummary.doneSets}</span>
+              <span className="stat-label">Sätze</span>
+            </div>
+            <div className="stat-item">
+              <span className="stat-value">{finishSummary.exercises}</span>
+              <span className="stat-label">Übungen</span>
+            </div>
+          </div>
+
+          {finishSummary.records.length > 0 && (
+            <div style={{ marginTop: 14, paddingTop: 12, borderTop: "1px solid var(--border)" }}>
+              <label className="field-label">
+                <Trophy size={12} /> Neue Bestleistung
+                {finishSummary.records.length > 1 ? "en" : ""}
+              </label>
+              <div className="modal-list" style={{ marginTop: 8 }}>
+                {finishSummary.records.map((r) => (
+                  <div className="modal-option active" key={r.name}>
+                    <span>{r.name}</span>
+                    <span>{r.label}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          <button
+            className="btn btn-primary btn-block btn-sm"
+            style={{ marginTop: 14 }}
+            onClick={() => setFinishSummary(null)}
+          >
+            <Check size={14} /> Fertig
+          </button>
+        </Modal>
+      )}
+
+      {backupOpen && (
+        <Modal title="Daten sichern" onClose={() => { setBackupOpen(false); setBackupMessage(null); }}>
+          <p style={{ fontSize: 13, color: "var(--text-dim)", margin: "0 0 12px" }}>
+            Die Sicherung enthält alles: Pläne, Ordner, Programme, absolvierte
+            Trainings, eigene Übungen, Notizen, Kalender und Gyms. Lege die
+            Datei in „Dateien" oder iCloud ab.
+          </p>
+          <button
+            className="btn btn-primary btn-block btn-sm"
+            disabled={backupBusy}
+            onClick={handleExportBackup}
+          >
+            <Save size={14} /> Sicherung erstellen
+          </button>
+          <div style={{ marginTop: 14, paddingTop: 12, borderTop: "1px solid var(--border)" }}>
+            <label className="field-label">Sicherung einspielen</label>
+            <p style={{ fontSize: 12.5, color: "var(--text-dim)", margin: "4px 0 8px" }}>
+              Ersetzt deine aktuellen Daten durch den Inhalt der Datei.
+            </p>
+            <input
+              ref={backupFileRef}
+              type="file"
+              accept="application/json,.json"
+              style={{ display: "none" }}
+              onChange={(e) => handleImportFile(e.target.files?.[0])}
+            />
+            <button
+              className="btn btn-ghost btn-block btn-sm"
+              disabled={backupBusy}
+              onClick={() => backupFileRef.current?.click()}
+            >
+              <RotateCcw size={14} /> Datei auswählen
+            </button>
+          </div>
+          {backupMessage && (
+            <div
+              style={{
+                marginTop: 12,
+                fontSize: 12.5,
+                color: backupMessage.kind === "error" ? "var(--danger, #e11d48)" : "var(--accent)",
+              }}
+            >
+              {backupMessage.text}
+            </div>
+          )}
+        </Modal>
+      )}
+
+      {gymManagerOpen && (
+        <Modal
+          title="Gyms verwalten"
+          onClose={() => { setGymManagerOpen(false); setRenamingGymId(null); setGymDraftName(""); }}
+        >
+          {gyms.length === 0 && (
+            <div className="empty-state">Noch keine Gyms angelegt.</div>
+          )}
+          <div className="modal-list">
+            {gyms.map((g) => (
+              <div key={g.id}>
+                {renamingGymId === g.id ? (
+                  <div style={{ display: "flex", gap: 6, alignItems: "flex-end" }}>
+                    <div style={{ flex: 1 }}>
+                      <input
+                        type="text"
+                        value={gymDraftName}
+                        onChange={(e) => setGymDraftName(e.target.value)}
+                      />
+                    </div>
+                    <button
+                      className="btn btn-primary btn-sm"
+                      disabled={!gymDraftName.trim()}
+                      onClick={async () => {
+                        await persistGyms(
+                          gyms.map((x) => (x.id === g.id ? { ...x, name: gymDraftName.trim() } : x))
+                        );
+                        setRenamingGymId(null);
+                        setGymDraftName("");
+                      }}
+                    >
+                      <Check size={14} />
+                    </button>
+                  </div>
+                ) : (
+                  <div className="modal-option">
+                    <span>{g.name}</span>
+                    <span style={{ display: "flex", gap: 4 }}>
+                      <button
+                        className="btn-icon"
+                        title="Umbenennen"
+                        onClick={() => { setRenamingGymId(g.id); setGymDraftName(g.name); }}
+                      >
+                        <Pencil size={14} />
+                      </button>
+                      <button
+                        className="btn-icon"
+                        title="Löschen"
+                        onClick={() =>
+                          askConfirm(
+                            `Gym „${g.name}" löschen? Bereits gespeicherte Trainings bleiben erhalten, verlieren aber ihre Gym-Zuordnung.`,
+                            async () => {
+                              await persistGyms(gyms.filter((x) => x.id !== g.id));
+                              if (activeGymId === g.id) await persistActiveGymId(null);
+                            }
+                          )
+                        }
+                      >
+                        <Trash2 size={14} />
+                      </button>
+                    </span>
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+          <div style={{ marginTop: 12, paddingTop: 12, borderTop: "1px solid var(--border)" }}>
+            <label className="field-label">Neues Gym</label>
+            <input
+              type="text"
+              placeholder="z. B. Fitness Nord"
+              value={renamingGymId ? "" : gymDraftName}
+              onChange={(e) => { setRenamingGymId(null); setGymDraftName(e.target.value); }}
+            />
+            <button
+              className="btn btn-primary btn-block btn-sm"
+              style={{ marginTop: 10 }}
+              disabled={!gymDraftName.trim() || !!renamingGymId}
+              onClick={async () => {
+                await persistGyms([...gyms, { id: uid(), name: gymDraftName.trim() }]);
+                setGymDraftName("");
+              }}
+            >
+              <Plus size={14} /> Gym hinzufügen
+            </button>
+          </div>
+        </Modal>
+      )}
+
+      {pendingStart && (
+        <Modal title="In welchem Gym trainierst du?" onClose={() => setPendingStart(null)}>
+          {gyms.length > 0 && (
+            <div className="modal-list" style={{ marginBottom: 12 }}>
+              {gyms.map((g) => (
+                <button
+                  key={g.id}
+                  className={`modal-option ${g.id === activeGymId ? "active" : ""}`}
+                  onClick={() => confirmStart(g.id)}
+                >
+                  {g.name}
+                  {g.id === activeGymId && <Check size={15} />}
+                </button>
+              ))}
+            </div>
+          )}
+          <label className="field-label">
+            {gyms.length === 0 ? "Erstes Gym anlegen" : "Neues Gym"}
+          </label>
+          <input
+            type="text"
+            placeholder="z. B. Fitness Nord"
+            value={newGymName}
+            onChange={(e) => setNewGymName(e.target.value)}
+            onKeyDown={(e) => { if (e.key === "Enter") createGymAndStart(); }}
+          />
+          <button
+            className="btn btn-primary btn-block btn-sm"
+            style={{ marginTop: 10 }}
+            disabled={!newGymName.trim()}
+            onClick={createGymAndStart}
+          >
+            <Plus size={14} /> Anlegen und starten
+          </button>
+          <button
+            className="btn btn-ghost btn-block btn-sm"
+            style={{ marginTop: 8 }}
+            onClick={() => confirmStart(null)}
+          >
+            Ohne Gym trainieren
+          </button>
+        </Modal>
+      )}
 
       {confirmState && (
         <div className="confirm-overlay" onClick={() => setConfirmState(null)}>
@@ -3556,6 +4209,7 @@ function ExercisesView({
   timeBasedExercises,
   onToggleTimeBased,
   onRequestConfirm,
+  gyms = [],
 }) {
   const [query, setQuery] = useState("");
   const [group, setGroup] = useState("alle");
@@ -3571,7 +4225,7 @@ function ExercisesView({
     const matchesGroup = group === "alle" || e.group === group;
     const matchesSubgroup =
       subgroupFilter === "alle" ||
-      getExerciseSubgroup(e, exerciseSubgroupOverrides) === subgroupFilter;
+      exerciseHasSubgroup(e, exerciseSubgroupOverrides, subgroupFilter);
     const matchesQuery = e.name.toLowerCase().includes(query.toLowerCase());
     return matchesGroup && matchesSubgroup && matchesQuery;
   });
@@ -3659,7 +4313,7 @@ function ExercisesView({
                 <GroupTag group={e.group} />
                 <SubgroupTag
                   group={e.group}
-                  subgroupId={getExerciseSubgroup(e, exerciseSubgroupOverrides)}
+                  subgroupIds={getExerciseSubgroups(e, exerciseSubgroupOverrides)}
                 />
                 <span className="tag tag-equipment">{getExerciseEquipment(e, exerciseEquipmentOverrides)}</span>
                 {e.custom && (
@@ -3683,6 +4337,7 @@ function ExercisesView({
 
       {selectedExercise && (
         <ExerciseDetailSheet
+          gyms={gyms}
           key={selectedExercise.id}
           exercise={selectedExercise}
           exercises={exercises}
@@ -3722,6 +4377,7 @@ function ExerciseDetailSheet({
   onRenameExercise,
   onToggleTimeBased,
   onClose,
+  gyms = [],
 }) {
   // Drei Reiter statt einer langen Liste: Zahlen zuerst, Einstellungen zuletzt.
   const [detailTab, setDetailTab] = useState("stats");
@@ -3731,7 +4387,8 @@ function ExerciseDetailSheet({
   const [editingSubgroup, setEditingSubgroup] = useState(false);
   const [editingEquipment, setEditingEquipment] = useState(false);
   const availableSubgroups = SUBGROUPS[exercise.group] || [];
-  const currentSubgroup = getExerciseSubgroup(exercise, exerciseSubgroupOverrides);
+  const currentSubgroups = getExerciseSubgroups(exercise, exerciseSubgroupOverrides);
+  const currentSubgroup = currentSubgroups[0] || null;
   const meta = getExerciseMeta(exercise);
   const currentEquipment = getExerciseEquipment(exercise, exerciseEquipmentOverrides);
 
@@ -3770,7 +4427,7 @@ function ExerciseDetailSheet({
     () => getExerciseTimeline(logs, exercise.id),
     [logs, exercise.id]
   );
-  const isTimeBasedExercise = !!timeBasedExercises[exercise.id];
+  const isTimeBasedExercise = isTimeBasedInLogs(logs, exercise.id, timeBasedExercises);
   const bestStats = useMemo(
     () => (isTimeBasedExercise ? null : getExerciseBestStats(logs, exercise.id)),
     [logs, exercise.id, isTimeBasedExercise]
@@ -3853,7 +4510,7 @@ function ExerciseDetailSheet({
             {!editingName && (
               <span style={{ marginTop: 6, display: "inline-flex", gap: 6, flexWrap: "wrap" }}>
                 <GroupTag group={exercise.group} />
-                <SubgroupTag group={exercise.group} subgroupId={currentSubgroup} />
+                <SubgroupTag group={exercise.group} subgroupIds={currentSubgroups} />
                 <span
                   className="tag tag-equipment tag-clickable"
                   onClick={() => setEditingEquipment(true)}
@@ -3914,6 +4571,7 @@ function ExerciseDetailSheet({
                   logs={logs}
                   exerciseId={exercise.id}
                   isTimeBased={isTimeBasedExercise}
+                  gyms={gyms}
                 />
               )}
             </>
@@ -3974,14 +4632,16 @@ function ExerciseDetailSheet({
 
             {availableSubgroups.length > 0 && (
               <button
-                className={`chip chip-sm ${currentSubgroup ? "active" : ""}`}
+                className={`chip chip-sm ${currentSubgroups.length > 0 ? "active" : ""}`}
                 onClick={() => setEditingSubgroup(true)}
                 title="Untergruppe bearbeiten"
               >
                 <Pencil size={11} />
-                {currentSubgroup
-                  ? availableSubgroups.find((s) => s.id === currentSubgroup)?.label
-                  : "Untergruppe"}
+                {currentSubgroups.length === 0
+                  ? "Untergruppe"
+                  : currentSubgroups.length === 1
+                  ? availableSubgroups.find((s) => s.id === currentSubgroups[0])?.label
+                  : `${currentSubgroups.length} Untergruppen`}
               </button>
             )}
           </div>
@@ -4017,25 +4677,43 @@ function ExerciseDetailSheet({
       )}
 
       {editingSubgroup && (
-        <Modal title="Untergruppe wählen" onClose={() => setEditingSubgroup(false)}>
+        <Modal title="Untergruppen wählen" onClose={() => setEditingSubgroup(false)}>
+          <p style={{ fontSize: 12.5, color: "var(--text-dim)", margin: "0 0 10px" }}>
+            Mehrere möglich – die Übung erscheint dann bei jedem dieser Filter.
+          </p>
           <div className="modal-list">
+            {/* Stays open while picking: choosing several in a row is the
+                whole point, so it should not close after the first tap. */}
+            {availableSubgroups.map((sg) => {
+              const on = currentSubgroups.includes(sg.id);
+              return (
+                <button
+                  key={sg.id}
+                  className={`modal-option ${on ? "active" : ""}`}
+                  onClick={() => onSetExerciseSubgroup(exercise.id, sg.id)}
+                >
+                  {sg.label}
+                  {on && <Check size={15} />}
+                </button>
+              );
+            })}
+          </div>
+          <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
             <button
-              className={`modal-option ${!currentSubgroup ? "active" : ""}`}
-              onClick={() => { onSetExerciseSubgroup(exercise.id, null); setEditingSubgroup(false); }}
+              className="btn btn-ghost btn-sm"
+              style={{ flex: 1 }}
+              disabled={currentSubgroups.length === 0}
+              onClick={() => onSetExerciseSubgroup(exercise.id, null)}
             >
-              Keine
-              {!currentSubgroup && <Check size={15} />}
+              Alle entfernen
             </button>
-            {availableSubgroups.map((sg) => (
-              <button
-                key={sg.id}
-                className={`modal-option ${currentSubgroup === sg.id ? "active" : ""}`}
-                onClick={() => { onSetExerciseSubgroup(exercise.id, sg.id); setEditingSubgroup(false); }}
-              >
-                {sg.label}
-                {currentSubgroup === sg.id && <Check size={15} />}
-              </button>
-            ))}
+            <button
+              className="btn btn-primary btn-sm"
+              style={{ flex: 1 }}
+              onClick={() => setEditingSubgroup(false)}
+            >
+              <Check size={14} /> Fertig
+            </button>
           </div>
         </Modal>
       )}
@@ -4066,10 +4744,10 @@ function PlanBuilder({
   onCancel,
   onSave,
   onCreateFolder,
+  gyms = [],
+  activeGymId = null,
 }) {
   const [name, setName] = useState(initialPlan?.name || "");
-  const [editingBuilderName, setEditingBuilderName] = useState(false);
-  const [nameDraft, setNameDraft] = useState(initialPlan?.name || "");
   const [items, setItems] = useState(initialPlan?.items || []); // {exerciseId, sets, reps}
   const [query, setQuery] = useState("");
   const [group, setGroup] = useState("alle");
@@ -4094,8 +4772,20 @@ function PlanBuilder({
   // Rest times are set here so a workout starts with the right pause
   // instead of having to be adjusted mid-session every time.
   const [planRest, setPlanRest] = useState(initialPlan?.restSeconds ?? 90);
+  // HIT/interval workouts run by themselves: the set timer checks the set
+  // off and moves on. Per exercise this can be null (= follow the workout),
+  // true or false, so a single rep-based exercise can opt out.
+  const [planAutoRun, setPlanAutoRun] = useState(!!initialPlan?.autoRun);
+  // One central set length for the whole workout; individual exercises may
+  // override it. In automatic mode this replaces reps everywhere unless an
+  // exercise is explicitly switched back to counting reps.
+  const [planAutoSeconds, setPlanAutoSeconds] = useState(initialPlan?.autoSetSeconds ?? 30);
+  const [planAutoOrder, setPlanAutoOrder] = useState(initialPlan?.autoOrder || "circuit");
+  const [planRoundRest, setPlanRoundRest] = useState(initialPlan?.roundRestSeconds ?? 60);
   const [restPopupFor, setRestPopupFor] = useState(null); // "plan" | exerciseId
   const [itemMenuId, setItemMenuId] = useState(null);
+  const [itemMenuUp, setItemMenuUp] = useState(false);
+  const itemMenuRef = useMenuFlip(itemMenuId, setItemMenuUp);
   const pastLogs = useMemo(
     () => [...logs].sort((a, b) => new Date(b.date) - new Date(a.date)),
     [logs]
@@ -4118,15 +4808,6 @@ function PlanBuilder({
     document.addEventListener("click", closeOnOutsideClick);
     return () => document.removeEventListener("click", closeOnOutsideClick);
   }, [itemMenuId]);
-
-  const startEditingBuilderName = () => {
-    setNameDraft(name);
-    setEditingBuilderName(true);
-  };
-  const saveBuilderName = () => {
-    setName(nameDraft.trim());
-    setEditingBuilderName(false);
-  };
 
   const applyFromLog = (log) => {
     setName(`${log.planName} (Kopie ${fmtDate(log.date)})`);
@@ -4220,7 +4901,7 @@ function PlanBuilder({
       const matching = exercises.filter(
         (e) =>
           (group === "alle" || e.group === group) &&
-          (subgroupFilter === "alle" || getExerciseSubgroup(e, exerciseSubgroupOverrides) === subgroupFilter) &&
+          (subgroupFilter === "alle" || exerciseHasSubgroup(e, exerciseSubgroupOverrides, subgroupFilter)) &&
           e.name.toLowerCase().includes(query.toLowerCase())
       );
       const BOTTOM = Number.MAX_SAFE_INTEGER;
@@ -4242,7 +4923,27 @@ function PlanBuilder({
 
   const addExercise = (exerciseId) => {
     if (items.some((i) => i.exerciseId === exerciseId)) return;
-    setItems([...items, { exerciseId, sets: 3, warmupSets: 0, reps: 10, weight: 0, useTime: false, duration: 30, supersetWithNext: false, restSeconds: null }]);
+    // Start from what was last achieved instead of a generic 3x10 - when you
+    // build a plan around an exercise you already train, those numbers are
+    // the useful starting point.
+    const wasTimed = isTimeBasedInLogs(logs, exerciseId, timeBasedExercises);
+    const history = getExerciseHistory(logs, exerciseId, null, wasTimed, activeGymId);
+    const working = (history?.lastSets || []).filter((set) => !set.warmup);
+    const last = working[0];
+    const warmCount = (history?.lastSets || []).filter((set) => set.warmup).length;
+    setItems([...items, {
+      exerciseId,
+      sets: working.length > 0 ? working.length : 3,
+      warmupSets: warmCount,
+      reps: last && toNum(last.reps) > 0 ? toNum(last.reps) : 10,
+      weight: last && toNum(last.weight) > 0 ? fmtDecimal(last.weight) : 0,
+      useTime: wasTimed,
+      duration: last && toNum(last.duration) > 0 ? toNum(last.duration) : 30,
+      supersetWithNext: false,
+      restSeconds: null,
+      autoRun: null,
+      autoSeconds: null,
+    }]);
   };
   const removeExercise = (exerciseId) => {
     setItems(items.filter((i) => i.exerciseId !== exerciseId));
@@ -4274,7 +4975,11 @@ function PlanBuilder({
       items.map((i) => {
         if (i.exerciseId !== exerciseId) return i;
         const n = Math.max(min, toNum(i[field]));
-        return { ...i, [field]: n || min };
+        const value = n || min;
+        // Weight is shown German-style: typing 62,5 should not silently turn
+        // into 62.5 on blur. It stays a string here; toNum() is used
+        // everywhere the value is actually calculated with.
+        return { ...i, [field]: field === "weight" ? fmtDecimal(value) : value };
       })
     );
   };
@@ -4298,24 +5003,19 @@ function PlanBuilder({
     <div>
       <div className="builder-header-actions" style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 12, position: "relative" }}>
         <div style={{ flex: 1, minWidth: 0 }}>
-          {editingBuilderName ? (
-            <input
-              type="text"
-              autoFocus
-              placeholder="z. B. Oberkörper Dienstag"
-              value={nameDraft}
-              onChange={(e) => setNameDraft(e.target.value)}
-              onBlur={saveBuilderName}
-              onKeyDown={(e) => {
-                if (e.key === "Enter") saveBuilderName();
-                if (e.key === "Escape") setEditingBuilderName(false);
-              }}
-            />
-          ) : (
-            <div className="plan-title ex-name-clickable" onClick={startEditingBuilderName}>
-              {name || "Neues Workout"}
-            </div>
-          )}
+          {/* The name used to hide behind a tap on the heading, which meant
+              the very first thing you do needed a step nobody discovers.
+              Step 1 has room for a plain field; step 2 keeps the compact
+              heading so the exercise cards stay the focus. */}
+          {/* Always a plain field, in both steps: editing an existing plan
+              opens on step 2, so hiding the name behind a tap there would
+              just move the original problem instead of solving it. */}
+          <input
+            type="text"
+            placeholder="Name des Workouts"
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+          />
         </div>
         <div style={{ display: "flex", gap: 4, flexShrink: 0 }}>
           {step === 1 && (
@@ -4584,12 +5284,68 @@ function PlanBuilder({
               onClick={() => setRestPopupFor("plan")}
             >
               <span style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                <Timer size={15} /> Pause zwischen den Sätzen
+                <Timer size={15} /> {planAutoRun ? "Pause nach jedem Satz" : "Pause zwischen den Sätzen"}
               </span>
               <span style={{ color: "var(--accent)" }}>
                 {planRest === 0 ? "Aus" : `${planRest}s`}
               </span>
             </button>
+            <button
+              className="modal-option"
+              style={{ marginTop: 6 }}
+              onClick={() => setPlanAutoRun((v) => !v)}
+            >
+              <span style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                <Play size={15} /> Automatisch durchlaufen
+              </span>
+              <span style={{ color: planAutoRun ? "var(--accent)" : "var(--text-dim)" }}>
+                {planAutoRun ? "An" : "Aus"}
+              </span>
+            </button>
+            {planAutoRun && (
+              <>
+                <button
+                  className="modal-option"
+                  style={{ marginTop: 6 }}
+                  onClick={() => setRestPopupFor("autoSeconds")}
+                >
+                  <span style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                    <Clock size={15} /> Zeit pro Satz
+                  </span>
+                  <span style={{ color: "var(--accent)" }}>{planAutoSeconds}s</span>
+                </button>
+                <button
+                  className="modal-option"
+                  style={{ marginTop: 6 }}
+                  onClick={() => setPlanAutoOrder(planAutoOrder === "circuit" ? "exercise" : "circuit")}
+                >
+                  <span style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                    <Repeat size={15} /> Reihenfolge
+                  </span>
+                  <span style={{ color: "var(--accent)" }}>
+                    {planAutoOrder === "circuit" ? "Zirkel" : "Übung für Übung"}
+                  </span>
+                </button>
+                <button
+                  className="modal-option"
+                  style={{ marginTop: 6 }}
+                  onClick={() => setRestPopupFor("roundRest")}
+                >
+                  <span style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                    <Timer size={15} />
+                    {planAutoOrder === "circuit" ? "Pause nach jeder Runde" : "Pause nach jeder Übung"}
+                  </span>
+                  <span style={{ color: "var(--accent)" }}>
+                    {planRoundRest === 0 ? "Aus" : `${planRoundRest}s`}
+                  </span>
+                </button>
+                <div style={{ fontSize: 12, color: "var(--text-dim)", marginTop: 8 }}>
+                  {planAutoOrder === "circuit"
+                    ? "Satz 1 aller Übungen, dann Satz 2 aller Übungen. Die Satzpause läuft zwischen den Übungen, die Rundenpause nach der letzten Übung einer Runde."
+                    : "Alle Sätze einer Übung am Stück, danach die nächste Übung."}
+                </div>
+              </>
+            )}
           </div>
 
           <div className="card">
@@ -4597,7 +5353,14 @@ function PlanBuilder({
             <div style={{ marginTop: 10 }}>
               {items.map((it, itemIndex) => {
                 const ex = exById[it.exerciseId];
-                const itemUsesTime = !!it.useTime;
+                // With the automatic run on, every exercise is timed unless it
+                // was explicitly switched back to reps - so the summary and the
+                // fields below have to show seconds, not reps.
+                const autoTimed = planAutoRun && it.autoRun !== false;
+                const itemUsesTime = autoTimed || !!it.useTime;
+                const shownSeconds = autoTimed
+                  ? (it.autoSeconds != null ? it.autoSeconds : planAutoSeconds)
+                  : (it.duration ?? 30);
                 const isDragging = draggingId === it.exerciseId;
                 const isOpen = expandedItemId === it.exerciseId;
                 const warm = Math.max(0, toNum(it.warmupSets));
@@ -4622,21 +5385,30 @@ function PlanBuilder({
                         <span className="ex-name">{ex.name}</span>
                         <span className="builder-item-summary">
                           {warm > 0 && `${warm}W + `}
-                          {`${it.sets}×${itemUsesTime ? `${it.duration ?? 30} Sek.` : it.reps}`}
+                          {`${it.sets}×${itemUsesTime ? `${shownSeconds} Sek.` : it.reps}`}
                           {!itemUsesTime && toNum(it.weight) > 0 && ` · ${fmtDecimal(it.weight)} kg`}
                           {it.restSeconds != null && ` · Pause ${it.restSeconds === 0 ? "aus" : `${it.restSeconds}s`}`}
+                          {planAutoRun && it.autoRun === false && " · zählt Wdh."}
                         </span>
                       </div>
-                      <div className="item-menu-wrap">
+                      <div className={`item-menu-wrap ${itemMenuUp && itemMenuId === it.exerciseId ? "drop-up" : ""}`}>
                         <button
                           className="btn-icon"
-                          onClick={() => setItemMenuId(itemMenuId === it.exerciseId ? null : it.exerciseId)}
+                          onClick={(e) => {
+                            const opening = itemMenuId !== it.exerciseId;
+                            setItemMenuUp(opening ? shouldDropUp(e.target) : false);
+                            setItemMenuId(opening ? it.exerciseId : null);
+                          }}
                           title="Weitere Optionen"
                         >
                           <MoreVertical size={16} />
                         </button>
                         {itemMenuId === it.exerciseId && (
-                          <div className="program-menu" style={{ top: "calc(100% + 4px)", right: 0, left: "auto" }}>
+                          <div
+                            ref={itemMenuRef}
+                            className="program-menu"
+                            style={{ top: "calc(100% + 4px)", right: 0, left: "auto" }}
+                          >
                             {itemIndex < items.length - 1 && (
                               <button
                                 className="program-menu-item"
@@ -4645,6 +5417,33 @@ function PlanBuilder({
                                 <Repeat size={14} />
                                 {it.supersetWithNext ? "Superset-Verknüpfung lösen" : "Mit nächster Übung verknüpfen"}
                               </button>
+                            )}
+                            {planAutoRun && (
+                              <>
+                                <button
+                                  className="program-menu-item"
+                                  onClick={() => { setRestPopupFor(`time:${it.exerciseId}`); setItemMenuId(null); }}
+                                >
+                                  <Clock size={14} />
+                                  {it.autoSeconds != null
+                                    ? `Zeit: ${it.autoSeconds}s`
+                                    : `Zeit: wie im Workout (${planAutoSeconds}s)`}
+                                </button>
+                                <button
+                                  className="program-menu-item"
+                                  onClick={() => {
+                                    // false = this exercise counts reps and the
+                                    // run waits for the set to be ticked off.
+                                    updateItem(it.exerciseId, "autoRun", it.autoRun === false ? null : false);
+                                    setItemMenuId(null);
+                                  }}
+                                >
+                                  <Repeat size={14} />
+                                  {it.autoRun === false
+                                    ? "Wieder auf Zeit umstellen"
+                                    : "Auf Wiederholungen umstellen"}
+                                </button>
+                              </>
                             )}
                             <button
                               className="program-menu-item"
@@ -4655,13 +5454,18 @@ function PlanBuilder({
                                 ? `Pausenzeit · ${it.restSeconds === 0 ? "Aus" : `${it.restSeconds}s`}`
                                 : "Pausenzeit"}
                             </button>
-                            <button
-                              className="program-menu-item"
-                              onClick={() => { toggleItemTime(it.exerciseId, !itemUsesTime); setItemMenuId(null); }}
-                            >
-                              <Clock size={14} />
-                              {itemUsesTime ? "Wieder Wiederholungen zählen" : "Zeit pro Satz statt Wiederholungen"}
-                            </button>
+                            {/* Redundant while the automatic run is on: the
+                                set length comes from the workout there, and
+                                two similar-sounding entries only confuse. */}
+                            {!planAutoRun && (
+                              <button
+                                className="program-menu-item"
+                                onClick={() => { toggleItemTime(it.exerciseId, !itemUsesTime); setItemMenuId(null); }}
+                              >
+                                <Clock size={14} />
+                                {itemUsesTime ? "Wieder Wiederholungen zählen" : "Zeit pro Satz statt Wiederholungen"}
+                              </button>
+                            )}
                             <button
                               className="program-menu-item"
                               onClick={() => { setSelectedExerciseId(it.exerciseId); setItemMenuId(null); }}
@@ -4714,12 +5518,23 @@ function PlanBuilder({
                           {itemUsesTime ? (
                             <div style={{ flex: 1 }}>
                               <label className="field-label">Sek.</label>
+                              {/* In automatic mode this field edits the
+                                  exercise's own set length, so changing it
+                                  here does the same as the menu entry. */}
                               <input
                                 type="number"
                                 min="1"
-                                value={it.duration ?? 30}
-                                onChange={(e) => updateItem(it.exerciseId, "duration", e.target.value)}
-                                onBlur={() => handleItemBlur(it.exerciseId, "duration", 1)}
+                                value={shownSeconds}
+                                onChange={(e) =>
+                                  updateItem(
+                                    it.exerciseId,
+                                    autoTimed ? "autoSeconds" : "duration",
+                                    e.target.value
+                                  )
+                                }
+                                onBlur={() =>
+                                  handleItemBlur(it.exerciseId, autoTimed ? "autoSeconds" : "duration", 1)
+                                }
                               />
                             </div>
                           ) : (
@@ -4780,6 +5595,10 @@ function PlanBuilder({
                   premade: false,
                   folderId,
                   restSeconds: planRest,
+                  autoRun: planAutoRun,
+                  autoSetSeconds: Math.max(1, Number(planAutoSeconds) || 30),
+                  autoOrder: planAutoOrder,
+                  roundRestSeconds: Math.max(0, Number(planRoundRest) || 0),
                   // Fields are stored as whatever the user typed while editing
                   // (see updateItem/updateItemWeight) so a field can be freely
                   // cleared and retyped. Normalize everything to valid numbers
@@ -4787,6 +5606,8 @@ function PlanBuilder({
                   items: items.map((i) => ({
                     ...i,
                     restSeconds: i.restSeconds != null ? Math.max(0, Number(i.restSeconds) || 0) : null,
+                    autoRun: i.autoRun === true || i.autoRun === false ? i.autoRun : null,
+                    autoSeconds: i.autoSeconds != null ? Math.max(1, Number(i.autoSeconds) || 1) : null,
                     sets: Math.max(1, Number(i.sets) || 1),
                     reps: Math.max(1, Number(i.reps) || 1),
                     weight: Math.max(0, toNum(i.weight) || 0),
@@ -4801,67 +5622,90 @@ function PlanBuilder({
         </>
       )}
 
-      {restPopupFor && (
-        <Modal
-          title={restPopupFor === "plan" ? "Pause für das Workout" : "Pause für diese Übung"}
-          onClose={() => setRestPopupFor(null)}
-        >
-          <div className="modal-list">
-            {restPopupFor !== "plan" && (
-              <button
-                className={`modal-option ${
-                  items.find((i) => i.exerciseId === restPopupFor)?.restSeconds == null ? "active" : ""
-                }`}
-                onClick={() => { updateItem(restPopupFor, "restSeconds", null); setRestPopupFor(null); }}
-              >
-                Wie im Workout ({planRest === 0 ? "Aus" : `${planRest}s`})
-                {items.find((i) => i.exerciseId === restPopupFor)?.restSeconds == null && <Check size={15} />}
-              </button>
-            )}
-            {[0, 30, 45, 60, 90, 120, 180].map((sec) => {
-              const current =
-                restPopupFor === "plan"
-                  ? planRest
-                  : items.find((i) => i.exerciseId === restPopupFor)?.restSeconds;
-              return (
+      {restPopupFor && (() => {
+        // One popup serves four things: workout rest, per-exercise rest,
+        // the central set length and the round rest. The differences are
+        // collected here instead of being repeated in the markup.
+        const kind =
+          restPopupFor === "plan" ? "planRest"
+          : restPopupFor === "roundRest" ? "roundRest"
+          : restPopupFor === "autoSeconds" ? "autoSeconds"
+          : restPopupFor.startsWith("time:") ? "itemTime"
+          : "itemRest";
+        const itemId = restPopupFor.startsWith("time:") ? restPopupFor.slice(5) : restPopupFor;
+        const item = items.find((i) => i.exerciseId === itemId);
+        const titles = {
+          planRest: "Pause nach jedem Satz",
+          roundRest: planAutoOrder === "circuit" ? "Pause nach jeder Runde" : "Pause nach jeder Übung",
+          autoSeconds: "Zeit pro Satz",
+          itemRest: "Pause für diese Übung",
+          itemTime: "Zeit für diese Übung",
+        };
+        const presets = kind === "autoSeconds" || kind === "itemTime"
+          ? [15, 20, 30, 40, 45, 60, 90]
+          : [0, 15, 30, 45, 60, 90, 120, 180];
+        const current =
+          kind === "planRest" ? planRest
+          : kind === "roundRest" ? planRoundRest
+          : kind === "autoSeconds" ? planAutoSeconds
+          : kind === "itemTime" ? item?.autoSeconds
+          : item?.restSeconds;
+        const apply = (sec) => {
+          if (kind === "planRest") setPlanRest(sec);
+          else if (kind === "roundRest") setPlanRoundRest(sec);
+          else if (kind === "autoSeconds") setPlanAutoSeconds(sec);
+          else if (kind === "itemTime") updateItem(itemId, "autoSeconds", sec);
+          else updateItem(itemId, "restSeconds", sec);
+        };
+        const inheritLabel =
+          kind === "itemTime" ? `Wie im Workout (${planAutoSeconds}s)`
+          : `Wie im Workout (${planRest === 0 ? "Aus" : `${planRest}s`})`;
+        const canInherit = kind === "itemRest" || kind === "itemTime";
+        const minValue = kind === "autoSeconds" || kind === "itemTime" ? 1 : 0;
+
+        return (
+          <Modal title={titles[kind]} onClose={() => setRestPopupFor(null)}>
+            <div className="modal-list">
+              {canInherit && (
+                <button
+                  className={`modal-option ${current == null ? "active" : ""}`}
+                  onClick={() => {
+                    updateItem(itemId, kind === "itemTime" ? "autoSeconds" : "restSeconds", null);
+                    setRestPopupFor(null);
+                  }}
+                >
+                  {inheritLabel}
+                  {current == null && <Check size={15} />}
+                </button>
+              )}
+              {presets.map((sec) => (
                 <button
                   key={sec}
                   className={`modal-option ${current === sec ? "active" : ""}`}
-                  onClick={() => {
-                    if (restPopupFor === "plan") setPlanRest(sec);
-                    else updateItem(restPopupFor, "restSeconds", sec);
-                    setRestPopupFor(null);
-                  }}
+                  onClick={() => { apply(sec); setRestPopupFor(null); }}
                 >
                   {sec === 0 ? "Aus" : `${sec} Sekunden`}
                   {current === sec && <Check size={15} />}
                 </button>
-              );
-            })}
-          </div>
-          <div style={{ marginTop: 12, paddingTop: 12, borderTop: "1px solid var(--border)" }}>
-            <label className="field-label">Eigener Wert (Sekunden)</label>
-            <input
-              type="number"
-              min="0"
-              step="5"
-              value={
-                restPopupFor === "plan"
-                  ? planRest
-                  : items.find((i) => i.exerciseId === restPopupFor)?.restSeconds ?? planRest
-              }
-              onChange={(e) => {
-                const sec = Math.max(0, Number(e.target.value) || 0);
-                if (restPopupFor === "plan") setPlanRest(sec);
-                else updateItem(restPopupFor, "restSeconds", sec);
-              }}
-            />
-          </div>
-        </Modal>
-      )}
+              ))}
+            </div>
+            <div style={{ marginTop: 12, paddingTop: 12, borderTop: "1px solid var(--border)" }}>
+              <label className="field-label">Eigener Wert (Sekunden)</label>
+              <input
+                type="number"
+                min={minValue}
+                step="5"
+                value={current ?? (kind === "itemTime" ? planAutoSeconds : planRest)}
+                onChange={(e) => apply(Math.max(minValue, Number(e.target.value) || minValue))}
+              />
+            </div>
+          </Modal>
+        );
+      })()}
 
       {selectedExercise && (
         <ExerciseDetailSheet
+          gyms={gyms}
           key={selectedExercise.id}
           exercise={selectedExercise}
           exercises={exercises}
@@ -4978,6 +5822,8 @@ function PlansView({
   onCreateFolder,
   onDeleteFolder,
   onMovePlan,
+  onManageGyms = () => {},
+  onOpenBackup = () => {},
 }) {
   const [creatingFolder, setCreatingFolder] = useState(false);
   const [newFolderName, setNewFolderName] = useState("");
@@ -5094,6 +5940,19 @@ function PlansView({
                 </span>
               </button>
             ))}
+            <div className="program-menu-divider" />
+            <button
+              className="program-menu-item"
+              onClick={() => { setProgramMenuOpen(false); onManageGyms(); }}
+            >
+              <Dumbbell size={14} /> Gyms verwalten
+            </button>
+            <button
+              className="program-menu-item"
+              onClick={() => { setProgramMenuOpen(false); onOpenBackup(); }}
+            >
+              <Save size={14} /> Daten sichern
+            </button>
             <div className="program-menu-divider" />
             <button
               className="program-menu-item"
@@ -5215,15 +6074,17 @@ function PlansView({
       </div>
 
       {creatingFolder && (
-        <div className="card" style={{ marginTop: 10 }}>
+        <Modal title="Neuer Ordner" onClose={() => setCreatingFolder(false)}>
           <label className="field-label">Ordnername</label>
           <input
             type="text"
+            autoFocus
             placeholder="z. B. Push/Pull/Legs"
             value={newFolderName}
             onChange={(e) => setNewFolderName(e.target.value)}
+            onKeyDown={(e) => { if (e.key === "Enter" && newFolderName.trim()) handleCreateFolder(); }}
           />
-          <label className="field-label" style={{ marginTop: 8 }}>Farbe</label>
+          <label className="field-label" style={{ marginTop: 10 }}>Farbe</label>
           <div className="color-swatch-grid" style={{ marginTop: 6 }}>
             {FOLDER_COLORS.map((c) => (
               <span
@@ -5236,13 +6097,13 @@ function PlansView({
           </div>
           <button
             className="btn btn-primary btn-block btn-sm"
-            style={{ marginTop: 10 }}
+            style={{ marginTop: 12 }}
             disabled={!newFolderName.trim()}
             onClick={handleCreateFolder}
           >
             <Save size={14} /> Ordner erstellen
           </button>
-        </div>
+        </Modal>
       )}
 
       <div style={{ height: 14 }} />
@@ -5393,7 +6254,11 @@ function LogView({
   onFinish,
   onDiscard,
   onRequestConfirm,
+  gyms = [],
 }) {
+  const sessionGymName = session
+    ? gyms.find((g) => g.id === session.gymId)?.name || null
+    : null;
   // All hooks must run on every render regardless of whether a session is
   // active, so they live here, above the early return below.
   const [restLeft, setRestLeft] = useState(0); // seconds remaining, 0 = inactive
@@ -5403,6 +6268,21 @@ function LogView({
   const [selectedExerciseId, setSelectedExerciseId] = useState(null);
   const selectedExercise = exercises.find((e) => e.id === selectedExerciseId) || null;
   const [addingExercise, setAddingExercise] = useState(false);
+  const [entryMenuUp, setEntryMenuUp] = useState(false);
+  // The automatic (HIT/interval) run. Times are stored as an absolute
+  // end timestamp rather than a countdown, so a throttled or backgrounded
+  // tab still resumes with the correct remaining time.
+  const [autoRun, setAutoRun] = useState(null); // {phase,'work'|'rest', exerciseId, setIdx, endsAt}
+  const [autoLeft, setAutoLeft] = useState(0);
+  // React state updates are async, but the ticker below runs every 200ms.
+  // Without a synchronous mirror, a tick that fires between "Stopp" and the
+  // re-render would still start the next set.
+  const autoRunRef = useRef(null);
+  const applyAutoRun = (next) => {
+    autoRunRef.current = next;
+    setAutoRun(next);
+  };
+  const wakeLockRef = useRef(null);
   const [replacingExerciseId, setReplacingExerciseId] = useState(null);
   const [addExerciseQuery, setAddExerciseQuery] = useState("");
   // Filters for the mid-workout exercise picker, mirroring the ones in the
@@ -5434,12 +6314,13 @@ function LogView({
   const addPickerMatches = (e) =>
     (addGroup === "alle" || e.group === addGroup) &&
     (addSubgroup === "alle" ||
-      getExerciseSubgroup(e, exerciseSubgroupOverrides) === addSubgroup) &&
+      exerciseHasSubgroup(e, exerciseSubgroupOverrides, addSubgroup)) &&
     (addEquipment === "alle" ||
       getExerciseEquipment(e, exerciseEquipmentOverrides) === addEquipment) &&
     e.name.toLowerCase().includes(addExerciseQuery.toLowerCase());
   const [settingsMenuOpen, setSettingsMenuOpen] = useState(false);
   const [openEntryMenu, setOpenEntryMenu] = useState(null);
+  const entryMenuRef = useMenuFlip(openEntryMenu, setEntryMenuUp);
 
   useEffect(() => {
     if (!openEntryMenu) return;
@@ -5505,6 +6386,172 @@ function LogView({
     }
     return info;
   }, [session?.entries]);
+
+  // --- Automatic run -------------------------------------------------------
+  const entryAutoRuns = (entry) => {
+    if (!entry) return false;
+    if (entry.autoRun === true) return true;
+    if (entry.autoRun === false) return false;
+    return !!session?.autoRun;
+  };
+
+  // Finds the next set to run. Inside a superset group the exercises take
+  // turns (set 1 of A, set 1 of B, ... then set 2 of A), everything else is
+  // worked through exercise by exercise.
+  const findNextSet = (fromExerciseId, fromSetIdx) => {
+    const entries = session?.entries || [];
+    const idx = entries.findIndex((e) => e.exerciseId === fromExerciseId);
+    if (idx === -1) return null;
+
+    // Circuit: set 1 of every exercise, then set 2 of every exercise. This
+    // is what a HIT workout actually looks like, and it needs no linking.
+    if ((session?.autoOrder || "circuit") === "circuit") {
+      for (let k = idx + 1; k < entries.length; k++) {
+        if (entries[k].sets[fromSetIdx]) return { exerciseId: entries[k].exerciseId, setIdx: fromSetIdx };
+      }
+      for (let k = 0; k < entries.length; k++) {
+        if (entries[k].sets[fromSetIdx + 1]) return { exerciseId: entries[k].exerciseId, setIdx: fromSetIdx + 1 };
+      }
+      return null;
+    }
+
+    // Classic: finish an exercise before moving on.
+    const current = entries[idx];
+    if (current.sets[fromSetIdx + 1]) return { exerciseId: current.exerciseId, setIdx: fromSetIdx + 1 };
+    for (let k = idx + 1; k < entries.length; k++) {
+      if (entries[k].sets[0]) return { exerciseId: entries[k].exerciseId, setIdx: 0 };
+    }
+    return null;
+  };
+
+  // In automatic mode the set length comes from the workout (or the
+  // exercise, if it overrides it) - not from the reps/duration fields, so a
+  // rep-based exercise runs on time too without being edited first.
+  const setDurationFor = (entry) => {
+    if (entry?.autoSeconds != null && toNum(entry.autoSeconds) > 0) return toNum(entry.autoSeconds);
+    const fromSession = toNum(session?.autoSetSeconds);
+    if (fromSession > 0) return fromSession;
+    const fromSet = toNum(entry?.sets?.[0]?.duration);
+    return fromSet > 0 ? fromSet : 30;
+  };
+
+  // True when the set that just finished closes a round (circuit) or an
+  // exercise (classic order) - that is when the longer rest applies.
+  const finishesRound = (exerciseId, setIdx) => {
+    const entries = session?.entries || [];
+    const idx = entries.findIndex((e) => e.exerciseId === exerciseId);
+    if (idx === -1) return false;
+    if ((session?.autoOrder || "circuit") === "circuit") return idx === entries.length - 1;
+    return setIdx >= (entries[idx]?.sets?.length || 1) - 1;
+  };
+
+  const restAfter = (exerciseId, setIdx) => {
+    const roundRest = toNum(session?.roundRestSeconds);
+    if (finishesRound(exerciseId, setIdx)) return Math.max(0, roundRest);
+    return Math.max(0, getRestDurationFor(exerciseId));
+  };
+
+  const startAutoAt = (exerciseId, setIdx, force = false) => {
+    if (!force && !autoRunRef.current) return;
+    const entry = (session?.entries || []).find((e) => e.exerciseId === exerciseId);
+    if (!entry) { applyAutoRun(null); return; }
+    // Only exercises explicitly switched to reps wait for a manual tick;
+    // everything else runs on the workout's set length.
+    if (!entryAutoRuns(entry)) {
+      applyAutoRun({ phase: "waiting", exerciseId, setIdx, endsAt: null });
+      return;
+    }
+    const seconds = setDurationFor(entry);
+    applyAutoRun({ phase: "work", exerciseId, setIdx, endsAt: Date.now() + seconds * 1000 });
+  };
+
+  const stopAuto = () => {
+    applyAutoRun(null);
+    setAutoLeft(0);
+    releaseAudio();
+  };
+
+  const anyAutoRun = (session?.entries || []).some((e) => entryAutoRuns(e));
+  const firstUnfinishedSet = () => {
+    for (const entry of session?.entries || []) {
+      const idx = entry.sets.findIndex((set) => !set.done);
+      if (idx !== -1) return { exerciseId: entry.exerciseId, setIdx: idx };
+    }
+    return null;
+  };
+
+  // Ticks often enough to look smooth, but the remaining time always comes
+  // from the stored end timestamp so a throttled tab cannot drift.
+  useEffect(() => {
+    if (!autoRun || !autoRun.endsAt) return;
+    let cancelled = false;
+    const tick = () => {
+      if (cancelled || !autoRunRef.current) return;
+      const left = Math.max(0, autoRun.endsAt - Date.now());
+      setAutoLeft(left);
+      if (left > 0) return;
+
+      const entries = session?.entries || [];
+      const entry = entries.find((e) => e.exerciseId === autoRun.exerciseId);
+      if (!entry) { stopAuto(); return; }
+
+      if (autoRun.phase === "work") {
+        const restSeconds = restAfter(autoRun.exerciseId, autoRun.setIdx);
+        // One beep when a set ends. If a rest follows, its end gets its own
+        // beep; without a rest that single beep is all there is.
+        // Deliberately a single tone: with no rest configured this is the
+        // only signal, and two short beeps would read as two events.
+        playBeep({ frequency: 880, duration: 0.32 });
+        if (!entry.sets[autoRun.setIdx]?.done) {
+          toggleSetDoneSilently(autoRun.exerciseId, autoRun.setIdx);
+        }
+        if (restSeconds > 0) {
+          applyAutoRun({
+            ...autoRun,
+            phase: "rest",
+            isRoundRest: finishesRound(autoRun.exerciseId, autoRun.setIdx),
+            endsAt: Date.now() + restSeconds * 1000,
+          });
+        } else {
+          const next = findNextSet(autoRun.exerciseId, autoRun.setIdx);
+          if (next) startAutoAt(next.exerciseId, next.setIdx);
+          else { stopAuto(); playBeep({ frequency: 660, duration: 0.4 }); }
+        }
+        return;
+      }
+
+      if (autoRun.phase === "rest") {
+        playBeep({ frequency: 1320, duration: 0.35 });
+        const next = findNextSet(autoRun.exerciseId, autoRun.setIdx);
+        if (next) startAutoAt(next.exerciseId, next.setIdx);
+        else { stopAuto(); playBeep({ frequency: 660, duration: 0.4 }); }
+      }
+    };
+    tick();
+    const id = setInterval(tick, 200);
+    return () => { cancelled = true; clearInterval(id); };
+  }, [autoRun, session]);
+
+  // Keeps the screen awake during an automatic run - a locked screen stops
+  // iOS from playing the beeps.
+  useEffect(() => {
+    const active = !!autoRun;
+    if (active && !wakeLockRef.current && navigator.wakeLock?.request) {
+      navigator.wakeLock.request("screen")
+        .then((lock) => { wakeLockRef.current = lock; })
+        .catch(() => { /* not granted - the run still works, just dimmer */ });
+    }
+    if (!active && wakeLockRef.current) {
+      wakeLockRef.current.release?.().catch(() => {});
+      wakeLockRef.current = null;
+    }
+    return () => {
+      if (!active && wakeLockRef.current) {
+        wakeLockRef.current.release?.().catch(() => {});
+        wakeLockRef.current = null;
+      }
+    };
+  }, [autoRun]);
 
   if (!session) {
     return (
@@ -5581,6 +6628,18 @@ function LogView({
       ),
     });
   };
+  // Used by the automatic run: marks a set as done without kicking off the
+  // normal rest timer, because the automatic run manages the rest itself.
+  const toggleSetDoneSilently = (exerciseId, idx) => {
+    onUpdateSession({
+      ...session,
+      entries: session.entries.map((e) =>
+        e.exerciseId === exerciseId
+          ? { ...e, sets: e.sets.map((set, i) => (i === idx ? { ...set, done: true } : set)) }
+          : e
+      ),
+    });
+  };
   // Inputs store exactly what the user typed (see updateSet above) so a
   // field can be cleared and freely retyped instead of the digit typed
   // right after clearing getting stuck after a leftover "0". Once the
@@ -5592,9 +6651,13 @@ function LogView({
         e.exerciseId === exerciseId
           ? {
               ...e,
-              sets: e.sets.map((s, i) =>
-                i === idx ? { ...s, [field]: Math.max(0, toNum(s[field])) } : s
-              ),
+              sets: e.sets.map((s, i) => {
+                if (i !== idx) return s;
+                const n = Math.max(0, toNum(s[field]));
+                // Keep the comma the user typed instead of rewriting it to a
+                // dot; every calculation goes through toNum() anyway.
+                return { ...s, [field]: field === "weight" ? fmtDecimal(n) : n };
+              }),
             }
           : e
       ),
@@ -5672,6 +6735,26 @@ function LogView({
           : e
       ),
     });
+    // The automatic run parks on rep-based exercises; checking the set off
+    // by hand is the signal to carry on.
+    if (autoRun && autoRun.phase === "waiting" && autoRun.exerciseId === exerciseId
+        && autoRun.setIdx === idx && nowDone) {
+      playBeep({ frequency: 880, duration: 0.22 });
+      const restSeconds = restAfter(exerciseId, idx);
+      if (restSeconds > 0) {
+        applyAutoRun({
+          ...autoRun,
+          phase: "rest",
+          isRoundRest: finishesRound(exerciseId, idx),
+          endsAt: Date.now() + restSeconds * 1000,
+        });
+      } else {
+        const next = findNextSet(exerciseId, idx);
+        if (next) startAutoAt(next.exerciseId, next.setIdx);
+        else stopAuto();
+      }
+      return;
+    }
     // Inside a superset, sets are done back-to-back with no rest between
     // the linked exercises — the timer only starts once the last exercise
     // in the group has a set checked off.
@@ -5745,6 +6828,50 @@ function LogView({
         </div>
       )}
 
+      {autoRun && (
+        <div className="auto-run-bar">
+          <div className="auto-run-phase">
+            {autoRun.phase === "work"
+              ? "Satz läuft"
+              : autoRun.phase === "rest"
+              ? autoRun.isRoundRest
+                ? ((session.autoOrder || "circuit") === "circuit" ? "Rundenpause" : "Übungspause")
+                : "Pause"
+              : "Wartet auf dich"}
+          </div>
+          <div className="auto-run-time">
+            {autoRun.phase === "waiting"
+              ? "–"
+              : `${Math.ceil(autoLeft / 1000)}s`}
+          </div>
+          <div className="auto-run-what">
+            {exBy[autoRun.exerciseId]?.name || "Übung"} · Satz {autoRun.setIdx + 1}
+            {autoRun.phase === "waiting" && " · abhaken zum Fortfahren"}
+          </div>
+          <div className="rest-actions" style={{ marginTop: 8 }}>
+            {autoRun.phase !== "waiting" && (
+              <button
+                className="rest-btn"
+                onClick={() => applyAutoRun({ ...autoRun, endsAt: autoRun.endsAt + 15000 })}
+              >
+                +15s
+              </button>
+            )}
+            <button
+              className="rest-btn"
+              onClick={() => {
+                const next = findNextSet(autoRun.exerciseId, autoRun.setIdx);
+                if (next) startAutoAt(next.exerciseId, next.setIdx);
+                else stopAuto();
+              }}
+            >
+              <SkipForward size={13} /> Weiter
+            </button>
+            <button className="rest-btn" onClick={stopAuto}>Stopp</button>
+          </div>
+        </div>
+      )}
+
       <div className="card">
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
           <div>
@@ -5752,6 +6879,11 @@ function LogView({
             <span className="tag" style={{ marginTop: 6, display: "inline-block" }}>
               {fmtDate(session.date)}
             </span>
+            {sessionGymName && (
+              <span className="tag tag-equipment" style={{ marginTop: 6, marginLeft: 6, display: "inline-block" }}>
+                {sessionGymName}
+              </span>
+            )}
           </div>
           <div className="session-settings">
             <span className="duration-badge">
@@ -5816,8 +6948,15 @@ function LogView({
 
       {session.entries.map((entry, entryIndex) => {
         const ex = exBy[entry.exerciseId];
-        const isTimeBased = !!timeBasedExercises[entry.exerciseId] || !!entry.targetUseTime;
-        const history = getExerciseHistory(logs, entry.exerciseId, session.id, isTimeBased);
+        // During an automatic run the set is measured in seconds, so the row
+        // must show a time field - unless this exercise was kept on reps.
+        const isTimeBased =
+          entryAutoRuns(entry) && session.autoRun
+            ? true
+            : !!timeBasedExercises[entry.exerciseId] || !!entry.targetUseTime;
+        // Comparing against the same gym only - a record set on a machine
+        // that runs lighter elsewhere is not a record here.
+        const history = getExerciseHistory(logs, entry.exerciseId, session.id, isTimeBased, session.gymId);
         const ssInfo = supersetGroupInfo[entry.exerciseId] || { groupSize: 1, isFirst: true, isLast: true };
         const isSuperset = ssInfo.groupSize > 1;
         return (
@@ -5854,16 +6993,24 @@ function LogView({
                   {ex.name}
                 </span>
               </div>
-              <div className="entry-menu-wrap">
+              <div className={`entry-menu-wrap ${entryMenuUp && openEntryMenu === entry.exerciseId ? "drop-up" : ""}`}>
                 <button
                   className={`note-toggle ${(entry.restSeconds != null || entry.notes) ? "has-note" : ""}`}
-                  onClick={() => setOpenEntryMenu((s) => (s === entry.exerciseId ? null : entry.exerciseId))}
+                  onClick={(e) => {
+                    const opening = openEntryMenu !== entry.exerciseId;
+                    setEntryMenuUp(opening ? shouldDropUp(e.target) : false);
+                    setOpenEntryMenu(opening ? entry.exerciseId : null);
+                  }}
                   title="Optionen für diese Übung"
                 >
                   <MoreVertical size={15} />
                 </button>
                 {openEntryMenu === entry.exerciseId && (
-                  <div className="program-menu" style={{ top: "calc(100% + 4px)", right: 0, left: "auto" }}>
+                  <div
+                    ref={entryMenuRef}
+                    className="program-menu"
+                    style={{ top: "calc(100% + 4px)", right: 0, left: "auto" }}
+                  >
                     <button
                       className="program-menu-item"
                       onClick={() => {
@@ -6007,8 +7154,10 @@ function LogView({
                   <span />
                   <span />
                   <span />
-                  <label className="field-label" style={{ margin: 0 }}>Wdh.</label>
-                  <label className="field-label" style={{ margin: 0 }}>Gewicht (kg)</label>
+                  <label className="field-label" style={{ margin: 0 }}>
+                    {isTimeBased ? "Sek." : "Wdh."}
+                  </label>
+                  <label className="field-label" style={{ margin: 0 }}>kg</label>
                 </div>
                 {entry.sets.map((s, idx) => {
                   const pr = isNewPR(s, history, isTimeBased);
@@ -6035,13 +7184,26 @@ function LogView({
                       >
                         W
                       </span>
-                      <input
-                        type="number"
-                        min="0"
-                        value={s.reps}
-                        onChange={(e) => updateSet(entry.exerciseId, idx, "reps", e.target.value)}
-                        onBlur={() => sanitizeSetField(entry.exerciseId, idx, "reps")}
-                      />
+                      {/* One column, two meanings: a timed set has no rep
+                          count, so the seconds take that slot instead of
+                          adding a second row underneath. */}
+                      {isTimeBased ? (
+                        <input
+                          type="number"
+                          min="0"
+                          value={s.duration ?? ""}
+                          onChange={(e) => updateSet(entry.exerciseId, idx, "duration", e.target.value)}
+                          onBlur={() => sanitizeSetField(entry.exerciseId, idx, "duration")}
+                        />
+                      ) : (
+                        <input
+                          type="number"
+                          min="0"
+                          value={s.reps}
+                          onChange={(e) => updateSet(entry.exerciseId, idx, "reps", e.target.value)}
+                          onBlur={() => sanitizeSetField(entry.exerciseId, idx, "reps")}
+                        />
+                      )}
                       <div style={{ position: "relative" }}>
                         <input
                           type="text"
@@ -6050,32 +7212,13 @@ function LogView({
                           onChange={(e) => updateSet(entry.exerciseId, idx, "weight", e.target.value)}
                           onBlur={() => sanitizeSetField(entry.exerciseId, idx, "weight")}
                         />
-                        {pr && !isTimeBased && (
+                        {pr && (
                           <span className="pr-badge" title="Neuer Rekord!">
                             <Trophy size={12} />
                           </span>
                         )}
                       </div>
                     </SwipeableSetRow>
-                    {isTimeBased && (
-                      <div className="time-row">
-                        <label className="field-label">Zeit (Sek.)</label>
-                        <div style={{ position: "relative", flex: 1 }}>
-                          <input
-                            type="number"
-                            min="0"
-                            value={s.duration ?? ""}
-                            onChange={(e) => updateSet(entry.exerciseId, idx, "duration", e.target.value)}
-                            onBlur={() => sanitizeSetField(entry.exerciseId, idx, "duration")}
-                          />
-                          {pr && (
-                            <span className="pr-badge" title="Neuer Rekord!">
-                              <Trophy size={12} />
-                            </span>
-                          )}
-                        </div>
-                      </div>
-                    )}
                     </React.Fragment>
                   );
                 })}
@@ -6094,14 +7237,33 @@ function LogView({
       })}
 
       <div className="card">
-        {addingExercise ? (
-          <>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
-              <span className="plan-title">Übung hinzufügen</span>
-              <button className="btn-icon" onClick={() => { setAddingExercise(false); resetAddFilters(); }}>
-                <X size={15} />
-              </button>
-            </div>
+        {anyAutoRun && !autoRun && (
+          <button
+            className="btn btn-primary btn-block"
+            style={{ marginBottom: 8 }}
+            onClick={() => {
+              // Must happen inside the tap: iOS only unlocks audio from a
+              // real user gesture.
+              unlockAudio();
+              playBeep({ frequency: 660, duration: 0.12, volume: 0.15 });
+              const first = firstUnfinishedSet();
+              if (first) startAutoAt(first.exerciseId, first.setIdx, true);
+            }}
+          >
+            <Play size={16} /> Automatik starten
+          </button>
+        )}
+        <button className="btn btn-ghost btn-block" onClick={() => setAddingExercise(true)}>
+          <Plus size={16} /> Übung hinzufügen
+        </button>
+      </div>
+
+      {addingExercise && (
+        <Modal
+          title="Übung hinzufügen"
+          onClose={() => { setAddingExercise(false); resetAddFilters(); }}
+          width={420}
+        >
             <div className="search-box" style={{ marginBottom: 10 }}>
               <Search size={16} color="var(--text-dim)" />
               <input
@@ -6188,13 +7350,8 @@ function LogView({
                   );
                 })}
             </div>
-          </>
-        ) : (
-          <button className="btn btn-ghost btn-block" onClick={() => setAddingExercise(true)}>
-            <Plus size={16} /> Übung hinzufügen
-          </button>
-        )}
-      </div>
+        </Modal>
+      )}
 
       <div style={{ display: "flex", gap: 8, marginTop: 4 }}>
         <button className="btn btn-danger" style={{ flex: 1 }} onClick={onDiscard}>
@@ -6207,6 +7364,7 @@ function LogView({
 
       {selectedExercise && (
         <ExerciseDetailSheet
+          gyms={gyms}
           key={selectedExercise.id}
           exercise={selectedExercise}
           exercises={exercises}
@@ -6232,7 +7390,9 @@ function LogView({
 // exercise detail sheet, so both always show identical numbers.
 // ---------------------------------------------------------------------------
 
-function ExerciseCharts({ logs, exerciseId, isTimeBased, theme }) {
+const GYM_LINE_COLORS = ["#c1652e", "#3b82f6", "#16a34a", "#a855f7", "#e11d48"];
+
+function ExerciseCharts({ logs, exerciseId, isTimeBased, theme, gyms = [] }) {
   // Recharts takes plain colour strings rather than CSS variables, so the
   // current theme's values are read off the stylesheet once per render.
   const chartColors = useMemo(() => {
@@ -6253,8 +7413,16 @@ function ExerciseCharts({ logs, exerciseId, isTimeBased, theme }) {
 
   const selectedIsTimeBased = isTimeBased;
   const selected = exerciseId;
-  const chartData = logs
-    .filter((l) => logEntries(l).some((e) => e.exerciseId === selected))
+  // Weights are not comparable between gyms, so as soon as an exercise has
+  // been trained in more than one, each gym gets its own line instead of a
+  // single line that jumps up and down for no real reason.
+  const relevantLogs = logs.filter((l) => logEntries(l).some((e) => e.exerciseId === selected));
+  const gymKeys = [...new Set(relevantLogs.map((l) => l.gymId || "none"))];
+  const splitByGym = gymKeys.length > 1;
+  const gymLabel = (key) =>
+    key === "none" ? "Ohne Gym" : gyms.find((g) => g.id === key)?.name || "Unbekanntes Gym";
+
+  const chartData = relevantLogs
     .map((l) => {
       const entry = logEntries(l).find((e) => e.exerciseId === selected);
       const workingSets = entrySets(entry).filter((s) => !s.warmup);
@@ -6277,17 +7445,56 @@ function ExerciseCharts({ logs, exerciseId, isTimeBased, theme }) {
       const best1RM = selectedIsTimeBased
         ? 0
         : Math.max(0, ...workingSets.map((s) => estimate1RM(s.weight, s.reps)));
-      return {
+      const base = {
         date: fmtDate(l.date),
-        maxWeight,
-        totalReps,
-        totalDuration,
-        maxSetVolume,
-        best1RM,
         ts: new Date(l.date).getTime(),
+      };
+      if (!splitByGym) {
+        return { ...base, maxWeight, totalReps, totalDuration, maxSetVolume, best1RM };
+      }
+      // One key per gym so Recharts draws separate lines; the gaps are
+      // bridged with connectNulls so each gym reads as one continuous line.
+      const g = l.gymId || "none";
+      return {
+        ...base,
+        [`maxWeight_${g}`]: maxWeight,
+        [`totalReps_${g}`]: totalReps,
+        [`totalDuration_${g}`]: totalDuration,
+        [`maxSetVolume_${g}`]: maxSetVolume,
+        [`best1RM_${g}`]: best1RM,
       };
     })
     .sort((a, b) => a.ts - b.ts);
+
+  const renderLines = (key, fallbackColor) =>
+    splitByGym
+      ? gymKeys.map((g, i) => {
+          const color = GYM_LINE_COLORS[i % GYM_LINE_COLORS.length];
+          return (
+            <Line
+              key={g}
+              type="monotone"
+              dataKey={`${key}_${g}`}
+              name={gymLabel(g)}
+              stroke={color}
+              strokeWidth={2.5}
+              dot={{ r: 3, fill: color, strokeWidth: 0 }}
+              activeDot={{ r: 5 }}
+              connectNulls
+            />
+          );
+        })
+      : (
+        <Line
+          type="monotone"
+          dataKey={key}
+          stroke={fallbackColor}
+          strokeWidth={2.5}
+          dot={{ r: 3, fill: fallbackColor, strokeWidth: 0 }}
+          activeDot={{ r: 5 }}
+        />
+      );
+  const gymLegend = splitByGym ? <Legend wrapperStyle={{ fontSize: 11 }} /> : null;
 
   if (!selected) return null;
   return chartData.length === 0 ? (
@@ -6311,14 +7518,8 @@ function ExerciseCharts({ logs, exerciseId, isTimeBased, theme }) {
                     fontSize: 12,
                   }}
                 />
-                <Line
-                  type="monotone"
-                  dataKey="maxWeight"
-                  stroke="#c1652e"
-                  strokeWidth={2.5}
-                  dot={{ r: 3, fill: "#c1652e", strokeWidth: 0 }}
-                  activeDot={{ r: 5 }}
-                />
+                {renderLines("maxWeight", "#c1652e")}
+                {gymLegend}
               </LineChart>
             </ResponsiveContainer>
           </div>
@@ -6374,14 +7575,8 @@ function ExerciseCharts({ logs, exerciseId, isTimeBased, theme }) {
                   }}
                   formatter={(value) => [`${Math.round(value)} kg`, "Max. Satzvolumen"]}
                 />
-                <Line
-                  type="monotone"
-                  dataKey="maxSetVolume"
-                  stroke="#5b9aa8"
-                  strokeWidth={2.5}
-                  dot={{ r: 3, fill: "#5b9aa8", strokeWidth: 0 }}
-                  activeDot={{ r: 5 }}
-                />
+                {renderLines("maxSetVolume", "#5b9aa8")}
+                {gymLegend}
               </LineChart>
             </ResponsiveContainer>
           </div>
@@ -6406,14 +7601,8 @@ function ExerciseCharts({ logs, exerciseId, isTimeBased, theme }) {
                   }}
                   formatter={(value) => [`${Math.round(value)} kg`, "Gesch. 1RM"]}
                 />
-                <Line
-                  type="monotone"
-                  dataKey="best1RM"
-                  stroke="#9a7bc4"
-                  strokeWidth={2.5}
-                  dot={{ r: 3, fill: "#9a7bc4", strokeWidth: 0 }}
-                  activeDot={{ r: 5 }}
-                />
+                {renderLines("best1RM", "#9a7bc4")}
+                {gymLegend}
               </LineChart>
             </ResponsiveContainer>
           </div>
@@ -6421,6 +7610,121 @@ function ExerciseCharts({ logs, exerciseId, isTimeBased, theme }) {
         )}
       </>
   );
+}
+
+// Dropdown menus live inside the scrolling content area, which clips them.
+// Near the bottom of the screen they would disappear behind the navigation
+// bar, so they flip open upwards instead. Measured from the trigger button
+// at the moment of opening.
+const MENU_SPACE_NEEDED = 300;
+
+// The usable area ends at the top of the navigation bar, not at the bottom
+// of the window - measuring against the window let menus slide underneath it.
+function usableBottom() {
+  const nav = document.querySelector(".fab-nav");
+  const navTop = nav ? nav.getBoundingClientRect().top : window.innerHeight;
+  return Math.min(navTop, window.innerHeight) - 8;
+}
+
+// First guess at opening time, so the menu does not visibly jump.
+function shouldDropUp(eventTarget) {
+  try {
+    const btn = eventTarget?.closest?.("button");
+    if (!btn) return false;
+    return usableBottom() - btn.getBoundingClientRect().bottom < MENU_SPACE_NEEDED;
+  } catch (_) {
+    return false;
+  }
+}
+
+// The number of entries varies (superset, automatic mode, ...), so the guess
+// above is corrected once the menu is actually on screen and its real height
+// is known.
+function useMenuFlip(isOpen, setDropUp) {
+  const ref = useRef(null);
+  useEffect(() => {
+    if (!isOpen) return;
+    const check = () => {
+      const el = ref.current;
+      if (!el) return;
+      const rect = el.getBoundingClientRect();
+      if (rect.height === 0) return;
+      if (rect.bottom > usableBottom()) setDropUp(true);
+    };
+    check();
+    const id = requestAnimationFrame(check);
+    return () => cancelAnimationFrame(id);
+  }, [isOpen, setDropUp]);
+  return ref;
+}
+
+// A short beep via the Web Audio API - no audio file to ship, and it can be
+// triggered at an exact moment. iOS only allows sound after a user gesture,
+// so the context is created when the user taps "Start".
+let sharedAudioCtx = null;
+// A fraction of a second of silence, inlined so no file has to be shipped.
+const SILENT_LOOP_WAV =
+  "data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEAgD4AAAB9AAACABAAZGF0YQAAAAA=";
+
+// Keeps the audio session alive. iOS treats sound a web app generates
+// itself as a system sound and silences it whenever the ring/silent switch
+// is set to silent - which is exactly how a phone sits in a gym bag.
+let keepAliveAudio = null;
+
+function unlockAudio() {
+  try {
+    // Safari 16.4+: declaring the session as playback makes the beeps behave
+    // like music, i.e. audible despite the silent switch.
+    if (navigator.audioSession) navigator.audioSession.type = "playback";
+
+    if (!sharedAudioCtx) {
+      const Ctx = window.AudioContext || window.webkitAudioContext;
+      if (!Ctx) return null;
+      sharedAudioCtx = new Ctx();
+    }
+    if (sharedAudioCtx.state === "suspended") sharedAudioCtx.resume();
+
+    // Fallback for older iOS: a looping (near-silent) media element puts the
+    // page into the media category, which the silent switch does not mute.
+    // Started from the same user gesture, so iOS allows it.
+    if (!keepAliveAudio) {
+      keepAliveAudio = new Audio(SILENT_LOOP_WAV);
+      keepAliveAudio.loop = true;
+      keepAliveAudio.volume = 0.001;
+      keepAliveAudio.setAttribute("playsinline", "");
+    }
+    keepAliveAudio.play().catch(() => { /* not critical */ });
+
+    return sharedAudioCtx;
+  } catch (_) {
+    return null;
+  }
+}
+
+function releaseAudio() {
+  try {
+    keepAliveAudio?.pause();
+  } catch (_) { /* ignore */ }
+}
+
+function playBeep({ frequency = 880, duration = 0.18, volume = 0.6 } = {}) {
+  const ctx = sharedAudioCtx;
+  if (!ctx || ctx.state === "closed") return;
+  try {
+    if (ctx.state === "suspended") ctx.resume();
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.frequency.value = frequency;
+    osc.type = "sine";
+    // Fade in/out, otherwise the start and end click audibly.
+    const now = ctx.currentTime;
+    gain.gain.setValueAtTime(0, now);
+    gain.gain.linearRampToValueAtTime(volume, now + 0.01);
+    gain.gain.linearRampToValueAtTime(0, now + duration);
+    osc.connect(gain).connect(ctx.destination);
+    osc.start(now);
+    osc.stop(now + duration + 0.02);
+  } catch (_) { /* sound is optional, never break the workout over it */ }
 }
 
 // ---------------------------------------------------------------------------
@@ -6482,6 +7786,7 @@ function ProgressView({
   onUpdateExerciseNote,
   onRenameExercise,
   onToggleTimeBased,
+  gyms = [],
 }) {
   const [progressTab, setProgressTab] = useState("stats");
 
@@ -6537,6 +7842,7 @@ function ProgressView({
       <div>
         {subTabs}
         <HistoryView
+          gyms={gyms}
           logs={logs}
           exBy={exBy}
           exercises={exercises}
@@ -6554,7 +7860,7 @@ function ProgressView({
     );
   }
 
-  const selectedIsTimeBased = !!timeBasedExercises[selected];
+  const selectedIsTimeBased = isTimeBasedInLogs(logs, selected, timeBasedExercises);
 
   const weeklyWorkouts = logs.filter((l) => Date.now() - new Date(l.date).getTime() <= 7 * 86400000).length;
   const last7Volume = logs.filter((l) => Date.now() - new Date(l.date).getTime() <= 7 * 86400000).reduce((sum, l) => sum + logEntries(l).reduce((s, e) => s + entrySets(e).filter((x) => x.done && !x.warmup).reduce((a, x) => a + (Number(x.weight) || 0) * (Number(x.reps) || 0), 0), 0), 0);
@@ -6609,10 +7915,11 @@ function ProgressView({
         </div>
       )}
 
-      <ExerciseCharts logs={logs} exerciseId={selected} isTimeBased={selectedIsTimeBased} theme={theme} />
+      <ExerciseCharts logs={logs} exerciseId={selected} isTimeBased={selectedIsTimeBased} theme={theme} gyms={gyms} />
 
       {selectedExercise && (
         <ExerciseDetailSheet
+          gyms={gyms}
           key={selectedExercise.id}
           exercise={selectedExercise}
           exercises={exercises}
@@ -6650,6 +7957,7 @@ function HistoryView({
   onUpdateExerciseNote,
   onRenameExercise,
   onToggleTimeBased,
+  gyms = [],
 }) {
   const [expandedLogId, setExpandedLogId] = useState(null);
   const [selectedExerciseId, setSelectedExerciseId] = useState(null);
@@ -6758,6 +8066,7 @@ function HistoryView({
 
       {selectedExercise && (
         <ExerciseDetailSheet
+          gyms={gyms}
           key={selectedExercise.id}
           exercise={selectedExercise}
           exercises={exercises}

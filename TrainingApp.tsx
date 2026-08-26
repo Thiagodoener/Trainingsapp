@@ -81,12 +81,18 @@ const MUSCLE_GROUPS = [
   { id: "schultern", label: "Schultern" },
   { id: "arme", label: "Arme" },
   { id: "rumpf", label: "Rumpf" },
+  { id: "nacken", label: "Nacken" },
 ];
 
 // Optional, more specific categorization nested under each main muscle
 // group. Exercises don't need one, but when set, the group's filter chip
 // reveals these for narrower filtering.
 const SUBGROUPS = {
+  nacken: [
+    { id: "nacken-seite", label: "Seitlicher Nacken" },
+    { id: "nacken-hinten", label: "Hinterer Nacken" },
+    { id: "nacken-vorne", label: "Vorderer Nacken" },
+  ],
   brust: [
     { id: "brust-oben", label: "Obere Brust" },
     { id: "brust-mitte", label: "Mittlere Brust" },
@@ -298,6 +304,14 @@ const EXERCISES = [
   { id: "cable-woodchopper", name: "Kabel-Holzhacker", group: "rumpf" },
   { id: "reverse-crunch", name: "Reverse Crunch", group: "rumpf" },
   { id: "stir-the-pot", name: "Stir the Pot", group: "rumpf" },
+
+  // Nacken
+  { id: "nackenheben-kurzhantel", name: "Nackenheben (Kurzhanteln)", group: "nacken" },
+  { id: "nackenheben-langhantel", name: "Nackenheben (Langhantel)", group: "nacken" },
+  { id: "neck-curl", name: "Nacken-Curl (liegend)", group: "nacken" },
+  { id: "neck-extension", name: "Nacken-Extension (liegend)", group: "nacken" },
+  { id: "neck-lateral", name: "Seitliches Nackenheben", group: "nacken" },
+  { id: "neck-harness", name: "Nackentraining mit Kopfgeschirr", group: "nacken" },
 ];
 
 const EX_BY_ID = Object.fromEntries(EXERCISES.map((e) => [e.id, e]));
@@ -572,7 +586,7 @@ function getTimePR(logs, exerciseId) {
   return best;
 }
 
-const EQUIPMENT_OPTIONS = ["Langhantel", "Kurzhanteln", "Kabelzug", "Maschine", "Kettlebell", "Körpergewicht", "Band", "Sonstiges"];
+const EQUIPMENT_OPTIONS = ["Langhantel", "Kurzhanteln", "Kabelzug", "Maschine", "Kettlebell", "Gewichtsscheibe", "Körpergewicht", "Band", "Sonstiges"];
 
 function getExerciseMeta(exercise) {
   if (exercise?.meta) return exercise.meta;
@@ -737,6 +751,36 @@ function GroupTag({ group }) {
 // Shown next to the main muscle group whenever an exercise has been given a
 // more specific subgroup, so the finer categorization is visible at a glance
 // in the list rather than only inside the detail sheet.
+// Shows the subgroups when an exercise has any, otherwise the main group.
+// The subgroup is the more precise information, so repeating "Rücken" next
+// to "Lat" only adds noise - filtering by the main group still finds the
+// exercise, because that relationship lives in the data, not in this label.
+function MuscleTag({ exercise, subgroupOverrides }) {
+  const ids = getExerciseSubgroups(exercise, subgroupOverrides);
+  if (ids.length === 0) return <GroupTag group={exercise.group} />;
+  return <SubgroupTag group={exercise.group} subgroupIds={ids} />;
+}
+
+// Short "how long ago" label, e.g. "heute", "vor 3 T.", "vor 2 Wo.".
+// Kept terse because it sits next to the plan name on a narrow screen.
+function timeAgoShort(dateStr) {
+  if (!dateStr) return null;
+  const then = new Date(dateStr);
+  if (isNaN(then.getTime())) return null;
+  const startOfDay = (d) => new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
+  const days = Math.round((startOfDay(new Date()) - startOfDay(then)) / 86400000);
+  if (days <= 0) return "heute";
+  if (days === 1) return "gestern";
+  if (days < 7) return `vor ${days} T.`;
+  if (days < 31) {
+    const w = Math.floor(days / 7);
+    return `vor ${w} Wo.`;
+  }
+  const m = Math.floor(days / 30);
+  if (m < 12) return `vor ${m} Mon.`;
+  return `vor ${Math.floor(days / 365)} J.`;
+}
+
 function SubgroupTag({ group, subgroupId, subgroupIds }) {
   const ids = subgroupIds && subgroupIds.length ? subgroupIds : subgroupId ? [subgroupId] : [];
   if (ids.length === 0) return null;
@@ -1940,6 +1984,12 @@ export default function TrainingApp() {
           letter-spacing: 0.3px;
           text-transform: uppercase;
         }
+        .plan-last-done {
+          display: inline-block;
+          margin-top: 2px;
+          font-size: 11.5px;
+          color: var(--text-dim);
+        }
         .folder-drag-handle {
           display: flex;
           align-items: center;
@@ -2754,6 +2804,7 @@ export default function TrainingApp() {
             />
           ) : (
             <PlansView
+            logs={logs}
             onManageGyms={() => setGymManagerOpen(true)}
             onReorderFolders={persistFolders}
             onOpenBackup={() => setBackupOpen(true)}
@@ -4333,11 +4384,7 @@ function ExercisesView({
             >
               <span className="ex-name">{e.name}</span>
               <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                <GroupTag group={e.group} />
-                <SubgroupTag
-                  group={e.group}
-                  subgroupIds={getExerciseSubgroups(e, exerciseSubgroupOverrides)}
-                />
+                <MuscleTag exercise={e} subgroupOverrides={exerciseSubgroupOverrides} />
                 <span className="tag tag-equipment">{getExerciseEquipment(e, exerciseEquipmentOverrides)}</span>
                 {e.custom && (
                   <button
@@ -4532,8 +4579,7 @@ function ExerciseDetailSheet({
             )}
             {!editingName && (
               <span style={{ marginTop: 6, display: "inline-flex", gap: 6, flexWrap: "wrap" }}>
-                <GroupTag group={exercise.group} />
-                <SubgroupTag group={exercise.group} subgroupIds={currentSubgroups} />
+                <MuscleTag exercise={exercise} subgroupOverrides={exerciseSubgroupOverrides} />
                 <span
                   className="tag tag-equipment tag-clickable"
                   onClick={() => setEditingEquipment(true)}
@@ -4792,6 +4838,7 @@ function PlanBuilder({
   const [step, setStep] = useState(initialPlan?.items?.length ? 2 : 1);
   const [expandedItemId, setExpandedItemId] = useState(null);
   const [searchOpen, setSearchOpen] = useState(false);
+  const [equipmentFilter, setEquipmentFilter] = useState("alle");
   // Rest times are set here so a workout starts with the right pause
   // instead of having to be adjusted mid-session every time.
   const [planRest, setPlanRest] = useState(initialPlan?.restSeconds ?? 90);
@@ -4925,6 +4972,8 @@ function PlanBuilder({
         (e) =>
           (group === "alle" || e.group === group) &&
           (subgroupFilter === "alle" || exerciseHasSubgroup(e, exerciseSubgroupOverrides, subgroupFilter)) &&
+          (equipmentFilter === "alle" ||
+            getExerciseEquipment(e, exerciseEquipmentOverrides) === equipmentFilter) &&
           e.name.toLowerCase().includes(query.toLowerCase())
       );
       const BOTTOM = Number.MAX_SAFE_INTEGER;
@@ -4935,7 +4984,8 @@ function PlanBuilder({
         return a.name.localeCompare(b.name, "de");
       });
     },
-    [exercises, group, subgroupFilter, exerciseSubgroupOverrides, query, sortRank]
+    [exercises, group, subgroupFilter, exerciseSubgroupOverrides,
+     equipmentFilter, exerciseEquipmentOverrides, query, sortRank]
   );
   // Rendering every one of the ~150 exercises made each tap on "Add"
   // redraw the whole list, which felt sluggish. Only a screenful is
@@ -5248,6 +5298,23 @@ function PlanBuilder({
           ))}
         </div>
       )}
+      <div className="chip-row" style={{ marginBottom: 10 }}>
+        <span
+          className={`chip chip-sm ${equipmentFilter === "alle" ? "active" : ""}`}
+          onClick={() => setEquipmentFilter("alle")}
+        >
+          Alle Geräte
+        </span>
+        {EQUIPMENT_OPTIONS.map((opt) => (
+          <span
+            key={opt}
+            className={`chip chip-sm ${equipmentFilter === opt ? "active" : ""}`}
+            onClick={() => setEquipmentFilter(opt)}
+          >
+            {opt}
+          </span>
+        ))}
+      </div>
       <div className="card exercise-picker-list">
         {filtered.length === 0 && (
           <div className="empty-state" style={{ padding: "14px 0" }}>Keine Übung gefunden.</div>
@@ -5753,7 +5820,7 @@ function PlanBuilder({
 // Plan card (press-and-hold to move into a folder)
 // ---------------------------------------------------------------------------
 
-function PlanCard({ plan, exBy, onDelete, onEdit, onStart, onLongPress }) {
+function PlanCard({ plan, exBy, onDelete, onEdit, onStart, onLongPress, lastDone }) {
   const pressTimer = useRef(null);
   const longPressFired = useRef(false);
   const [pressing, setPressing] = useState(false);
@@ -5801,8 +5868,11 @@ function PlanCard({ plan, exBy, onDelete, onEdit, onStart, onLongPress }) {
           alignItems: "flex-start",
         }}
       >
-        <div>
+        <div style={{ minWidth: 0 }}>
           <div className="plan-title">{plan.name}</div>
+          {lastDone && (
+            <span className="plan-last-done">{timeAgoShort(lastDone)}</span>
+          )}
         </div>
         <div style={{ display: "flex", gap: 4 }}>
           <button className="btn-icon" onClick={guardClick(() => onEdit?.(plan))} title="Plan bearbeiten"><PencilLine size={15} /></button>
@@ -5848,6 +5918,7 @@ function PlansView({
   onManageGyms = () => {},
   onOpenBackup = () => {},
   onReorderFolders = () => {},
+  logs = [],
 }) {
   const [creatingFolder, setCreatingFolder] = useState(false);
   const [newFolderName, setNewFolderName] = useState("");
@@ -5935,10 +6006,22 @@ function PlansView({
     return p.programId === activeProgramId;
   });
 
+  // Most recent workout per plan, so each card can show how long ago it was.
+  const lastDoneByPlan = useMemo(() => {
+    const map = {};
+    (logs || []).forEach((l) => {
+      const key = l.planId || l.planName;
+      if (!key) return;
+      if (!map[key] || new Date(l.date) > new Date(map[key])) map[key] = l.date;
+    });
+    return map;
+  }, [logs]);
+
   const renderPlanCard = (plan) => (
     <PlanCard
       key={plan.id}
       plan={plan}
+      lastDone={lastDoneByPlan[plan.id] || lastDoneByPlan[plan.name]}
       exBy={exBy}
       onDelete={onDelete}
       onEdit={onEdit}

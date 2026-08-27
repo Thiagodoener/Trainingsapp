@@ -1370,6 +1370,9 @@ export default function TrainingApp() {
   // everything downstream (suggestions, PRs, charts) depends on it.
   const [pendingStart, setPendingStart] = useState(null);
   const [gymManagerOpen, setGymManagerOpen] = useState(false);
+  // Set when jumping from the calendar into the history, so that log opens
+  // straight away instead of leaving you to search for it.
+  const [historyFocusLogId, setHistoryFocusLogId] = useState(null);
   const [finishSummary, setFinishSummary] = useState(null);
   const [backupOpen, setBackupOpen] = useState(false);
   const [backupBusy, setBackupBusy] = useState(false);
@@ -2988,6 +2991,7 @@ export default function TrainingApp() {
           </div>
         ) : tab === "calendar" ? (
           <CalendarView
+            onOpenLog={(log) => { setTab("progress"); setHistoryFocusLogId(log.id); }}
             entries={calendarEntries}
             categories={calendarCategories}
             plans={allPlans}
@@ -3243,12 +3247,29 @@ export default function TrainingApp() {
               // If this workout was started from a calendar entry, link the
               // finished log back to it so the calendar can show results
               // instead of a "start workout" prompt from now on.
-              if (session.calendarEntryId && cleaned.entries.length > 0) {
-                await persistCalendarEntries(
-                  calendarEntries.map((ce) =>
-                    ce.id === session.calendarEntryId ? { ...ce, logId: cleaned.id } : ce
-                  )
-                );
+              if (cleaned.entries.length > 0) {
+                // Either the entry the workout was started from, or - if it
+                // was started from the plans page - an open entry for the
+                // same workout on the same day. Without this the calendar
+                // would show the plan as still open next to the finished
+                // workout, i.e. the same session twice.
+                const dayKey = toDateKey(new Date(cleaned.date));
+                const match =
+                  calendarEntries.find((ce) => ce.id === session.calendarEntryId) ||
+                  calendarEntries.find(
+                    (ce) =>
+                      ce.type === "workout" &&
+                      !ce.logId &&
+                      ce.date === dayKey &&
+                      ce.planId === cleaned.planId
+                  );
+                if (match) {
+                  await persistCalendarEntries(
+                    calendarEntries.map((ce) =>
+                      ce.id === match.id ? { ...ce, logId: cleaned.id } : ce
+                    )
+                  );
+                }
               }
               // Targets always track what was actually achieved last time,
               // so the plan auto-adjusts to real progress instead of
@@ -3293,6 +3314,8 @@ export default function TrainingApp() {
           />
         ) : (
           <ProgressView
+            focusLogId={historyFocusLogId}
+            onFocusHandled={() => setHistoryFocusLogId(null)}
             onResumeLog={resumeLog}
             gyms={gyms}
             logs={logs}
@@ -3662,6 +3685,7 @@ function CalendarView({
   onCreateCategory,
   onDeleteCategory,
   onStartScheduledWorkout,
+  onOpenLog,
 }) {
   const today = new Date();
   const [viewYear, setViewYear] = useState(today.getFullYear());
@@ -3680,11 +3704,28 @@ function CalendarView({
   const monthMatrix = useMemo(() => getMonthMatrix(viewYear, viewMonth), [viewYear, viewMonth]);
   const entriesByDate = useMemo(() => {
     const map = {};
+    const todayKey = toDateKey(new Date());
     entries.forEach((e) => {
+      // A planned workout that never happened simply disappears once the day
+      // is over - keeping it around would only ever be a reproach.
+      const verpasst = e.type === "workout" && !e.logId && e.date < todayKey;
+      if (verpasst) return;
       (map[e.date] = map[e.date] || []).push(e);
     });
     return map;
   }, [entries]);
+
+  // Workouts actually done, grouped by day. The calendar was purely a plan
+  // until now - what you really trained was only visible in the history.
+  const logsByDate = useMemo(() => {
+    const map = {};
+    (logs || []).forEach((l) => {
+      if (!l?.date) return;
+      const key = toDateKey(new Date(l.date));
+      (map[key] = map[key] || []).push(l);
+    });
+    return map;
+  }, [logs]);
   const categoryById = useMemo(
     () => Object.fromEntries(categories.map((c) => [c.id, c])),
     [categories]
@@ -3712,7 +3753,12 @@ function CalendarView({
     year: "numeric",
   });
 
-  const selectedEntries = entriesByDate[selectedDate] || [];
+  const planned = entriesByDate[selectedDate] || [];
+  // Done workouts that are not already represented by a planned entry.
+  const selectedLogs = (logsByDate[selectedDate] || []).filter(
+    (l) => !planned.some((e) => e.logId === l.id)
+  );
+  const selectedEntries = planned;
 
   const handleAddAction = () => {
     const trimmed = newActionText.trim();
@@ -3816,7 +3862,16 @@ function CalendarView({
               {week.map((d) => {
                 const key = toDateKey(d);
                 const inMonth = d.getMonth() === viewMonth;
-                const dayEntries = entriesByDate[key] || [];
+                // Workouts that were actually done, minus the ones already
+                // shown through their calendar entry - otherwise a planned
+                // and completed workout would appear twice.
+                const dayLogs = (logsByDate[key] || []).filter(
+                  (l) => !(entriesByDate[key] || []).some((e) => e.logId === l.id)
+                );
+                const dayEntries = [
+                  ...(entriesByDate[key] || []),
+                  ...dayLogs.map((l) => ({ id: "log:" + l.id, type: "done", log: l })),
+                ];
                 const isToday = key === todayKey;
                 const isSelected = key === selectedDate;
                 const visibleEntries = isCurrentWeek ? dayEntries : dayEntries.slice(0, 2);
@@ -3830,6 +3885,17 @@ function CalendarView({
                     <span className="cal-day-num">{d.getDate()}</span>
                     <div className="cal-day-entries">
                       {visibleEntries.map((entry) => {
+                        if (entry.type === "done") {
+                          return (
+                            <span
+                              key={entry.id}
+                              className="cal-entry-chip cal-entry-workout is-done"
+                            >
+                              <Check size={9} />
+                              {entry.log.planName || "Training"}
+                            </span>
+                          );
+                        }
                         if (entry.type === "workout") {
                           const plan = planById[entry.planId];
                           return (
@@ -3874,8 +3940,40 @@ function CalendarView({
           </button>
         </div>
 
-        {selectedEntries.length === 0 && !addOpen && (
+        {selectedEntries.length === 0 && selectedLogs.length === 0 && !addOpen && (
           <div className="empty-state" style={{ padding: "14px 0" }}>Noch keine Einträge an diesem Tag.</div>
+        )}
+
+        {/* Workouts actually done on this day, tappable straight through to
+            the history. */}
+        {selectedLogs.length > 0 && (
+          <div style={{ marginTop: 10, display: "flex", flexDirection: "column", gap: 8 }}>
+            {selectedLogs.map((l) => {
+              const saetze = logEntries(l).reduce(
+                (n, e) => n + entrySets(e).filter((x) => x.done && !x.warmup).length, 0
+              );
+              return (
+                <div
+                  key={l.id}
+                  className="cal-detail-item cal-detail-done"
+                  onClick={() => onOpenLog?.(l)}
+                  style={{ cursor: onOpenLog ? "pointer" : "default" }}
+                >
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                    <span className="ex-name">
+                      <Check size={13} style={{ marginRight: 6, verticalAlign: -2, color: "var(--accent)" }} />
+                      {l.planName || "Training"}
+                    </span>
+                    {onOpenLog && <ChevronRight size={15} color="var(--text-dim)" />}
+                  </div>
+                  <div style={{ fontSize: 12.5, color: "var(--text-dim)", marginTop: 4 }}>
+                    {logEntries(l).length} Übungen · {saetze} Sätze
+                    {l.durationMinutes ? ` · ${l.durationMinutes} Min.` : ""}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
         )}
 
         <div style={{ marginTop: selectedEntries.length ? 10 : 0, display: "flex", flexDirection: "column", gap: 8 }}>
@@ -8358,8 +8456,13 @@ function ProgressView({
   onToggleTimeBased,
   gyms = [],
   onResumeLog,
+  focusLogId,
+  onFocusHandled,
 }) {
-  const [progressTab, setProgressTab] = useState("stats");
+  const [progressTab, setProgressTab] = useState(focusLogId ? "history" : "stats");
+  useEffect(() => {
+    if (focusLogId) setProgressTab("history");
+  }, [focusLogId]);
 
 
   const exerciseIdsWithData = useMemo(() => {
@@ -8441,6 +8544,8 @@ function ProgressView({
       <div>
         {subTabs}
         <HistoryView
+          focusLogId={focusLogId}
+          onFocusHandled={onFocusHandled}
           onResumeLog={onResumeLog}
           gyms={gyms}
           logs={logs}
@@ -8583,8 +8688,15 @@ function HistoryView({
   onToggleTimeBased,
   gyms = [],
   onResumeLog,
+  focusLogId,
+  onFocusHandled,
 }) {
-  const [expandedLogId, setExpandedLogId] = useState(null);
+  const [expandedLogId, setExpandedLogId] = useState(focusLogId || null);
+  useEffect(() => {
+    if (!focusLogId) return;
+    setExpandedLogId(focusLogId);
+    onFocusHandled?.();
+  }, [focusLogId]);
   const [selectedExerciseId, setSelectedExerciseId] = useState(null);
   const selectedExercise = exercises.find((e) => e.id === selectedExerciseId) || null;
 

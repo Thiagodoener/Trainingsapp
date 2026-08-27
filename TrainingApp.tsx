@@ -385,6 +385,15 @@ function getExerciseHistory(logs, exerciseId, excludeSessionId, isTimeBased = fa
   let bestRepsAtBestWeight = 0;
   let lastNote = null;
   let bestDuration = 0;
+  // Records the trophy is based on. Per set: 1RM, set volume, reps, seconds.
+  // Per exercise (all sets of one workout added up): volume, reps, seconds.
+  let best1RM = 0;
+  let bestSetVolume = 0;
+  let bestSetReps = 0;
+  let bestTotalVolume = 0;
+  let bestTotalReps = 0;
+  let bestTotalDuration = 0;
+  let comparableSessions = 0;
 
   for (const log of past) {
     // Logs written by older versions (or a half-finished save) can be
@@ -412,6 +421,21 @@ function getExerciseHistory(logs, exerciseId, excludeSessionId, isTimeBased = fa
       lastDate = log.date;
     }
 
+    comparableSessions += 1;
+    // Per-exercise totals of this session.
+    bestTotalReps = Math.max(bestTotalReps, doneSets.reduce((a, x) => a + toNum(x.reps), 0));
+    bestTotalDuration = Math.max(
+      bestTotalDuration, doneSets.reduce((a, x) => a + toNum(x.duration), 0)
+    );
+    bestTotalVolume = Math.max(
+      bestTotalVolume, doneSets.reduce((a, x) => a + toNum(x.weight) * toNum(x.reps), 0)
+    );
+    for (const set of doneSets) {
+      bestSetReps = Math.max(bestSetReps, toNum(set.reps));
+      bestSetVolume = Math.max(bestSetVolume, toNum(set.weight) * toNum(set.reps));
+      best1RM = Math.max(best1RM, estimate1RM(set.weight, set.reps));
+    }
+
     if (isTimeBased) {
       for (const set of doneSets) bestDuration = Math.max(bestDuration, Number(set.duration) || 0);
     } else {
@@ -430,7 +454,11 @@ function getExerciseHistory(logs, exerciseId, excludeSessionId, isTimeBased = fa
     }
   }
 
-  return { lastSets, lastDate, bestWeight, bestRepsAtBestWeight, bestDuration, lastNote };
+  return {
+    lastSets, lastDate, bestWeight, bestRepsAtBestWeight, bestDuration, lastNote,
+    best1RM, bestSetVolume, bestSetReps, bestTotalVolume, bestTotalReps, bestTotalDuration,
+    comparableSessions,
+  };
 }
 
 // Liefert die komplette Verlaufsliste einer Übung über alle Trainings hinweg
@@ -456,68 +484,113 @@ function getExerciseTimeline(logs, exerciseId) {
 }
 
 // Ist dieser Satz (im Vergleich zum bisherigen Bestwert) ein neuer Rekord?
-// Returns null when the set is no record, otherwise a short description of
-// what kind of record it is - the trophy alone never said what was beaten.
-function describePR(set, best, isTimeBased = false) {
-  if (!set || !set.done || set.warmup) return null;
+// Records the trophy is awarded for, per set. Deliberately a fixed list:
+// anything not in here does not count, so the trophy keeps its meaning.
+// Without an earlier session there is nothing to beat, so nothing counts.
+function describeSetPRs(set, best, isTimeBased = false, hasWeight = true) {
+  if (!set || !set.done || set.warmup) return [];
+  if (!best || (best.comparableSessions || 0) === 0) return [];
+  const found = [];
 
   if (isTimeBased) {
     const dur = toNum(set.duration);
-    const bestDur = toNum(best.bestDuration);
-    if (dur > 0 && dur > bestDur) {
-      return {
-        kind: "time",
-        title: "Längste Zeit",
+    if (dur > 0 && dur > toNum(best.bestDuration)) {
+      found.push({
+        title: "Längster Satz",
         value: `${dur} Sek.`,
-        previous: bestDur > 0 ? `${bestDur} Sek.` : null,
-      };
+        previous: toNum(best.bestDuration) > 0 ? `${toNum(best.bestDuration)} Sek.` : null,
+      });
     }
-    return null;
+    return found;
   }
 
   const weight = toNum(set.weight);
   const reps = toNum(set.reps);
-  const bestWeight = toNum(best.bestWeight);
-  const bestReps = toNum(best.bestRepsAtBestWeight);
 
-  // Bodyweight and band work is logged without weight. Counting only the
-  // heaviest set would mean those exercises could never set a record, so
-  // there the rep count is what counts.
-  if (weight <= 0 && bestWeight <= 0) {
-    if (reps > 0 && reps > bestReps) {
-      return {
-        kind: "reps",
-        title: "Meiste Wiederholungen",
-        value: `${reps} Wdh.`,
-        previous: bestReps > 0 ? `${bestReps} Wdh.` : null,
-      };
+  if (reps > 0 && reps > toNum(best.bestSetReps)) {
+    found.push({
+      title: "Meiste Wiederholungen in einem Satz",
+      value: `${reps} Wdh.`,
+      previous: toNum(best.bestSetReps) > 0 ? `${toNum(best.bestSetReps)} Wdh.` : null,
+    });
+  }
+
+  // Volume and 1RM are meaningless without weight (bodyweight, bands):
+  // they would always be zero and could never be beaten.
+  if (!hasWeight || weight <= 0) return found;
+
+  if (weight > toNum(best.bestWeight)) {
+    found.push({
+      title: "Höchstes Gewicht",
+      value: `${fmtDecimal(weight)} kg`,
+      previous: toNum(best.bestWeight) > 0 ? `${fmtDecimal(best.bestWeight)} kg` : null,
+    });
+  }
+  const oneRM = estimate1RM(weight, reps);
+  if (oneRM > 0 && oneRM > toNum(best.best1RM)) {
+    found.push({
+      title: "Höchste geschätzte 1RM",
+      value: `${Math.round(oneRM)} kg`,
+      previous: toNum(best.best1RM) > 0 ? `${Math.round(toNum(best.best1RM))} kg` : null,
+    });
+  }
+  const vol = weight * reps;
+  if (vol > 0 && vol > toNum(best.bestSetVolume)) {
+    found.push({
+      title: "Höchstes Satzvolumen",
+      value: `${Math.round(vol)} kg`,
+      previous: toNum(best.bestSetVolume) > 0 ? `${Math.round(toNum(best.bestSetVolume))} kg` : null,
+    });
+  }
+  return found;
+}
+
+// Records that only make sense once every set of the exercise is counted.
+// These belong next to the exercise name, not to a single set.
+function describeExercisePRs(sets, best, isTimeBased = false, hasWeight = true) {
+  if (!best || (best.comparableSessions || 0) === 0) return [];
+  const done = (Array.isArray(sets) ? sets : []).filter((x) => x && x.done && !x.warmup);
+  if (done.length === 0) return [];
+  const found = [];
+
+  if (isTimeBased) {
+    const total = done.reduce((a, x) => a + toNum(x.duration), 0);
+    if (total > 0 && total > toNum(best.bestTotalDuration)) {
+      found.push({
+        title: "Längste Gesamtzeit der Übung",
+        value: `${total} Sek.`,
+        previous: toNum(best.bestTotalDuration) > 0 ? `${toNum(best.bestTotalDuration)} Sek.` : null,
+      });
     }
-    return null;
+    return found;
   }
 
-  if (weight <= 0) return false || null;
-  if (weight > bestWeight) {
-    return {
-      kind: "weight",
-      title: "Neues Bestgewicht",
-      value: `${fmtDecimal(weight)} kg × ${reps}`,
-      previous: bestWeight > 0 ? `${fmtDecimal(bestWeight)} kg × ${bestReps}` : null,
-    };
+  const totalReps = done.reduce((a, x) => a + toNum(x.reps), 0);
+  if (totalReps > 0 && totalReps > toNum(best.bestTotalReps)) {
+    found.push({
+      title: "Meiste Wiederholungen der Übung",
+      value: `${totalReps} Wdh.`,
+      previous: toNum(best.bestTotalReps) > 0 ? `${toNum(best.bestTotalReps)} Wdh.` : null,
+    });
   }
-  if (weight === bestWeight && bestWeight > 0 && reps > bestReps) {
-    return {
-      kind: "reps",
-      title: "Meiste Wiederholungen bei diesem Gewicht",
-      value: `${reps} Wdh. × ${fmtDecimal(weight)} kg`,
-      previous: bestReps > 0 ? `${bestReps} Wdh.` : null,
-    };
+  if (hasWeight) {
+    const totalVol = done.reduce((a, x) => a + toNum(x.weight) * toNum(x.reps), 0);
+    if (totalVol > 0 && totalVol > toNum(best.bestTotalVolume)) {
+      found.push({
+        title: "Höchstes Gesamtvolumen der Übung",
+        value: `${Math.round(totalVol)} kg`,
+        previous: toNum(best.bestTotalVolume) > 0
+          ? `${Math.round(toNum(best.bestTotalVolume))} kg` : null,
+      });
+    }
   }
-  return null;
+  return found;
 }
 
 function isNewPR(set, best, isTimeBased = false) {
-  return !!describePR(set, best, isTimeBased);
+  return describeSetPRs(set, best, isTimeBased).length > 0;
 }
+
 
 
 function estimate1RM(weight, reps) {
@@ -1102,18 +1175,31 @@ export default function TrainingApp() {
       // Planned warm-up sets come first and start already flagged, so the
       // "W" no longer has to be tapped on every single workout.
       const warmupCount = Math.max(0, Math.round(toNum(it.warmupSets)));
-      const makeSet = (warmup) => ({
-        reps: targetReps,
-        // Pre-filled the German way too, so a workout doesn't start showing
-        // "62.5" and only switch to "62,5" once the field has been touched.
-        weight: warmup ? 0 : fmtDecimal(targetWeight),
-        duration: targetDuration,
-        done: false,
-        warmup,
-      });
+      // Each set gets the values of the SAME set from last time - set 1 from
+      // set 1, set 2 from set 2. A pyramid (60/70/80) would otherwise start
+      // every set at the first weight. Beyond the sets done last time the
+      // last known values carry on.
+      const lastWorkingSets = (history?.lastSets || []).filter((set) => !set.warmup);
+      const makeSet = (warmup, index) => {
+        const ref = lastWorkingSets.length
+          ? lastWorkingSets[Math.min(index, lastWorkingSets.length - 1)]
+          : null;
+        const reps = ref && toNum(ref.reps) > 0 ? toNum(ref.reps) : targetReps;
+        const weight = ref && toNum(ref.weight) > 0 ? toNum(ref.weight) : targetWeight;
+        const duration = ref && toNum(ref.duration) > 0 ? toNum(ref.duration) : targetDuration;
+        return {
+          reps,
+          // Pre-filled the German way too, so a workout doesn't start showing
+          // "62.5" and only switch to "62,5" once the field has been touched.
+          weight: warmup ? 0 : fmtDecimal(weight),
+          duration,
+          done: false,
+          warmup,
+        };
+      };
       const sets = [
-        ...Array.from({ length: warmupCount }, () => makeSet(true)),
-        ...Array.from({ length: targetSets }, () => makeSet(false)),
+        ...Array.from({ length: warmupCount }, () => makeSet(true, 0)),
+        ...Array.from({ length: targetSets }, (_, i) => makeSet(false, i)),
       ];
       return {
         exerciseId: it.exerciseId,
@@ -1249,7 +1335,7 @@ export default function TrainingApp() {
   // Turns a finished workout back into an editable session. The log is
   // removed from the history for the duration - finishing writes it back,
   // discarding restores nothing, which matches "the workout is running again".
-  const resumeLog = async (log) => {
+  const resumeLog = async (log, mode = "resume") => {
     if (session) {
       askConfirm(
         "Es läuft bereits ein Training. Erst beenden oder verwerfen, dann kann dieses fortgesetzt werden.",
@@ -1257,9 +1343,16 @@ export default function TrainingApp() {
       );
       return;
     }
+    // "resume" picks the clock back up where it stopped: the original start
+    // is shifted so the elapsed time continues from the recorded duration.
+    // "edit" freezes it - correcting a typo should not inflate the workout.
+    const minutes = Math.max(0, Number(log.durationMinutes) || 0);
     const restored = {
       ...log,
-      startedAt: log.startedAt || new Date(log.date).toISOString(),
+      startedAt: mode === "edit"
+        ? null
+        : new Date(Date.now() - minutes * 60000).toISOString(),
+      frozenDurationMinutes: mode === "edit" ? minutes : null,
       resumedFrom: log.id,
     };
     await persistLogs(logs.filter((l) => l.id !== log.id));
@@ -2648,6 +2741,15 @@ export default function TrainingApp() {
         .pr-badge-clickable {
           cursor: pointer;
         }
+        /* Next to the exercise name it sits in the flow, not absolutely
+           positioned like the one inside a set field. */
+        .pr-badge-inline {
+          position: static;
+          margin-left: 6px;
+          display: inline-flex;
+          align-items: center;
+          flex-shrink: 0;
+        }
         .pr-badge {
           position: absolute;
           top: -7px;
@@ -3046,9 +3148,14 @@ export default function TrainingApp() {
             gyms={gyms}
             onFinish={async () => {
               if (!session) return;
-              const durationMinutes = session.startedAt
-                ? Math.max(1, Math.round((Date.now() - new Date(session.startedAt).getTime()) / 60000))
-                : null;
+              // A workout opened for editing keeps its recorded duration -
+              // otherwise fixing one number would rewrite how long it took.
+              const durationMinutes =
+                session.frozenDurationMinutes != null
+                  ? session.frozenDurationMinutes
+                  : session.startedAt
+                  ? Math.max(1, Math.round((Date.now() - new Date(session.startedAt).getTime()) / 60000))
+                  : null;
               const cleaned = {
                 ...session,
                 // Sets now start pre-filled from the plan's targets, so an
@@ -4438,6 +4545,7 @@ function ExercisesView({
   const [query, setQuery] = useState("");
   const [group, setGroup] = useState("alle");
   const [subgroupFilter, setSubgroupFilter] = useState("alle");
+  const [equipmentFilter, setEquipmentFilter] = useState("alle");
   const [creating, setCreating] = useState(false);
   const [selectedExerciseId, setSelectedExerciseId] = useState(null);
 
@@ -4450,8 +4558,11 @@ function ExercisesView({
     const matchesSubgroup =
       subgroupFilter === "alle" ||
       exerciseHasSubgroup(e, exerciseSubgroupOverrides, subgroupFilter);
+    const matchesEquipment =
+      equipmentFilter === "alle" ||
+      getExerciseEquipment(e, exerciseEquipmentOverrides) === equipmentFilter;
     const matchesQuery = e.name.toLowerCase().includes(query.toLowerCase());
-    return matchesGroup && matchesSubgroup && matchesQuery;
+    return matchesGroup && matchesSubgroup && matchesEquipment && matchesQuery;
   });
   const activeGroupSubgroups = group !== "alle" ? SUBGROUPS[group] || [] : [];
 
@@ -4504,6 +4615,24 @@ function ExercisesView({
           ))}
         </div>
       )}
+
+      <div className="chip-row" style={{ marginTop: 4 }}>
+        <span
+          className={`chip chip-sm ${equipmentFilter === "alle" ? "active" : ""}`}
+          onClick={() => setEquipmentFilter("alle")}
+        >
+          Alle Geräte
+        </span>
+        {EQUIPMENT_OPTIONS.map((opt) => (
+          <span
+            key={opt}
+            className={`chip chip-sm ${equipmentFilter === opt ? "active" : ""}`}
+            onClick={() => setEquipmentFilter(opt)}
+          >
+            {opt}
+          </span>
+        ))}
+      </div>
 
       {creating ? (
         <NewExerciseForm
@@ -6051,9 +6180,15 @@ function PlanCard({ plan, exBy, onDelete, onEdit, onStart, onLongPress, lastDone
 // Plans view
 // ---------------------------------------------------------------------------
 
-// Survives unmounting of PlansView; deliberately not persisted to storage -
-// it is a view state, not data worth keeping across app restarts.
+// Survives unmounting of PlansView and, via storage, also a restart of the
+// app - reopening it should look exactly like it was left.
 let rememberedCollapsedFolders = {};
+try {
+  const raw = typeof window !== "undefined"
+    ? window.localStorage?.getItem("training-app:collapsed-folders")
+    : null;
+  if (raw) rememberedCollapsedFolders = JSON.parse(raw) || {};
+} catch (_) { /* view state is optional */ }
 
 function PlansView({
   plans,
@@ -6095,6 +6230,7 @@ function PlansView({
     setCollapsedFolders((prev) => {
       const next = { ...prev, [id]: !prev[id] };
       rememberedCollapsedFolders = next;
+      saveJSON("collapsed-folders", next);
       return next;
     });
 
@@ -7135,9 +7271,14 @@ function LogView({
 
   const REST_PRESETS = [0, 30, 45, 60, 90, 120, 180];
 
-  const elapsedH = Math.floor(elapsedSec / 3600);
-  const elapsedM = Math.floor((elapsedSec % 3600) / 60);
-  const elapsedS = elapsedSec % 60;
+  // In edit mode the clock stands still and shows the recorded duration,
+  // so it is obvious that correcting values does not change how long the
+  // workout took.
+  const isEditing = session?.frozenDurationMinutes != null;
+  const shownSeconds = isEditing ? session.frozenDurationMinutes * 60 : elapsedSec;
+  const elapsedH = Math.floor(shownSeconds / 3600);
+  const elapsedM = Math.floor((shownSeconds % 3600) / 60);
+  const elapsedS = shownSeconds % 60;
   const elapsedLabel = elapsedH > 0
     ? `${elapsedH}:${String(elapsedM).padStart(2, "0")}:${String(elapsedS).padStart(2, "0")}`
     : `${elapsedM}:${String(elapsedS).padStart(2, "0")}`;
@@ -7220,6 +7361,11 @@ function LogView({
             <span className="tag" style={{ marginTop: 6, display: "inline-block" }}>
               {fmtDate(session.date)}
             </span>
+            {isEditing && (
+              <span className="tag" style={{ marginTop: 6, marginLeft: 6, display: "inline-block" }}>
+                Bearbeiten
+              </span>
+            )}
             {sessionGymName && (
               <span className="tag tag-equipment" style={{ marginTop: 6, marginLeft: 6, display: "inline-block" }}>
                 {sessionGymName}
@@ -7320,6 +7466,21 @@ function LogView({
         // Comparing against the same gym only - a record set on a machine
         // that runs lighter elsewhere is not a record here.
         const history = getExerciseHistory(logs, entry.exerciseId, session.id, isTimeBased, session.gymId);
+        // Only the single best set of this workout carries the trophy: when
+        // you work up 60/70/80 all three would beat the old best, and three
+        // trophies in a row say less than one on the set that counts.
+        const hasWeightHere = usesWeight && entry.sets.some((x) => toNum(x.weight) > 0);
+        let setPrIndex = -1;
+        let setPrList = null;
+        let bestScore = -1;
+        entry.sets.forEach((x, i) => {
+          const prs = describeSetPRs(x, history, isTimeBased, hasWeightHere);
+          if (prs.length === 0) return;
+          // Rank by what was actually lifted (or held), so the strongest set wins.
+          const score = isTimeBased ? toNum(x.duration) : toNum(x.weight) * 1000 + toNum(x.reps);
+          if (score > bestScore) { bestScore = score; setPrIndex = i; setPrList = prs; }
+        });
+        const exercisePrs = describeExercisePRs(entry.sets, history, isTimeBased, hasWeightHere);
         const ssInfo = supersetGroupInfo[entry.exerciseId] || { groupSize: 1, isFirst: true, isLast: true };
         const isSuperset = ssInfo.groupSize > 1;
         return (
@@ -7355,6 +7516,20 @@ function LogView({
                 >
                   {ex.name}
                 </span>
+                {/* Records covering all sets of the exercise belong here, not
+                    on one particular set. */}
+                {exercisePrs.length > 0 && (
+                  <span
+                    className="pr-badge pr-badge-inline pr-badge-clickable"
+                    title="Rekord für die ganze Übung – antippen"
+                    onClick={(ev) => {
+                      ev.stopPropagation();
+                      setPrInfo({ list: exercisePrs, exerciseName: ex?.name || "Übung" });
+                    }}
+                  >
+                    <Trophy size={12} />
+                  </span>
+                )}
               </div>
               <div className={`entry-menu-wrap ${entryMenuUp && openEntryMenu === entry.exerciseId ? "drop-up" : ""}`}>
                 <button
@@ -7534,7 +7709,7 @@ function LogView({
                   )}
                 </div>
                 {entry.sets.map((s, idx) => {
-                  const pr = describePR(s, history, isTimeBased);
+                  const pr = setPrIndex === idx ? setPrList : null;
                   return (
                     <React.Fragment key={idx}>
                     <SwipeableSetRow
@@ -7586,7 +7761,7 @@ function LogView({
                               title="Was für ein Rekord? Antippen."
                               onClick={(ev) => {
                                 ev.stopPropagation();
-                                setPrInfo({ ...pr, exerciseName: ex?.name || "Übung" });
+                                setPrInfo({ list: pr, exerciseName: ex?.name || "Übung" });
                               }}
                             >
                               <Trophy size={12} />
@@ -7608,7 +7783,7 @@ function LogView({
                             title="Was für ein Rekord? Antippen."
                             onClick={(ev) => {
                               ev.stopPropagation();
-                              setPrInfo({ ...pr, exerciseName: ex?.name || "Übung" });
+                              setPrInfo({ list: pr, exerciseName: ex?.name || "Übung" });
                             }}
                           >
                             <Trophy size={12} />
@@ -7656,21 +7831,25 @@ function LogView({
       </div>
 
       {prInfo && (
-        <Modal title="Neuer Rekord" onClose={() => setPrInfo(null)}>
-          <div className="plan-title" style={{ marginBottom: 4 }}>{prInfo.exerciseName}</div>
-          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10 }}>
-            <Trophy size={16} color="var(--accent)" />
-            <span style={{ color: "var(--text-dim)", fontSize: 13 }}>{prInfo.title}</span>
-          </div>
-          <div className="stat-hero" style={{ marginBottom: 0 }}>
-            <span className="stat-hero-label">Dieser Satz</span>
-            <span className="stat-hero-value">{prInfo.value}</span>
-          </div>
-          <div style={{ marginTop: 10, fontSize: 13, color: "var(--text-dim)" }}>
-            {prInfo.previous
-              ? `Bisher: ${prInfo.previous}`
-              : "Erster gewerteter Satz dieser Übung – damit steht die Bestmarke."}
-          </div>
+        <Modal
+          title={(prInfo.list || []).length > 1 ? "Neue Rekorde" : "Neuer Rekord"}
+          onClose={() => setPrInfo(null)}
+        >
+          <div className="plan-title" style={{ marginBottom: 10 }}>{prInfo.exerciseName}</div>
+          {/* One set can beat several records at once (weight and 1RM and
+              volume), so they are all listed instead of picking one. */}
+          {(prInfo.list || []).map((r, i) => (
+            <div key={i} className="stat-hero" style={{ marginBottom: 8 }}>
+              <span className="stat-hero-label">
+                <Trophy size={12} style={{ verticalAlign: -1, marginRight: 5 }} />
+                {r.title}
+              </span>
+              <span className="stat-hero-value">{r.value}</span>
+              <div style={{ marginTop: 4, fontSize: 12.5, color: "var(--text-dim)" }}>
+                {r.previous ? `Bisher: ${r.previous}` : "Erste gewertete Bestmarke"}
+              </div>
+            </div>
+          ))}
           <button
             className="btn btn-primary btn-block btn-sm"
             style={{ marginTop: 14 }}
@@ -7883,12 +8062,20 @@ function ExerciseCharts({ logs, exerciseId, isTimeBased, theme, gyms = [] }) {
       const best1RM = selectedIsTimeBased
         ? 0
         : Math.max(0, ...workingSets.map((s) => estimate1RM(s.weight, s.reps)));
+      // Whole-session volume (all sets added up) and the best single set by
+      // reps or seconds - the numbers the charts below are built from.
+      const totalVolume = selectedIsTimeBased
+        ? 0
+        : workingSets.reduce((sum, x) => sum + toNum(x.weight) * toNum(x.reps), 0);
+      const maxReps = Math.max(0, ...workingSets.map((x) => toNum(x.reps)));
+      const maxDuration = Math.max(0, ...workingSets.map((x) => toNum(x.duration)));
       const base = {
         date: fmtDate(l.date),
         ts: new Date(l.date).getTime(),
       };
       if (!splitByGym) {
-        return { ...base, maxWeight, totalReps, totalDuration, maxSetVolume, best1RM };
+        return { ...base, maxWeight, totalReps, totalDuration, maxSetVolume,
+                 best1RM, totalVolume, maxReps, maxDuration };
       }
       // One key per gym so Recharts draws separate lines; the gaps are
       // bridged with connectNulls so each gym reads as one continuous line.
@@ -7900,6 +8087,9 @@ function ExerciseCharts({ logs, exerciseId, isTimeBased, theme, gyms = [] }) {
         [`totalDuration_${g}`]: totalDuration,
         [`maxSetVolume_${g}`]: maxSetVolume,
         [`best1RM_${g}`]: best1RM,
+        [`totalVolume_${g}`]: totalVolume,
+        [`maxReps_${g}`]: maxReps,
+        [`maxDuration_${g}`]: maxDuration,
       };
     })
     .sort((a, b) => a.ts - b.ts);
@@ -7935,14 +8125,39 @@ function ExerciseCharts({ logs, exerciseId, isTimeBased, theme, gyms = [] }) {
   const gymLegend = splitByGym ? <Legend wrapperStyle={{ fontSize: 11 }} /> : null;
 
   if (!selected) return null;
+
+  // Which charts make sense depends on how the exercise is trained. Bodyweight
+  // and band work has no weight, so volume and 1RM would be flat zero lines -
+  // there the rep counts are what actually shows progress.
+  const hasAnyWeight = relevantLogs.some((l) =>
+    entrySets(logEntries(l).find((e) => e.exerciseId === selected))
+      .some((x) => !x.warmup && toNum(x.weight) > 0)
+  );
+  const cards = selectedIsTimeBased
+    ? [
+        { key: "maxDuration", title: "Längster Satz (Sek.)", color: "#c1652e" },
+        { key: "totalDuration", title: "Gesamtzeit pro Training (Sek.)", color: "#e8c547" },
+      ]
+    : !hasAnyWeight
+    ? [
+        { key: "maxReps", title: "Maximale Wdh. pro Satz", color: "#c1652e" },
+        { key: "totalReps", title: "Gesamte Wdh. pro Training", color: "#e8c547" },
+      ]
+    : [
+        { key: "maxSetVolume", title: "Maximales Satzvolumen", color: "#5b9aa8" },
+        { key: "best1RM", title: "Geschätztes 1RM", color: "#9a7bc4" },
+        { key: "totalVolume", title: "Gesamtvolumen pro Training", color: "#e8c547" },
+        { key: "maxWeight", title: "Maximalgewicht pro Training (kg)", color: "#c1652e" },
+      ];
+
   return chartData.length === 0 ? (
-      <div className="empty-state">Keine Daten für diese Übung.</div>
-    ) : (
-      <>
-        {!selectedIsTimeBased && (
-        <div className="card chart-card">
-          <span className="plan-title">Maximalgewicht pro Training (kg)</span>
-          <div style={{ height: 200, marginTop: 14 }}>
+    <div className="empty-state">Keine Daten für diese Übung.</div>
+  ) : (
+    <>
+      {cards.map((c) => (
+        <div className="card chart-card" key={c.key}>
+          <span className="plan-title">{c.title}</span>
+          <div style={{ height: 190, marginTop: 14 }}>
             <ResponsiveContainer width="99%" height="100%" debounce={1}>
               <LineChart data={chartData} margin={{ top: 6, right: 4, left: -20, bottom: 0 }}>
                 <CartesianGrid strokeDasharray="3 3" stroke={chartColors.grid} vertical={false} />
@@ -7956,94 +8171,14 @@ function ExerciseCharts({ logs, exerciseId, isTimeBased, theme, gyms = [] }) {
                     fontSize: 12,
                   }}
                 />
-                {renderLines("maxWeight", "#c1652e")}
+                {renderLines(c.key, c.color)}
                 {gymLegend}
               </LineChart>
             </ResponsiveContainer>
           </div>
         </div>
-        )}
-
-        <div className="card chart-card">
-          <span className="plan-title">
-            {selectedIsTimeBased ? "Gesamtzeit pro Training (Sek.)" : "Gesamtwiederholungen pro Training"}
-          </span>
-          <div style={{ height: 180, marginTop: 14 }}>
-            <ResponsiveContainer width="99%" height="100%" debounce={1}>
-              <LineChart data={chartData} margin={{ top: 6, right: 4, left: -20, bottom: 0 }}>
-                <CartesianGrid strokeDasharray="3 3" stroke={chartColors.grid} vertical={false} />
-                <XAxis dataKey="date" stroke={chartColors.axis} fontSize={11} axisLine={false} tickLine={false} />
-                <YAxis stroke={chartColors.axis} fontSize={11} axisLine={false} tickLine={false} width={40} />
-                <Tooltip
-                  contentStyle={{
-                    background: chartColors.tooltipBg,
-                    border: `1px solid ${chartColors.tooltipBorder}`,
-                    borderRadius: 10,
-                    fontSize: 12,
-                  }}
-                />
-                {/* Went through renderLines like the other charts: with more
-                    than one gym the fields carry a gym suffix, so the plain
-                    key matched nothing and this chart stayed empty. */}
-                {renderLines(selectedIsTimeBased ? "totalDuration" : "totalReps", "#e8c547")}
-                {gymLegend}
-              </LineChart>
-            </ResponsiveContainer>
-          </div>
-        </div>
-
-        {!selectedIsTimeBased && (
-        <div className="card chart-card">
-          <span className="plan-title">Maximales Satzvolumen</span>
-          <div style={{ height: 180, marginTop: 14 }}>
-            <ResponsiveContainer width="99%" height="100%" debounce={1}>
-              <LineChart data={chartData} margin={{ top: 6, right: 4, left: -20, bottom: 0 }}>
-                <CartesianGrid strokeDasharray="3 3" stroke={chartColors.grid} vertical={false} />
-                <XAxis dataKey="date" stroke={chartColors.axis} fontSize={11} axisLine={false} tickLine={false} />
-                <YAxis stroke={chartColors.axis} fontSize={11} axisLine={false} tickLine={false} width={40} />
-                <Tooltip
-                  contentStyle={{
-                    background: chartColors.tooltipBg,
-                    border: `1px solid ${chartColors.tooltipBorder}`,
-                    borderRadius: 10,
-                    fontSize: 12,
-                  }}
-                  formatter={(value) => [`${Math.round(value)} kg`, "Max. Satzvolumen"]}
-                />
-                {renderLines("maxSetVolume", "#5b9aa8")}
-                {gymLegend}
-              </LineChart>
-            </ResponsiveContainer>
-          </div>
-        </div>
-        )}
-
-        {!selectedIsTimeBased && (
-        <div className="card chart-card">
-          <span className="plan-title">Geschätztes 1RM</span>
-          <div style={{ height: 180, marginTop: 14 }}>
-            <ResponsiveContainer width="99%" height="100%" debounce={1}>
-              <LineChart data={chartData} margin={{ top: 6, right: 4, left: -20, bottom: 0 }}>
-                <CartesianGrid strokeDasharray="3 3" stroke={chartColors.grid} vertical={false} />
-                <XAxis dataKey="date" stroke={chartColors.axis} fontSize={11} axisLine={false} tickLine={false} />
-                <YAxis stroke={chartColors.axis} fontSize={11} axisLine={false} tickLine={false} width={40} domain={["auto", "auto"]} />
-                <Tooltip
-                  contentStyle={{
-                    background: chartColors.tooltipBg,
-                    border: `1px solid ${chartColors.tooltipBorder}`,
-                    borderRadius: 10,
-                    fontSize: 12,
-                  }}
-                  formatter={(value) => [`${Math.round(value)} kg`, "Gesch. 1RM"]}
-                />
-                {renderLines("best1RM", "#9a7bc4")}
-                {gymLegend}
-              </LineChart>
-            </ResponsiveContainer>
-          </div>
-        </div>
-        )}
-      </>
+      ))}
+    </>
   );
 }
 
@@ -8512,13 +8647,24 @@ function HistoryView({
             {isOpen && (
               <div className="history-exercise-list" onClick={(e) => e.stopPropagation()}>
                 {onResumeLog && (
-                  <button
-                    className="btn btn-ghost btn-block btn-sm"
-                    style={{ marginBottom: 10 }}
-                    onClick={() => onResumeLog(log)}
-                  >
-                    <Play size={14} /> Fortsetzen & bearbeiten
-                  </button>
+                  <div style={{ display: "flex", gap: 8, marginBottom: 10 }}>
+                    <button
+                      className="btn btn-ghost btn-sm"
+                      style={{ flex: 1 }}
+                      onClick={() => onResumeLog(log, "resume")}
+                      title="Die Trainingszeit läuft ab hier weiter"
+                    >
+                      <Play size={14} /> Fortsetzen
+                    </button>
+                    <button
+                      className="btn btn-ghost btn-sm"
+                      style={{ flex: 1 }}
+                      onClick={() => onResumeLog(log, "edit")}
+                      title="Nur Werte korrigieren, die Dauer bleibt unverändert"
+                    >
+                      <Pencil size={14} /> Bearbeiten
+                    </button>
+                  </div>
                 )}
                 {logEntries(log).map((entry) => {
                   const ex = exBy[entry.exerciseId];

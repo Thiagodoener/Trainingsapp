@@ -6051,6 +6051,10 @@ function PlanCard({ plan, exBy, onDelete, onEdit, onStart, onLongPress, lastDone
 // Plans view
 // ---------------------------------------------------------------------------
 
+// Survives unmounting of PlansView; deliberately not persisted to storage -
+// it is a view state, not data worth keeping across app restarts.
+let rememberedCollapsedFolders = {};
+
 function PlansView({
   plans,
   exBy,
@@ -6079,14 +6083,20 @@ function PlansView({
   const [newFolderName, setNewFolderName] = useState("");
   const [newFolderColor, setNewFolderColor] = useState(FOLDER_COLORS[0]);
   const [movingPlan, setMovingPlan] = useState(null);
-  const [collapsedFolders, setCollapsedFolders] = useState({});
+  // Kept outside the component so switching tabs (which unmounts this view)
+  // does not throw the open/closed state away and pop every folder open again.
+  const [collapsedFolders, setCollapsedFolders] = useState(rememberedCollapsedFolders);
   const [programMenuOpen, setProgramMenuOpen] = useState(false);
   const [creatingProgram, setCreatingProgram] = useState(false);
   const [newProgramName, setNewProgramName] = useState("");
   const [renamingProgram, setRenamingProgram] = useState(false);
   const [renameProgramName, setRenameProgramName] = useState("");
   const toggleFolderCollapsed = (id) =>
-    setCollapsedFolders((s) => ({ ...s, [id]: !s[id] }));
+    setCollapsedFolders((prev) => {
+      const next = { ...prev, [id]: !prev[id] };
+      rememberedCollapsedFolders = next;
+      return next;
+    });
 
   const activeProgram = programs.find((p) => p.id === activeProgramId) || null;
 
@@ -7972,14 +7982,11 @@ function ExerciseCharts({ logs, exerciseId, isTimeBased, theme, gyms = [] }) {
                     fontSize: 12,
                   }}
                 />
-                <Line
-                  type="monotone"
-                  dataKey={selectedIsTimeBased ? "totalDuration" : "totalReps"}
-                  stroke="#e8c547"
-                  strokeWidth={2.5}
-                  dot={{ r: 3, fill: "#e8c547", strokeWidth: 0 }}
-                  activeDot={{ r: 5 }}
-                />
+                {/* Went through renderLines like the other charts: with more
+                    than one gym the fields carry a gym suffix, so the plain
+                    key matched nothing and this chart stayed empty. */}
+                {renderLines(selectedIsTimeBased ? "totalDuration" : "totalReps", "#e8c547")}
+                {gymLegend}
               </LineChart>
             </ResponsiveContainer>
           </div>
@@ -8536,11 +8543,10 @@ function HistoryView({
                         </span>
                         <span className="history-set-summary">{summary || "–"}</span>
                       </div>
-                      {entry.notes && entry.notes.trim() && (
-                        <div className="history-session-notes" style={{ marginTop: 0, paddingTop: 0, borderTop: "none" }}>
-                          {entry.notes.trim()}
-                        </div>
-                      )}
+                      {/* Die Übungsnotiz steht bewusst nicht hier: sie ist eine
+                          dauerhafte Notiz zur Übung und wiederholt sich sonst
+                          unter jedem Training. Zu sehen ist sie im Training
+                          selbst und in der Übungs-Detailseite. */}
                     </div>
                   );
                 })}

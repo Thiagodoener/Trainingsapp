@@ -869,6 +869,25 @@ function MuscleTag({ exercise, subgroupOverrides }) {
 
 // Short "how long ago" label, e.g. "heute", "vor 3 T.", "vor 2 Wo.".
 // Kept terse because it sits next to the plan name on a narrow screen.
+// Picks black or white text for a coloured background. A yellow bar with
+// white text is unreadable, so the decision follows the actual brightness
+// rather than a fixed choice.
+function readableTextOn(hex) {
+  try {
+    const h = String(hex || "").replace("#", "");
+    const full = h.length === 3 ? h.split("").map((c) => c + c).join("") : h;
+    if (full.length !== 6) return "#fff";
+    const r = parseInt(full.slice(0, 2), 16);
+    const g = parseInt(full.slice(2, 4), 16);
+    const b = parseInt(full.slice(4, 6), 16);
+    // Perceived brightness: green counts most, blue least.
+    const brightness = (r * 299 + g * 587 + b * 114) / 1000;
+    return brightness > 150 ? "#1a1a1a" : "#fff";
+  } catch (_) {
+    return "#fff";
+  }
+}
+
 function timeAgoShort(dateStr) {
   if (!dateStr) return null;
   const then = new Date(dateStr);
@@ -2930,38 +2949,38 @@ export default function TrainingApp() {
           flex-direction: column;
           gap: 2px;
         }
+        /* Solid colour bars instead of outlined chips: at this size an
+           outline is barely visible, a filled bar reads at a glance. Every
+           week looks the same so the month keeps a calm rhythm. */
         .cal-entry-chip {
-          display: flex;
-          align-items: center;
-          gap: 3px;
-          font-size: 8.5px;
-          line-height: 1.3;
-          padding: 1.5px 4px;
-          border-radius: 5px;
-          border: 1px solid var(--border);
-          color: var(--text-dim);
-          background: var(--surface-alt);
+          display: block;
+          width: 100%;
+          font-size: 9px;
+          font-weight: 600;
+          line-height: 1.35;
+          padding: 2px 4px;
+          border-radius: 4px;
+          border: none;
+          color: #fff;
+          background: var(--text-dim);
           overflow: hidden;
           text-overflow: ellipsis;
           white-space: nowrap;
+          text-align: center;
         }
-        .cal-week-row.is-current-week .cal-entry-chip {
-          white-space: normal;
-          font-size: 10px;
+        .cal-entry-chip svg {
+          vertical-align: -1px;
+          margin-right: 2px;
         }
-        .cal-entry-dot {
-          width: 6px;
-          height: 6px;
-          border-radius: 50%;
-          flex-shrink: 0;
-        }
+        /* Planned is the same colour, just muted - done vs. still to come
+           is then visible without looking for the tick. */
         .cal-entry-workout {
-          border-color: var(--accent);
-          color: var(--accent);
+          background: color-mix(in srgb, var(--accent) 35%, transparent);
+          color: var(--text);
         }
         .cal-entry-workout.is-done {
-          border-color: var(--success);
-          color: var(--success);
+          background: var(--success);
+          color: #fff;
         }
         .cal-entry-more {
           font-size: 8.5px;
@@ -3874,8 +3893,10 @@ function CalendarView({
                 ];
                 const isToday = key === todayKey;
                 const isSelected = key === selectedDate;
-                const visibleEntries = isCurrentWeek ? dayEntries : dayEntries.slice(0, 2);
-                const overflow = isCurrentWeek ? 0 : Math.max(0, dayEntries.length - 2);
+                // Every week is treated the same, so the month grid keeps an
+                // even rhythm instead of one row bulging out.
+                const visibleEntries = dayEntries.slice(0, 3);
+                const overflow = Math.max(0, dayEntries.length - 3);
                 return (
                   <div
                     key={key}
@@ -3913,9 +3934,8 @@ function CalendarView({
                           <span
                             key={entry.id}
                             className="cal-entry-chip"
-                            style={cat ? { borderColor: cat.color, color: cat.color } : undefined}
+                            style={cat ? { background: cat.color, color: readableTextOn(cat.color) } : undefined}
                           >
-                            <span className="cal-entry-dot" style={{ background: cat ? cat.color : "var(--text-dim)" }} />
                             {entry.text}
                           </span>
                         );

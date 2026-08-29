@@ -798,6 +798,7 @@ const BACKUP_KEYS = [
   "active-gym-id",
   "app-theme",
   "active-workout",
+  "collapsed-folders",
 ];
 
 async function buildBackup() {
@@ -6822,6 +6823,11 @@ function LogView({
   // All hooks must run on every render regardless of whether a session is
   // active, so they live here, above the early return below.
   const [restLeft, setRestLeft] = useState(0); // seconds remaining, 0 = inactive
+  // The remaining time is derived from a fixed end timestamp. Counting down
+  // second by second went wrong as soon as the screen switched off: iOS
+  // throttles timers in the background, so the rest ran too slowly.
+  const restEndsAtRef = useRef(0);
+  const restBeepedRef = useRef(false);
   const [openNotes, setOpenNotes] = useState({});
   const [openRestPicker, setOpenRestPicker] = useState({});
   const [elapsedSec, setElapsedSec] = useState(0);
@@ -6917,23 +6923,25 @@ function LogView({
 
   useEffect(() => {
     if (restLeft <= 0) return;
-    const id = setInterval(() => {
-      setRestLeft((s) => (s > 0 ? s - 1 : 0));
-    }, 1000);
-    return () => clearInterval(id);
-  }, [restLeft > 0]);
-
-  useEffect(() => {
-    if (restLeft === 0) return;
-    if (restLeft === 1) {
-      // Same tone path as the automatic run: routed through the unlocked
-      // audio session so it is audible even with the silent switch on.
-      const id = setTimeout(() => {
+    const tick = () => {
+      const left = Math.max(0, Math.round((restEndsAtRef.current - Date.now()) / 1000));
+      setRestLeft(left);
+      if (left === 0 && !restBeepedRef.current) {
+        restBeepedRef.current = true;
         if (soundOn) playBeep({ frequency: 1320, duration: 0.35 });
-      }, 1000);
-      return () => clearTimeout(id);
-    }
-  }, [restLeft, soundOn]);
+      }
+    };
+    tick();
+    const id = setInterval(tick, 500);
+    // Coming back from a locked screen: recalculate immediately instead of
+    // waiting for the next tick.
+    const onVisible = () => { if (!document.hidden) tick(); };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => {
+      clearInterval(id);
+      document.removeEventListener("visibilitychange", onVisible);
+    };
+  }, [restLeft > 0, soundOn]);
 
   useEffect(() => {
     if (!session || !session.startedAt) return;
@@ -7170,10 +7178,20 @@ function LogView({
     if (soundOn) unlockAudio();
     // Bei 0 Sekunden gibt es keine Pause - der Timer bleibt einfach aus.
     const sec = exerciseId ? getRestDurationFor(exerciseId) : restDuration;
+    restEndsAtRef.current = Date.now() + Math.max(0, sec) * 1000;
+    restBeepedRef.current = false;
     setRestLeft(sec > 0 ? sec : 0);
   };
-  const stopRest = () => setRestLeft(0);
-  const addRestTime = (delta) => setRestLeft((s) => Math.max(0, s + delta));
+  const stopRest = () => {
+    restEndsAtRef.current = 0;
+    restBeepedRef.current = true;
+    setRestLeft(0);
+  };
+  const addRestTime = (delta) => {
+    restEndsAtRef.current = Math.max(Date.now(), restEndsAtRef.current) + delta * 1000;
+    if (delta > 0) restBeepedRef.current = false;
+    setRestLeft(Math.max(0, Math.round((restEndsAtRef.current - Date.now()) / 1000)));
+  };
 
   const addSet = (exerciseId, warmup = false) => {
     onUpdateSession({
@@ -7718,11 +7736,11 @@ function LogView({
               <div style={{ marginTop: 10, paddingTop: 10, borderTop: "1px solid var(--border)" }}>
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
                   <span className="plan-title">Übung ersetzen</span>
-                  <button className="btn-icon" onClick={() => { setReplacingExerciseId(null); setAddExerciseQuery(""); }}>
+                  <button className="btn-icon" onClick={() => { setReplacingExerciseId(null); setAddExerciseQuery(""); resetAddFilters(); }}>
                     <X size={15} />
                   </button>
                 </div>
-                <div className="search-box" style={{ marginBottom: 10 }}>
+                <div className="search-box" style={{ marginBottom: 8 }}>
                   <Search size={16} color="var(--text-dim)" />
                   <input
                     autoFocus
@@ -7731,10 +7749,69 @@ function LogView({
                     onChange={(e) => setAddExerciseQuery(e.target.value)}
                   />
                 </div>
+                {/* Same filters as when adding an exercise - replacing one is
+                    the same kind of search, usually with a clear idea of the
+                    muscle group or the equipment that is free right now. */}
+                <div className="chip-row" style={{ marginBottom: 8 }}>
+                  <span
+                    className={`chip ${addGroup === "alle" ? "active" : ""}`}
+                    onClick={() => { setAddGroup("alle"); setAddSubgroup("alle"); }}
+                  >
+                    Alle
+                  </span>
+                  {MUSCLE_GROUPS.map((g) => (
+                    <span
+                      key={g.id}
+                      className={`chip ${addGroup === g.id ? "active" : ""}`}
+                      onClick={() => { setAddGroup(g.id); setAddSubgroup("alle"); }}
+                    >
+                      {g.label}
+                    </span>
+                  ))}
+                </div>
+                {addGroup !== "alle" && (SUBGROUPS[addGroup] || []).length > 0 && (
+                  <div className="chip-row" style={{ marginBottom: 8 }}>
+                    <span
+                      className={`chip chip-sm ${addSubgroup === "alle" ? "active" : ""}`}
+                      onClick={() => setAddSubgroup("alle")}
+                    >
+                      Alle
+                    </span>
+                    {SUBGROUPS[addGroup].map((sg) => (
+                      <span
+                        key={sg.id}
+                        className={`chip chip-sm ${addSubgroup === sg.id ? "active" : ""}`}
+                        onClick={() => setAddSubgroup(sg.id)}
+                      >
+                        {sg.label}
+                      </span>
+                    ))}
+                  </div>
+                )}
+                <div className="chip-row" style={{ marginBottom: 10 }}>
+                  <span
+                    className={`chip chip-sm ${addEquipment === "alle" ? "active" : ""}`}
+                    onClick={() => setAddEquipment("alle")}
+                  >
+                    Alle Geräte
+                  </span>
+                  {EQUIPMENT_OPTIONS.map((opt) => (
+                    <span
+                      key={opt}
+                      className={`chip chip-sm ${addEquipment === opt ? "active" : ""}`}
+                      onClick={() => setAddEquipment(opt)}
+                    >
+                      {opt}
+                    </span>
+                  ))}
+                </div>
                 <div style={{ maxHeight: 260, overflowY: "auto" }}>
+                  {exercises.filter((e) => e.id !== entry.exerciseId && addPickerMatches(e)).length === 0 && (
+                    <div className="empty-state" style={{ padding: "14px 0" }}>Keine Übung gefunden.</div>
+                  )}
                   {exercises
                     .filter((e) => e.id !== entry.exerciseId)
-                    .filter((e) => e.name.toLowerCase().includes(addExerciseQuery.toLowerCase()))
+                    .filter(addPickerMatches)
                     .slice(0, EXERCISE_PICKER_LIMIT)
                     .map((e) => {
                       const already = session.entries.some((se) => se.exerciseId === e.id);
@@ -8351,19 +8428,14 @@ function useMenuFlip(isOpen, setDropUp) {
 // so the context is created when the user taps "Start".
 let sharedAudioCtx = null;
 // A fraction of a second of silence, inlined so no file has to be shipped.
-const SILENT_LOOP_WAV =
-  "data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEAgD4AAAB9AAACABAAZGF0YQAAAAA=";
-
-// Keeps the audio session alive. iOS treats sound a web app generates
-// itself as a system sound and silences it whenever the ring/silent switch
-// is set to silent - which is exactly how a phone sits in a gym bag.
-let keepAliveAudio = null;
-
 function unlockAudio() {
   try {
-    // Safari 16.4+: declaring the session as playback makes the beeps behave
-    // like music, i.e. audible despite the silent switch.
-    if (navigator.audioSession) navigator.audioSession.type = "playback";
+    // "transient" means: a short signal tone. Music from another app is
+    // briefly ducked and continues afterwards. "playback" would announce the
+    // beeps as music of our own and stop Spotify entirely - which is exactly
+    // what happened before. There is no silent loop either: it held the audio
+    // channel permanently and pushed other apps out of the way.
+    if (navigator.audioSession) navigator.audioSession.type = "transient";
 
     if (!sharedAudioCtx) {
       const Ctx = window.AudioContext || window.webkitAudioContext;
@@ -8371,18 +8443,6 @@ function unlockAudio() {
       sharedAudioCtx = new Ctx();
     }
     if (sharedAudioCtx.state === "suspended") sharedAudioCtx.resume();
-
-    // Fallback for older iOS: a looping (near-silent) media element puts the
-    // page into the media category, which the silent switch does not mute.
-    // Started from the same user gesture, so iOS allows it.
-    if (!keepAliveAudio) {
-      keepAliveAudio = new Audio(SILENT_LOOP_WAV);
-      keepAliveAudio.loop = true;
-      keepAliveAudio.volume = 0.001;
-      keepAliveAudio.setAttribute("playsinline", "");
-    }
-    keepAliveAudio.play().catch(() => { /* not critical */ });
-
     return sharedAudioCtx;
   } catch (_) {
     return null;
@@ -8390,9 +8450,7 @@ function unlockAudio() {
 }
 
 function releaseAudio() {
-  try {
-    keepAliveAudio?.pause();
-  } catch (_) { /* ignore */ }
+  // Nothing to release: no channel is held open any more.
 }
 
 function playBeep({ frequency = 880, duration = 0.18, volume = 0.6 } = {}) {

@@ -963,6 +963,12 @@ export default function TrainingApp() {
   const [undoDelete, setUndoDelete] = useState(null);
   const undoTimerRef = useRef(null);
   const [session, setSession] = useState(null); // active workout session
+  // The rest timer lives up here, not in LogView. LogView is unmounted the
+  // moment another tab is opened, which took the running rest with it. Only
+  // the target timestamp is kept - the remaining seconds are always derived
+  // from "target minus now", so a screen that was off, an app that was in
+  // the background and even a full reload all resolve to the correct value.
+  const [restEndsAt, setRestEndsAt] = useState(0);
 
   // Native window.confirm()/alert() are unreliable inside a sandboxed
   // artifact preview — they can silently no-op, which made every delete
@@ -995,7 +1001,7 @@ export default function TrainingApp() {
 
   useEffect(() => {
     (async () => {
-      const [p, l, c, f, en, no, tb, active, prog, activeProg, sg, ce, cc, eq, th, gy, activeGy] = await Promise.all([
+      const [p, l, c, f, en, no, tb, active, prog, activeProg, sg, ce, cc, eq, th, gy, activeGy, restEnd] = await Promise.all([
         loadJSON("training-plans", []),
         loadJSON("workout-logs", []),
         loadJSON("custom-exercises", []),
@@ -1013,6 +1019,7 @@ export default function TrainingApp() {
         loadJSON("app-theme", "light"),
         loadJSON("gyms", []),
         loadJSON("active-gym-id", null),
+        loadJSON("rest-timer", 0),
       ]);
       // Migration: users who already had folders before "programs" existed
       // get one default program that all their existing folders are
@@ -1041,6 +1048,9 @@ export default function TrainingApp() {
       setExerciseSubgroupOverrides(sg);
       setTimeBasedExercises(tb);
       setSession(active || null);
+      // A rest that already expired while the app was closed is not restored -
+      // it would show a dead "0:00" bar with nothing to count down to.
+      setRestEndsAt(active && typeof restEnd === "number" && restEnd > Date.now() ? restEnd : 0);
       // Landing on the plans list while a workout is still running means
       // hunting for the way back - on a phone the app gets reloaded between
       // sets often enough that this should just resume where it left off.
@@ -1260,6 +1270,7 @@ export default function TrainingApp() {
     const next = createSessionFromPlan(plan, gymId === undefined ? activeGymId : gymId);
     if (calendarEntryId) next.calendarEntryId = calendarEntryId;
     setSession(next);
+    await updateRestEndsAt(0);
     await saveJSON("active-workout", next);
   };
 
@@ -1268,8 +1279,15 @@ export default function TrainingApp() {
     await saveJSON("active-workout", next);
   };
 
+  const updateRestEndsAt = async (endsAt) => {
+    const value = typeof endsAt === "number" && endsAt > Date.now() ? endsAt : 0;
+    setRestEndsAt(value);
+    await saveJSON("rest-timer", value);
+  };
+
   const clearActiveSession = async () => {
     setSession(null);
+    await updateRestEndsAt(0);
     await saveJSON("active-workout", null);
   };
 
@@ -2249,6 +2267,25 @@ export default function TrainingApp() {
           font-size: 13px;
           text-align: right;
           color: var(--text);
+        }
+        .muscle-week-row-clickable {
+          grid-template-columns: 88px 1fr 28px 14px;
+          cursor: pointer;
+        }
+        .muscle-week-subs {
+          margin: -1px 0 10px 14px;
+          padding-left: 10px;
+          border-left: 1px solid var(--border);
+        }
+        .muscle-week-row-sub {
+          margin-bottom: 6px;
+        }
+        .muscle-week-row-sub .muscle-week-label {
+          font-size: 12px;
+        }
+        .muscle-week-row-sub .muscle-week-value {
+          font-size: 12px;
+          color: var(--text-dim);
         }
         .plan-last-done {
           display: inline-block;
@@ -3370,6 +3407,9 @@ export default function TrainingApp() {
               await clearActiveSession();
             }}
             onDiscard={() => askConfirm("Aktives Training wirklich verwerfen? Alle nicht gespeicherten Sätze gehen verloren.", clearActiveSession)}
+            restEndsAt={restEndsAt}
+            onSetRestEndsAt={updateRestEndsAt}
+            onAddCustom={handleAddCustomExercise}
           />
         ) : (
           <ProgressView
@@ -6855,24 +6895,39 @@ function LogView({
   onDiscard,
   onRequestConfirm,
   gyms = [],
+  restEndsAt = 0,
+  onSetRestEndsAt,
+  onAddCustom,
 }) {
   const sessionGymName = session
     ? gyms.find((g) => g.id === session.gymId)?.name || null
     : null;
   // All hooks must run on every render regardless of whether a session is
   // active, so they live here, above the early return below.
-  const [restLeft, setRestLeft] = useState(0); // seconds remaining, 0 = inactive
-  // The remaining time is derived from a fixed end timestamp. Counting down
-  // second by second went wrong as soon as the screen switched off: iOS
-  // throttles timers in the background, so the rest ran too slowly.
-  const restEndsAtRef = useRef(0);
-  const restBeepedRef = useRef(false);
+  const [restLeft, setRestLeft] = useState(() =>
+    Math.max(0, Math.round((restEndsAt - Date.now()) / 1000))
+  );
+  // The end timestamp itself is owned by the app root and persisted, so the
+  // rest survives a tab switch and a reload. Only the displayed seconds are
+  // local, and they are always recomputed from that timestamp - counting
+  // down second by second went wrong as soon as the screen switched off,
+  // because iOS throttles timers in the background.
+  const restBeepedRef = useRef(restEndsAt <= Date.now());
+  // Tracks whether the rest-end tone is already sitting on the audio clock,
+  // so the countdown does not play a second one on top of it. Initialised
+  // from the module-level handle, because the scheduled tone lives in the
+  // audio graph and outlives this component being unmounted by a tab switch.
+  const restBeepScheduledRef = useRef(hasPendingRestBeep());
   const [openNotes, setOpenNotes] = useState({});
   const [openRestPicker, setOpenRestPicker] = useState({});
   const [elapsedSec, setElapsedSec] = useState(0);
   const [selectedExerciseId, setSelectedExerciseId] = useState(null);
   const selectedExercise = exercises.find((e) => e.id === selectedExerciseId) || null;
   const [addingExercise, setAddingExercise] = useState(false);
+  // Creating an exercise mid-workout: the picker only ever offered what
+  // already existed, so noticing a missing exercise meant leaving the
+  // running session to go and create it first.
+  const [creatingExercise, setCreatingExercise] = useState(false);
   const [entryMenuUp, setEntryMenuUp] = useState(false);
   const [prInfo, setPrInfo] = useState(null);
   const [soundOn, setSoundOn] = useState(true);
@@ -6961,13 +7016,30 @@ function LogView({
   }, [settingsMenuOpen]);
 
   useEffect(() => {
-    if (restLeft <= 0) return;
+    if (restEndsAt <= Date.now()) {
+      setRestLeft(0);
+      return;
+    }
     const tick = () => {
-      const left = Math.max(0, Math.round((restEndsAtRef.current - Date.now()) / 1000));
+      const left = Math.max(0, Math.round((restEndsAt - Date.now()) / 1000));
       setRestLeft(left);
       if (left === 0 && !restBeepedRef.current) {
         restBeepedRef.current = true;
-        if (soundOn) playBeep({ frequency: 1320, duration: 0.35 });
+        // The tone itself was already scheduled on the audio clock when the
+        // rest started, so nothing is played here - firing a second one would
+        // double the beep. Only if that scheduling failed (sound was off at
+        // the time, or no audio context existed yet) does the timer play it.
+        if (soundOn && !restBeepScheduledRef.current) {
+          playBeep({ frequency: 1320, duration: 0.35 });
+        }
+        restBeepScheduledRef.current = false;
+        // Backup signal for a muted phone or a device that silenced the
+        // audio context in the background. Vibration needs JS to be running,
+        // so it only lands with the app in the foreground - which is exactly
+        // the case the scheduled tone handles worst.
+        if (navigator.vibrate) {
+          try { navigator.vibrate([120, 80, 120]); } catch (_) {}
+        }
       }
     };
     tick();
@@ -6980,7 +7052,7 @@ function LogView({
       clearInterval(id);
       document.removeEventListener("visibilitychange", onVisible);
     };
-  }, [restLeft > 0, soundOn]);
+  }, [restEndsAt, soundOn]);
 
   useEffect(() => {
     if (!session || !session.startedAt) return;
@@ -7211,25 +7283,44 @@ function LogView({
     const entry = session.entries.find((e) => e.exerciseId === exerciseId);
     return entry && entry.restSeconds != null ? entry.restSeconds : restDuration;
   };
+  // Schedules the rest-end tone on the audio clock right away instead of
+  // firing it from a timer when the rest is over. A JS timer stops the moment
+  // the screen goes off or the app is backgrounded, so a timer-driven tone
+  // simply never happened - which is why the beep kept going missing.
+  const armRestBeep = (seconds) => {
+    cancelRestBeep();
+    restBeepScheduledRef.current = false;
+    if (!soundOn || seconds <= 0) return;
+    // The tap that starts the rest is the gesture iOS requires before any
+    // sound may be produced, so the context is opened here.
+    if (!unlockAudio()) return;
+    restBeepScheduledRef.current = scheduleRestBeep(seconds);
+  };
+
   const startRest = (exerciseId) => {
-    // Started from a tap (checking a set off), which is the moment iOS
-    // allows the audio session to be opened.
-    if (soundOn) unlockAudio();
     // Bei 0 Sekunden gibt es keine Pause - der Timer bleibt einfach aus.
     const sec = exerciseId ? getRestDurationFor(exerciseId) : restDuration;
-    restEndsAtRef.current = Date.now() + Math.max(0, sec) * 1000;
-    restBeepedRef.current = false;
+    restBeepedRef.current = sec <= 0;
+    armRestBeep(sec);
     setRestLeft(sec > 0 ? sec : 0);
+    onSetRestEndsAt?.(sec > 0 ? Date.now() + sec * 1000 : 0);
   };
   const stopRest = () => {
-    restEndsAtRef.current = 0;
+    cancelRestBeep();
+    restBeepScheduledRef.current = false;
     restBeepedRef.current = true;
     setRestLeft(0);
+    onSetRestEndsAt?.(0);
   };
   const addRestTime = (delta) => {
-    restEndsAtRef.current = Math.max(Date.now(), restEndsAtRef.current) + delta * 1000;
+    const nextEnd = Math.max(Date.now(), restEndsAt) + delta * 1000;
+    const left = Math.max(0, Math.round((nextEnd - Date.now()) / 1000));
     if (delta > 0) restBeepedRef.current = false;
-    setRestLeft(Math.max(0, Math.round((restEndsAtRef.current - Date.now()) / 1000)));
+    // The tone sits at a fixed point on the audio clock, so shifting the rest
+    // means replacing it rather than moving it.
+    armRestBeep(left);
+    setRestLeft(left);
+    onSetRestEndsAt?.(left > 0 ? nextEnd : 0);
   };
 
   const addSet = (exerciseId, warmup = false) => {
@@ -7331,6 +7422,7 @@ function LogView({
       ],
     });
     setAddingExercise(false);
+    setCreatingExercise(false);
     resetAddFilters();
   };
   const removeExerciseFromSession = (exerciseId) => {
@@ -8087,9 +8179,32 @@ function LogView({
       {addingExercise && (
         <Modal
           title="Übung hinzufügen"
-          onClose={() => { setAddingExercise(false); resetAddFilters(); }}
+          onClose={() => { setAddingExercise(false); setCreatingExercise(false); resetAddFilters(); }}
           width={420}
         >
+          {creatingExercise ? (
+            <>
+              <NewExerciseForm
+                exercises={exercises}
+                onAddCustom={onAddCustom}
+                onSetExerciseSubgroup={onSetExerciseSubgroup}
+                onDone={(created) => {
+                  setCreatingExercise(false);
+                  // The parent's exercise list has not re-rendered yet, so the
+                  // freshly created object is added straight to the session
+                  // rather than looked up by id.
+                  if (created?.id) addExerciseToSession(created.id);
+                }}
+              />
+              <button
+                className="btn btn-ghost btn-block"
+                onClick={() => setCreatingExercise(false)}
+              >
+                Zurück zur Auswahl
+              </button>
+            </>
+          ) : (
+            <>
             <div className="search-box" style={{ marginBottom: 10 }}>
               <Search size={16} color="var(--text-dim)" />
               <input
@@ -8176,6 +8291,15 @@ function LogView({
                   );
                 })}
             </div>
+            <button
+              className="btn btn-ghost btn-block"
+              style={{ marginTop: 10 }}
+              onClick={() => setCreatingExercise(true)}
+            >
+              <Plus size={16} /> Neue Übung erstellen
+            </button>
+            </>
+          )}
         </Modal>
       )}
 
@@ -8486,6 +8610,58 @@ function releaseAudio() {
   // Nothing to release: no channel is held open any more.
 }
 
+// The rest-end tone is placed on the audio clock the moment the rest starts,
+// not fired by a timer when it ends. setInterval is throttled to a standstill
+// as soon as the screen goes off or the app moves to the background, so a
+// timer-driven tone never arrived. The Web Audio clock keeps its own time, so
+// an oscillator started with a delay still sounds. iOS can still suspend the
+// context after a long spell in the background - the vibration in the
+// countdown covers that case.
+let pendingRestBeep = null;
+
+function scheduleRestBeep(delaySeconds, { frequency = 1320, duration = 0.35, volume = 0.6 } = {}) {
+  const ctx = sharedAudioCtx;
+  if (!ctx || ctx.state === "closed") return false;
+  try {
+    if (ctx.state === "suspended") ctx.resume();
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.frequency.value = frequency;
+    osc.type = "sine";
+    const at = ctx.currentTime + Math.max(0, delaySeconds);
+    gain.gain.setValueAtTime(0, at);
+    gain.gain.linearRampToValueAtTime(volume, at + 0.01);
+    gain.gain.linearRampToValueAtTime(0, at + duration);
+    osc.connect(gain).connect(ctx.destination);
+    osc.start(at);
+    osc.stop(at + duration + 0.02);
+    // Once it has sounded it is no longer pending - otherwise a remounted
+    // view would believe a tone is still on the clock and stay silent.
+    osc.onended = () => {
+      if (pendingRestBeep && pendingRestBeep.osc === osc) pendingRestBeep = null;
+    };
+    pendingRestBeep = { osc, gain };
+    return true;
+  } catch (_) {
+    return false;
+  }
+}
+
+// Skipping or extending a rest has to take the already-scheduled tone back
+// off the clock, otherwise it would sound at the original moment anyway.
+function cancelRestBeep() {
+  if (!pendingRestBeep) return;
+  const { osc, gain } = pendingRestBeep;
+  pendingRestBeep = null;
+  try { osc.stop(); } catch (_) {}
+  try { osc.disconnect(); } catch (_) {}
+  try { gain.disconnect(); } catch (_) {}
+}
+
+function hasPendingRestBeep() {
+  return !!pendingRestBeep;
+}
+
 function playBeep({ frequency = 880, duration = 0.18, volume = 0.6 } = {}) {
   const ctx = sharedAudioCtx;
   if (!ctx || ctx.state === "closed") return;
@@ -8628,6 +8804,9 @@ function ProgressView({
   const weeklySetsByGroup = useMemo(() => {
     const since = Date.now() - 7 * 86400000;
     const counts = {};
+    // Subgroup counts nested per main group, so expanding "Beine" doesn't
+    // need a second pass over the logs - both levels come out of one walk.
+    const subCounts = {};
     logs.forEach((l) => {
       if (new Date(l.date).getTime() < since) return;
       logEntries(l).forEach((e) => {
@@ -8636,14 +8815,41 @@ function ProgressView({
         const done = entrySets(e).filter((x) => x.done && !x.warmup).length;
         if (done === 0) return;
         counts[ex.group] = (counts[ex.group] || 0) + done;
+        const subs = getExerciseSubgroups(ex, exerciseSubgroupOverrides);
+        if (!subCounts[ex.group]) subCounts[ex.group] = {};
+        // An exercise with no assigned subgroup, or more than one, still
+        // has to be accounted for somewhere so the breakdown's total keeps
+        // matching the group's total: unassigned work goes to "Sonstige",
+        // and an exercise tagged with several subgroups counts under each -
+        // it genuinely trained all of them, splitting the sets arbitrarily
+        // between them would just be inventing a number.
+        const keys = subs.length > 0 ? subs : ["sonstige"];
+        keys.forEach((key) => {
+          subCounts[ex.group][key] = (subCounts[ex.group][key] || 0) + done;
+        });
       });
     });
     return MUSCLE_GROUPS
-      .map((g) => ({ id: g.id, label: g.label, sets: counts[g.id] || 0 }))
+      .map((g) => {
+        const subDefs = SUBGROUPS[g.id] || [];
+        const subs = subDefs
+          .map((sg) => ({ id: sg.id, label: sg.label, sets: subCounts[g.id]?.[sg.id] || 0 }))
+          .sort((a, b) => b.sets - a.sets);
+        // "Sonstige" always shows, even at zero - otherwise sets that were
+        // just never tagged with a subgroup would silently vanish from the
+        // breakdown instead of reading as "not categorised yet".
+        subs.push({ id: "sonstige", label: "Sonstige", sets: subCounts[g.id]?.sonstige || 0 });
+        return { id: g.id, label: g.label, sets: counts[g.id] || 0, subs };
+      })
       .sort((a, b) => b.sets - a.sets);
-  }, [logs, exBy]);
+  }, [logs, exBy, exerciseSubgroupOverrides]);
   const weeklySetsMax = Math.max(1, ...weeklySetsByGroup.map((g) => g.sets));
   const weeklySetsTotal = weeklySetsByGroup.reduce((sum, g) => sum + g.sets, 0);
+  // Collapsed by default - opening a group is a deliberate look at detail,
+  // not something that should greet you on every visit to the tab.
+  const [expandedGroups, setExpandedGroups] = useState({});
+  const toggleGroupExpanded = (id) =>
+    setExpandedGroups((s) => ({ ...s, [id]: !s[id] }));
 
 
   // Must come after every hook above: bailing out earlier meant this
@@ -8726,18 +8932,48 @@ function ProgressView({
           </div>
         ) : (
           <div style={{ marginTop: 12 }}>
-            {weeklySetsByGroup.map((g) => (
-              <div className="muscle-week-row" key={g.id}>
-                <span className="muscle-week-label">{g.label}</span>
-                <span className="muscle-week-bar">
-                  <span
-                    className={`muscle-week-fill ${g.sets === 0 ? "is-empty" : ""}`}
-                    style={{ width: `${Math.round((g.sets / weeklySetsMax) * 100)}%` }}
-                  />
-                </span>
-                <span className="muscle-week-value">{g.sets}</span>
-              </div>
-            ))}
+            {weeklySetsByGroup.map((g) => {
+              const isExpanded = !!expandedGroups[g.id];
+              const subMax = Math.max(1, ...g.subs.map((sg) => sg.sets));
+              return (
+                <div key={g.id}>
+                  <div
+                    className="muscle-week-row muscle-week-row-clickable"
+                    onClick={() => toggleGroupExpanded(g.id)}
+                  >
+                    <span className="muscle-week-label">{g.label}</span>
+                    <span className="muscle-week-bar">
+                      <span
+                        className={`muscle-week-fill ${g.sets === 0 ? "is-empty" : ""}`}
+                        style={{ width: `${Math.round((g.sets / weeklySetsMax) * 100)}%` }}
+                      />
+                    </span>
+                    <span className="muscle-week-value">{g.sets}</span>
+                    {isExpanded ? (
+                      <ChevronDown size={14} color="var(--text-dim)" />
+                    ) : (
+                      <ChevronRight size={14} color="var(--text-dim)" />
+                    )}
+                  </div>
+                  {isExpanded && (
+                    <div className="muscle-week-subs">
+                      {g.subs.map((sg) => (
+                        <div className="muscle-week-row muscle-week-row-sub" key={sg.id}>
+                          <span className="muscle-week-label">{sg.label}</span>
+                          <span className="muscle-week-bar">
+                            <span
+                              className={`muscle-week-fill ${sg.sets === 0 ? "is-empty" : ""}`}
+                              style={{ width: `${Math.round((sg.sets / subMax) * 100)}%` }}
+                            />
+                          </span>
+                          <span className="muscle-week-value">{sg.sets}</span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
           </div>
         )}
       </div>

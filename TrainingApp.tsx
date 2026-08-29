@@ -32,8 +32,6 @@ import {
 import {
   LineChart,
   Line,
-  AreaChart,
-  Area,
   XAxis,
   YAxis,
   CartesianGrid,
@@ -334,95 +332,6 @@ const toDateKey = (date) => {
   const d = String(date.getDate()).padStart(2, "0");
   return `${y}-${m}-${d}`;
 };
-
-// Monday 00:00 of the calendar week a date falls into. Weekly training
-// volume is only comparable when every bucket covers the same Mon-Sun span.
-function startOfWeek(input) {
-  const date = new Date(input);
-  date.setHours(0, 0, 0, 0);
-  date.setDate(date.getDate() - ((date.getDay() + 6) % 7));
-  return date;
-}
-
-// ISO 8601 week number: the week containing the year's first Thursday is
-// week 1. Matches what a German calendar prints as "KW".
-function isoWeekNumber(input) {
-  const date = new Date(input);
-  date.setHours(0, 0, 0, 0);
-  date.setDate(date.getDate() + 3 - ((date.getDay() + 6) % 7));
-  const firstThursday = new Date(date.getFullYear(), 0, 4);
-  firstThursday.setDate(
-    firstThursday.getDate() + 3 - ((firstThursday.getDay() + 6) % 7)
-  );
-  return 1 + Math.round((date.getTime() - firstThursday.getTime()) / (7 * 86400000));
-}
-
-const WEEK_RANGE_OPTIONS = [4, 8, 12, 26];
-
-// Weekly training volume per muscle group over the last N calendar weeks.
-//
-// Volume = sum of (weight x reps) per completed working set. Sets are counted
-// individually rather than multiplied by a set count: every set is already its
-// own row with its own weight, so multiplying again would square a pyramid.
-//
-// The split between the two result series is decided per set, not per
-// exercise: a set that carries weight goes into the kg series, everything else
-// (bodyweight, bands, planks, sprints) into the set-count series. Pull-ups run
-// with added weight some weeks and without it others, and a per-exercise rule
-// would drop half of that history.
-//
-// Empty weeks are kept as zeroes - leaving them out would compress the gaps
-// and make a two-week break look like continuous training.
-function getWeeklyGroupSeries(logs, exBy, weeks) {
-  const buckets = [];
-  const byKey = {};
-  const current = startOfWeek(new Date());
-  for (let i = weeks - 1; i >= 0; i--) {
-    const start = new Date(current);
-    start.setDate(start.getDate() - i * 7);
-    const bucket = {
-      key: toDateKey(start),
-      label: `KW ${isoWeekNumber(start)}`,
-      volume: {},
-      sets: {},
-    };
-    byKey[bucket.key] = bucket;
-    buckets.push(bucket);
-  }
-
-  (logs || []).forEach((log) => {
-    const bucket = byKey[toDateKey(startOfWeek(log.date))];
-    if (!bucket) return;
-    logEntries(log).forEach((entry) => {
-      const exercise = exBy[entry.exerciseId];
-      if (!exercise) return;
-      entrySets(entry)
-        .filter((set) => set.done && !set.warmup)
-        .forEach((set) => {
-          const weight = toNum(set.weight);
-          const reps = toNum(set.reps);
-          if (weight > 0 && reps > 0) {
-            bucket.volume[exercise.group] =
-              (bucket.volume[exercise.group] || 0) + weight * reps;
-          } else {
-            bucket.sets[exercise.group] = (bucket.sets[exercise.group] || 0) + 1;
-          }
-        });
-    });
-  });
-
-  const build = (field) =>
-    MUSCLE_GROUPS.map((group) => {
-      const data = buckets.map((b) => ({
-        label: b.label,
-        value: Math.round(b[field][group.id] || 0),
-      }));
-      const total = data.reduce((sum, point) => sum + point.value, 0);
-      return { id: group.id, label: group.label, data, total };
-    }).filter((series) => series.total > 0);
-
-  return { volume: build("volume"), sets: build("sets"), weekCount: buckets.length };
-}
 
 // Builds a 6x7 grid (weeks x days) covering the full month plus the
 // leading/trailing days needed to fill complete weeks, Monday-first.
@@ -1811,13 +1720,6 @@ export default function TrainingApp() {
         .chart-card .plan-title {
           padding-left: 4px;
         }
-        .chart-subtitle {
-          display: block;
-          padding-left: 4px;
-          margin-top: 3px;
-          font-size: 11.5px;
-          color: var(--text-dim);
-        }
 
         .stat-section-title {
           display: block;
@@ -1826,12 +1728,6 @@ export default function TrainingApp() {
           font-weight: 600;
           letter-spacing: 0.06em;
           text-transform: uppercase;
-          color: var(--text-dim);
-        }
-        .stat-section-hint {
-          display: block;
-          margin: -4px 2px 10px;
-          font-size: 11.5px;
           color: var(--text-dim);
         }
 
@@ -8337,19 +8233,6 @@ function LogView({
 
 const GYM_LINE_COLORS = ["#c1652e", "#3b82f6", "#16a34a", "#a855f7", "#e11d48"];
 
-// One fixed colour per muscle group, so a group keeps the same identity
-// across every chart instead of shifting when a group has no data.
-const GROUP_COLORS = {
-  brust: "#c1652e",
-  ruecken: "#3b82f6",
-  beine: "#16a34a",
-  schultern: "#e8c547",
-  arme: "#a855f7",
-  rumpf: "#5b9aa8",
-  nacken: "#e11d48",
-};
-const groupColor = (id) => GROUP_COLORS[id] || "#c1652e";
-
 // Recharts takes plain colour strings rather than CSS variables, so the
 // current theme's values are read off the stylesheet once per render.
 function useChartColors(theme) {
@@ -8368,79 +8251,6 @@ function useChartColors(theme) {
       tooltipBorder: read("--border", "#37343c"),
     };
   }, [theme]);
-}
-
-// Area chart of weekly volume (or weekly set count) for a single muscle
-// group. The filled area under the line is the point of it: it makes the
-// amount of work in each stretch of weeks readable at a glance, rather than
-// having to trace a bare line.
-function MuscleAreaChart({ series, unit, chartColors }) {
-  const color = groupColor(series.id);
-  const gradientId = `muscle-area-${unit}-${series.id}`;
-  const average = Math.round(series.total / Math.max(1, series.data.length));
-  const formatValue = (value) =>
-    unit === "kg"
-      ? `${Math.round(value).toLocaleString("de-DE")} kg`
-      : `${Math.round(value)} ${Math.round(value) === 1 ? "Satz" : "Sätze"}`;
-  // At 26 weeks every label would collide, so Recharts thins them out and
-  // always keeps the first and last week readable.
-  const tickInterval = series.data.length > 14 ? "preserveStartEnd" : 0;
-
-  return (
-    <div className="card chart-card">
-      <span className="plan-title">{series.label}</span>
-      <span className="chart-subtitle">
-        {formatValue(series.total)} gesamt · Ø {formatValue(average)} pro Woche
-      </span>
-      <div style={{ height: 165, marginTop: 12 }}>
-        <ResponsiveContainer width="99%" height="100%" debounce={1}>
-          <AreaChart data={series.data} margin={{ top: 6, right: 4, left: -20, bottom: 0 }}>
-            <defs>
-              <linearGradient id={gradientId} x1="0" y1="0" x2="0" y2="1">
-                <stop offset="0%" stopColor={color} stopOpacity={0.5} />
-                <stop offset="100%" stopColor={color} stopOpacity={0.04} />
-              </linearGradient>
-            </defs>
-            <CartesianGrid strokeDasharray="3 3" stroke={chartColors.grid} vertical={false} />
-            <XAxis
-              dataKey="label"
-              stroke={chartColors.axis}
-              fontSize={11}
-              axisLine={false}
-              tickLine={false}
-              interval={tickInterval}
-              minTickGap={8}
-            />
-            <YAxis
-              stroke={chartColors.axis}
-              fontSize={11}
-              axisLine={false}
-              tickLine={false}
-              width={40}
-            />
-            <Tooltip
-              contentStyle={{
-                background: chartColors.tooltipBg,
-                border: `1px solid ${chartColors.tooltipBorder}`,
-                borderRadius: 10,
-                fontSize: 12,
-              }}
-              formatter={(value) => [formatValue(value), unit === "kg" ? "Volumen" : "Sätze"]}
-            />
-            <Area
-              type="monotone"
-              dataKey="value"
-              stroke={color}
-              strokeWidth={2.5}
-              fill={`url(#${gradientId})`}
-              dot={false}
-              activeDot={{ r: 4 }}
-            />
-          </AreaChart>
-        </ResponsiveContainer>
-      </div>
-    </div>
-  );
 }
 
 function ExerciseCharts({ logs, exerciseId, isTimeBased, theme, gyms = [] }) {
@@ -8777,7 +8587,6 @@ function ProgressView({
   // rarely the one being looked for.
   const [selected, setSelected] = useState("");
   const [exerciseQuery, setExerciseQuery] = useState("");
-  const [volumeWeeks, setVolumeWeeks] = useState(12);
   const [selectedExerciseId, setSelectedExerciseId] = useState(null);
   const selectedExercise = exercises.find((e) => e.id === selectedExerciseId) || null;
 
@@ -8793,12 +8602,6 @@ function ProgressView({
       .sort((a, b) => (exBy[a]?.name || "").localeCompare(exBy[b]?.name || "", "de"))
       .slice(0, 12);
   }, [exerciseQuery, exerciseIdsWithData, exBy]);
-
-  const weeklySeries = useMemo(
-    () => getWeeklyGroupSeries(logs, exBy, volumeWeeks),
-    [logs, exBy, volumeWeeks]
-  );
-  const chartColors = useChartColors(theme);
 
   const subTabs = (
     <div className="sub-tab-row">
@@ -8938,42 +8741,6 @@ function ProgressView({
           </div>
         )}
       </div>
-
-      <span className="stat-section-title">Volumenverlauf</span>
-      <div className="chip-row">
-        {WEEK_RANGE_OPTIONS.map((w) => (
-          <span
-            key={w}
-            className={`chip ${volumeWeeks === w ? "active" : ""}`}
-            onClick={() => setVolumeWeeks(w)}
-          >
-            {w} Wochen
-          </span>
-        ))}
-      </div>
-
-      {weeklySeries.volume.length === 0 ? (
-        <div className="empty-state">
-          Keine Sätze mit Gewicht in diesem Zeitraum.
-        </div>
-      ) : (
-        weeklySeries.volume.map((series) => (
-          <MuscleAreaChart key={series.id} series={series} unit="kg" chartColors={chartColors} />
-        ))
-      )}
-
-      {weeklySeries.sets.length > 0 && (
-        <>
-          <span className="stat-section-title">Körpergewicht &amp; Zeit</span>
-          <span className="stat-section-hint">
-            Sätze pro Woche — hier gibt es kein Gewicht, das sich sinnvoll multiplizieren
-            ließe, also zählt die Häufigkeit.
-          </span>
-          {weeklySeries.sets.map((series) => (
-            <MuscleAreaChart key={series.id} series={series} unit="sets" chartColors={chartColors} />
-          ))}
-        </>
-      )}
 
       <span className="stat-section-title">Einzelne Übung ansehen</span>
       <div className="search-box">

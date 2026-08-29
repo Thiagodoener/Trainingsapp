@@ -32,6 +32,8 @@ import {
 import {
   LineChart,
   Line,
+  AreaChart,
+  Area,
   XAxis,
   YAxis,
   CartesianGrid,
@@ -333,6 +335,95 @@ const toDateKey = (date) => {
   return `${y}-${m}-${d}`;
 };
 
+// Monday 00:00 of the calendar week a date falls into. Weekly training
+// volume is only comparable when every bucket covers the same Mon-Sun span.
+function startOfWeek(input) {
+  const date = new Date(input);
+  date.setHours(0, 0, 0, 0);
+  date.setDate(date.getDate() - ((date.getDay() + 6) % 7));
+  return date;
+}
+
+// ISO 8601 week number: the week containing the year's first Thursday is
+// week 1. Matches what a German calendar prints as "KW".
+function isoWeekNumber(input) {
+  const date = new Date(input);
+  date.setHours(0, 0, 0, 0);
+  date.setDate(date.getDate() + 3 - ((date.getDay() + 6) % 7));
+  const firstThursday = new Date(date.getFullYear(), 0, 4);
+  firstThursday.setDate(
+    firstThursday.getDate() + 3 - ((firstThursday.getDay() + 6) % 7)
+  );
+  return 1 + Math.round((date.getTime() - firstThursday.getTime()) / (7 * 86400000));
+}
+
+const WEEK_RANGE_OPTIONS = [4, 8, 12, 26];
+
+// Weekly training volume per muscle group over the last N calendar weeks.
+//
+// Volume = sum of (weight x reps) per completed working set. Sets are counted
+// individually rather than multiplied by a set count: every set is already its
+// own row with its own weight, so multiplying again would square a pyramid.
+//
+// The split between the two result series is decided per set, not per
+// exercise: a set that carries weight goes into the kg series, everything else
+// (bodyweight, bands, planks, sprints) into the set-count series. Pull-ups run
+// with added weight some weeks and without it others, and a per-exercise rule
+// would drop half of that history.
+//
+// Empty weeks are kept as zeroes - leaving them out would compress the gaps
+// and make a two-week break look like continuous training.
+function getWeeklyGroupSeries(logs, exBy, weeks) {
+  const buckets = [];
+  const byKey = {};
+  const current = startOfWeek(new Date());
+  for (let i = weeks - 1; i >= 0; i--) {
+    const start = new Date(current);
+    start.setDate(start.getDate() - i * 7);
+    const bucket = {
+      key: toDateKey(start),
+      label: `KW ${isoWeekNumber(start)}`,
+      volume: {},
+      sets: {},
+    };
+    byKey[bucket.key] = bucket;
+    buckets.push(bucket);
+  }
+
+  (logs || []).forEach((log) => {
+    const bucket = byKey[toDateKey(startOfWeek(log.date))];
+    if (!bucket) return;
+    logEntries(log).forEach((entry) => {
+      const exercise = exBy[entry.exerciseId];
+      if (!exercise) return;
+      entrySets(entry)
+        .filter((set) => set.done && !set.warmup)
+        .forEach((set) => {
+          const weight = toNum(set.weight);
+          const reps = toNum(set.reps);
+          if (weight > 0 && reps > 0) {
+            bucket.volume[exercise.group] =
+              (bucket.volume[exercise.group] || 0) + weight * reps;
+          } else {
+            bucket.sets[exercise.group] = (bucket.sets[exercise.group] || 0) + 1;
+          }
+        });
+    });
+  });
+
+  const build = (field) =>
+    MUSCLE_GROUPS.map((group) => {
+      const data = buckets.map((b) => ({
+        label: b.label,
+        value: Math.round(b[field][group.id] || 0),
+      }));
+      const total = data.reduce((sum, point) => sum + point.value, 0);
+      return { id: group.id, label: group.label, data, total };
+    }).filter((series) => series.total > 0);
+
+  return { volume: build("volume"), sets: build("sets"), weekCount: buckets.length };
+}
+
 // Builds a 6x7 grid (weeks x days) covering the full month plus the
 // leading/trailing days needed to fill complete weeks, Monday-first.
 function getMonthMatrix(year, month) {
@@ -359,8 +450,15 @@ function getMonthMatrix(year, month) {
 // recorded sets were done on time (automatic mode writes targetUseTime into
 // the log). Without this, a HIT workout would show up as a weight exercise
 // with 0 kg in the stats and charts.
+// Whether an exercise is treated as time-based (seconds) rather than reps.
+// A manual choice always wins, including an explicit "off" - once someone
+// has set this, old logs from before that choice must not override it.
+// Only an exercise that was never set at all falls back to guessing from
+// its log history.
 function isTimeBasedInLogs(logs, exerciseId, timeBasedExercises) {
-  if (timeBasedExercises && timeBasedExercises[exerciseId]) return true;
+  if (timeBasedExercises && Object.prototype.hasOwnProperty.call(timeBasedExercises, exerciseId)) {
+    return !!timeBasedExercises[exerciseId];
+  }
   return (logs || []).some((l) =>
     logEntries(l).some((e) => e.exerciseId === exerciseId && e.targetUseTime)
   );
@@ -654,7 +752,7 @@ function calculateTrainingStats(logs, exBy, timeBasedExercises) {
       if (!entry) return;
       const ex = exBy[entry.exerciseId];
       if (!ex) return;
-      const timeBased = !!timeBasedExercises[entry.exerciseId];
+      const timeBased = isTimeBasedInLogs(logs, entry.exerciseId, timeBasedExercises);
       (Array.isArray(entry.sets) ? entry.sets : []).forEach((set) => {
         if (!set || !set.done || set.warmup) return;
         totalSets += 1;
@@ -1713,6 +1811,41 @@ export default function TrainingApp() {
         .chart-card .plan-title {
           padding-left: 4px;
         }
+        .chart-subtitle {
+          display: block;
+          padding-left: 4px;
+          margin-top: 3px;
+          font-size: 11.5px;
+          color: var(--text-dim);
+        }
+
+        .stat-section-title {
+          display: block;
+          margin: 20px 2px 10px;
+          font-size: 12px;
+          font-weight: 600;
+          letter-spacing: 0.06em;
+          text-transform: uppercase;
+          color: var(--text-dim);
+        }
+        .stat-section-hint {
+          display: block;
+          margin: -4px 2px 10px;
+          font-size: 11.5px;
+          color: var(--text-dim);
+        }
+
+        .stat-search-head {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          gap: 10px;
+          margin: 0 2px 10px;
+        }
+        .stat-search-head .ex-name {
+          font-size: 14px;
+          font-weight: 600;
+        }
 
         .stats-grid {
           display: grid;
@@ -2511,6 +2644,16 @@ export default function TrainingApp() {
           border-color: var(--brass);
           color: var(--bg);
         }
+        .note-toggle-inline {
+          width: auto;
+          height: auto;
+          padding: 6px 10px;
+          border-radius: 8px;
+          gap: 6px;
+          font-size: 12.5px;
+          font-family: 'Inter', sans-serif;
+          margin: 4px 0 6px;
+        }
         .floating-timer {
           position: fixed;
           top: calc(env(safe-area-inset-top) + 8px);
@@ -3227,7 +3370,7 @@ export default function TrainingApp() {
                   // recognised in a HIT workout.
                   const isTimeBased =
                     (session.autoRun && entry.autoRun !== false) ||
-                    !!timeBasedExercises[entry.exerciseId] ||
+                    isTimeBasedInLogs(logs, entry.exerciseId, timeBasedExercises) ||
                     !!entry.targetUseTime;
                   const best = getExerciseHistory(
                     logs, entry.exerciseId, cleaned.id, isTimeBased, cleaned.gymId
@@ -5090,8 +5233,8 @@ function ExerciseDetailSheet({
           )}
           <div className="quick-toggle-row">
             <button
-              className={`chip chip-sm ${!!timeBasedExercises[exercise.id] ? "active" : ""}`}
-              onClick={() => onToggleTimeBased(exercise.id, !timeBasedExercises[exercise.id])}
+              className={`chip chip-sm ${isTimeBasedExercise ? "active" : ""}`}
+              onClick={() => onToggleTimeBased(exercise.id, !isTimeBasedExercise)}
               title="Zeitangabe für diese Übung aktivieren (z. B. Plank, Sprints)"
             >
               <Clock size={11} /> Zeitbasiert
@@ -7598,7 +7741,7 @@ function LogView({
         const isTimeBased =
           entryAutoRuns(entry) && session.autoRun
             ? true
-            : !!timeBasedExercises[entry.exerciseId] || !!entry.targetUseTime;
+            : isTimeBasedInLogs(logs, entry.exerciseId, timeBasedExercises) || !!entry.targetUseTime;
         // Comparing against the same gym only - a record set on a machine
         // that runs lighter elsewhere is not a record here.
         const history = getExerciseHistory(logs, entry.exerciseId, session.id, isTimeBased, session.gymId);
@@ -7694,16 +7837,6 @@ function LogView({
                     >
                       <Timer size={14} />
                       Pausenzeit{entry.restSeconds != null ? ` · ${getRestDurationFor(entry.exerciseId)}s` : ""}
-                    </button>
-                    <button
-                      className="program-menu-item"
-                      onClick={() => {
-                        toggleEntryNotes(entry.exerciseId);
-                        setOpenEntryMenu(null);
-                      }}
-                    >
-                      <StickyNote size={14} />
-                      Notiz{entry.notes ? " · gesetzt" : ""}
                     </button>
                     <button
                       className="program-menu-item"
@@ -7864,27 +7997,27 @@ function LogView({
               </div>
             )}
 
-            {/* The note is shown as an editable field instead of a static
-                line: it is the same permanent note, so reading and changing
-                it should not be two different places. */}
-            {(history.lastNote || entry.notes) && !openNotes[entry.exerciseId] && (
+            {/* Single note control: a slim toggle so the entry stays compact,
+                expanding into the same editable field whether there's
+                already a note or not - there is no separate place to add a
+                first note versus edit an existing one. */}
+            <button
+              type="button"
+              className={`note-toggle note-toggle-inline ${entry.notes ? "has-note" : ""}`}
+              onClick={() => toggleEntryNotes(entry.exerciseId)}
+            >
+              <StickyNote size={14} />
+              Notiz{entry.notes ? " · gesetzt" : ""}
+            </button>
+
+            {openNotes[entry.exerciseId] && (
               <textarea
                 className="session-notes note-inline"
-                placeholder="Notiz zu dieser Übung…"
+                placeholder="Notiz zu dieser Übung, z. B. Ausführung, Beschwerden, Griffweite…"
+                autoFocus
                 value={entry.notes || history.lastNote || ""}
                 onChange={(e) => updateEntryNotes(entry.exerciseId, e.target.value)}
               />
-            )}
-
-            {openNotes[entry.exerciseId] && (
-              <div style={{ marginTop: 8 }}>
-                <textarea
-                  className="session-notes"
-                  placeholder="Notiz zu dieser Übung, z. B. Ausführung, Beschwerden, Griffweite…"
-                  value={entry.notes || ""}
-                  onChange={(e) => updateEntryNotes(entry.exerciseId, e.target.value)}
-                />
-              </div>
             )}
 
             {entry.sets.length > 0 && (
@@ -8204,10 +8337,23 @@ function LogView({
 
 const GYM_LINE_COLORS = ["#c1652e", "#3b82f6", "#16a34a", "#a855f7", "#e11d48"];
 
-function ExerciseCharts({ logs, exerciseId, isTimeBased, theme, gyms = [] }) {
-  // Recharts takes plain colour strings rather than CSS variables, so the
-  // current theme's values are read off the stylesheet once per render.
-  const chartColors = useMemo(() => {
+// One fixed colour per muscle group, so a group keeps the same identity
+// across every chart instead of shifting when a group has no data.
+const GROUP_COLORS = {
+  brust: "#c1652e",
+  ruecken: "#3b82f6",
+  beine: "#16a34a",
+  schultern: "#e8c547",
+  arme: "#a855f7",
+  rumpf: "#5b9aa8",
+  nacken: "#e11d48",
+};
+const groupColor = (id) => GROUP_COLORS[id] || "#c1652e";
+
+// Recharts takes plain colour strings rather than CSS variables, so the
+// current theme's values are read off the stylesheet once per render.
+function useChartColors(theme) {
+  return useMemo(() => {
     const read = (name, fallback) => {
       if (typeof window === "undefined") return fallback;
       const shell = document.querySelector(".app-shell");
@@ -8222,6 +8368,83 @@ function ExerciseCharts({ logs, exerciseId, isTimeBased, theme, gyms = [] }) {
       tooltipBorder: read("--border", "#37343c"),
     };
   }, [theme]);
+}
+
+// Area chart of weekly volume (or weekly set count) for a single muscle
+// group. The filled area under the line is the point of it: it makes the
+// amount of work in each stretch of weeks readable at a glance, rather than
+// having to trace a bare line.
+function MuscleAreaChart({ series, unit, chartColors }) {
+  const color = groupColor(series.id);
+  const gradientId = `muscle-area-${unit}-${series.id}`;
+  const average = Math.round(series.total / Math.max(1, series.data.length));
+  const formatValue = (value) =>
+    unit === "kg"
+      ? `${Math.round(value).toLocaleString("de-DE")} kg`
+      : `${Math.round(value)} ${Math.round(value) === 1 ? "Satz" : "Sätze"}`;
+  // At 26 weeks every label would collide, so Recharts thins them out and
+  // always keeps the first and last week readable.
+  const tickInterval = series.data.length > 14 ? "preserveStartEnd" : 0;
+
+  return (
+    <div className="card chart-card">
+      <span className="plan-title">{series.label}</span>
+      <span className="chart-subtitle">
+        {formatValue(series.total)} gesamt · Ø {formatValue(average)} pro Woche
+      </span>
+      <div style={{ height: 165, marginTop: 12 }}>
+        <ResponsiveContainer width="99%" height="100%" debounce={1}>
+          <AreaChart data={series.data} margin={{ top: 6, right: 4, left: -20, bottom: 0 }}>
+            <defs>
+              <linearGradient id={gradientId} x1="0" y1="0" x2="0" y2="1">
+                <stop offset="0%" stopColor={color} stopOpacity={0.5} />
+                <stop offset="100%" stopColor={color} stopOpacity={0.04} />
+              </linearGradient>
+            </defs>
+            <CartesianGrid strokeDasharray="3 3" stroke={chartColors.grid} vertical={false} />
+            <XAxis
+              dataKey="label"
+              stroke={chartColors.axis}
+              fontSize={11}
+              axisLine={false}
+              tickLine={false}
+              interval={tickInterval}
+              minTickGap={8}
+            />
+            <YAxis
+              stroke={chartColors.axis}
+              fontSize={11}
+              axisLine={false}
+              tickLine={false}
+              width={40}
+            />
+            <Tooltip
+              contentStyle={{
+                background: chartColors.tooltipBg,
+                border: `1px solid ${chartColors.tooltipBorder}`,
+                borderRadius: 10,
+                fontSize: 12,
+              }}
+              formatter={(value) => [formatValue(value), unit === "kg" ? "Volumen" : "Sätze"]}
+            />
+            <Area
+              type="monotone"
+              dataKey="value"
+              stroke={color}
+              strokeWidth={2.5}
+              fill={`url(#${gradientId})`}
+              dot={false}
+              activeDot={{ r: 4 }}
+            />
+          </AreaChart>
+        </ResponsiveContainer>
+      </div>
+    </div>
+  );
+}
+
+function ExerciseCharts({ logs, exerciseId, isTimeBased, theme, gyms = [] }) {
+  const chartColors = useChartColors(theme);
 
   const selectedIsTimeBased = isTimeBased;
   const selected = exerciseId;
@@ -8549,17 +8772,33 @@ function ProgressView({
     return Array.from(ids).filter((id) => !!exBy[id]);
   }, [logs, exBy]);
 
-  const [selected, setSelected] = useState(exerciseIdsWithData[0] || "");
+  // Nothing is charted until it is asked for: opening the tab used to expand
+  // up to four charts for whichever exercise happened to be first, which is
+  // rarely the one being looked for.
+  const [selected, setSelected] = useState("");
+  const [exerciseQuery, setExerciseQuery] = useState("");
+  const [volumeWeeks, setVolumeWeeks] = useState(12);
   const [selectedExerciseId, setSelectedExerciseId] = useState(null);
   const selectedExercise = exercises.find((e) => e.id === selectedExerciseId) || null;
 
   useEffect(() => {
-    if (exerciseIdsWithData.length === 0) {
-      setSelected("");
-    } else if (!exerciseIdsWithData.includes(selected)) {
-      setSelected(exerciseIdsWithData[0]);
-    }
+    if (selected && !exerciseIdsWithData.includes(selected)) setSelected("");
   }, [exerciseIdsWithData, selected]);
+
+  const searchResults = useMemo(() => {
+    const needle = exerciseQuery.trim().toLowerCase();
+    if (!needle) return [];
+    return exerciseIdsWithData
+      .filter((id) => (exBy[id]?.name || "").toLowerCase().includes(needle))
+      .sort((a, b) => (exBy[a]?.name || "").localeCompare(exBy[b]?.name || "", "de"))
+      .slice(0, 12);
+  }, [exerciseQuery, exerciseIdsWithData, exBy]);
+
+  const weeklySeries = useMemo(
+    () => getWeeklyGroupSeries(logs, exBy, volumeWeeks),
+    [logs, exBy, volumeWeeks]
+  );
+  const chartColors = useChartColors(theme);
 
   const subTabs = (
     <div className="sub-tab-row">
@@ -8700,29 +8939,105 @@ function ProgressView({
         )}
       </div>
 
+      <span className="stat-section-title">Volumenverlauf</span>
       <div className="chip-row">
-        {exerciseIdsWithData.map((id) => (
+        {WEEK_RANGE_OPTIONS.map((w) => (
           <span
-            key={id}
-            className={`chip ${selected === id ? "active" : ""}`}
-            onClick={() => setSelected(id)}
+            key={w}
+            className={`chip ${volumeWeeks === w ? "active" : ""}`}
+            onClick={() => setVolumeWeeks(w)}
           >
-            {exBy[id]?.name}
+            {w} Wochen
           </span>
         ))}
       </div>
 
-      {selected && (
-        <div
-          className="ex-name-clickable"
-          style={{ fontSize: 12.5, color: "var(--text-dim)", marginBottom: 10 }}
-          onClick={() => setSelectedExerciseId(selected)}
-        >
-          Verlauf &amp; Notizen zu "{exBy[selected]?.name}" ansehen
+      {weeklySeries.volume.length === 0 ? (
+        <div className="empty-state">
+          Keine Sätze mit Gewicht in diesem Zeitraum.
+        </div>
+      ) : (
+        weeklySeries.volume.map((series) => (
+          <MuscleAreaChart key={series.id} series={series} unit="kg" chartColors={chartColors} />
+        ))
+      )}
+
+      {weeklySeries.sets.length > 0 && (
+        <>
+          <span className="stat-section-title">Körpergewicht &amp; Zeit</span>
+          <span className="stat-section-hint">
+            Sätze pro Woche — hier gibt es kein Gewicht, das sich sinnvoll multiplizieren
+            ließe, also zählt die Häufigkeit.
+          </span>
+          {weeklySeries.sets.map((series) => (
+            <MuscleAreaChart key={series.id} series={series} unit="sets" chartColors={chartColors} />
+          ))}
+        </>
+      )}
+
+      <span className="stat-section-title">Einzelne Übung ansehen</span>
+      <div className="search-box">
+        <Search size={16} color="var(--text-dim)" />
+        <input
+          placeholder="Übung suchen…"
+          value={exerciseQuery}
+          onChange={(e) => setExerciseQuery(e.target.value)}
+        />
+        {exerciseQuery && (
+          <button
+            className="btn-icon"
+            onClick={() => setExerciseQuery("")}
+            title="Suche leeren"
+          >
+            <X size={14} />
+          </button>
+        )}
+      </div>
+
+      {exerciseQuery.trim() !== "" && (
+        <div className="card">
+          {searchResults.length === 0 ? (
+            <div className="empty-state">Keine Übung mit Trainingsdaten gefunden.</div>
+          ) : (
+            searchResults.map((id) => (
+              <div
+                className="ex-row ex-row-clickable"
+                key={id}
+                onClick={() => {
+                  setSelected(id);
+                  setExerciseQuery("");
+                }}
+              >
+                <span className="ex-name">{exBy[id]?.name}</span>
+                <ChevronRight size={15} color="var(--text-dim)" />
+              </div>
+            ))
+          )}
         </div>
       )}
 
-      <ExerciseCharts logs={logs} exerciseId={selected} isTimeBased={selectedIsTimeBased} theme={theme} gyms={gyms} />
+      {selected && (
+        <>
+          <div className="stat-search-head">
+            <span
+              className="ex-name ex-name-clickable"
+              onClick={() => setSelectedExerciseId(selected)}
+            >
+              {exBy[selected]?.name}
+            </span>
+            <button className="btn-icon" onClick={() => setSelected("")} title="Schließen">
+              <X size={15} />
+            </button>
+          </div>
+          <ExerciseCharts
+            logs={logs}
+            exerciseId={selected}
+            isTimeBased={selectedIsTimeBased}
+            theme={theme}
+            gyms={gyms}
+          />
+        </>
+      )}
 
       {selectedExercise && (
         <ExerciseDetailSheet
@@ -8859,7 +9174,7 @@ function HistoryView({
                 {logEntries(log).map((entry) => {
                   const ex = exBy[entry.exerciseId];
                   if (!ex) return null;
-                  const isTimeBased = !!timeBasedExercises[entry.exerciseId];
+                  const isTimeBased = isTimeBasedInLogs(logs, entry.exerciseId, timeBasedExercises);
                   const workingSets = entrySets(entry).filter((s) => !s.warmup);
                   const summary = workingSets
                     .map((s) =>

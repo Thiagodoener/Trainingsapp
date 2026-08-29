@@ -28,6 +28,7 @@ import {
   Repeat,
   Sun,
   Moon,
+  Mic,
 } from "lucide-react";
 import {
   LineChart,
@@ -3000,6 +3001,119 @@ export default function TrainingApp() {
           border-radius: 10px;
           padding: 10px 12px;
         }
+
+        /* === Voice Control Styles === */
+        .voice-btn {
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          width: 36px;
+          height: 36px;
+          border-radius: 10px;
+          border: 1px solid var(--border);
+          background: var(--surface-alt);
+          color: var(--text-dim);
+          cursor: pointer;
+          transition: all 200ms ease;
+          flex-shrink: 0;
+          margin-left: 8px;
+        }
+        .voice-btn:hover {
+          border-color: var(--accent);
+          color: var(--accent);
+        }
+        .voice-btn:active { transform: scale(0.95); }
+        .voice-btn.is-listening {
+          background: var(--danger);
+          border-color: var(--danger);
+          color: white;
+          animation: voice-btn-pulse 1.5s ease-in-out infinite;
+        }
+        @keyframes voice-btn-pulse {
+          0%, 100% { box-shadow: 0 0 0 0 rgba(216, 90, 79, 0.4); }
+          50% { box-shadow: 0 0 0 8px rgba(216, 90, 79, 0); }
+        }
+        .voice-feedback {
+          background: var(--surface-alt);
+          border: 1px solid var(--accent);
+          border-radius: 12px;
+          padding: 12px 16px;
+          margin-bottom: 12px;
+          display: flex;
+          align-items: center;
+          gap: 12px;
+          animation: voice-slide-in 200ms ease;
+        }
+        @keyframes voice-slide-in {
+          from { opacity: 0; transform: translateY(-8px); }
+          to { opacity: 1; transform: translateY(0); }
+        }
+        .voice-feedback.voice-error {
+          border-color: var(--danger);
+          color: var(--danger);
+        }
+        .voice-feedback-inner {
+          display: flex;
+          align-items: center;
+          gap: 12px;
+          width: 100%;
+        }
+        .voice-pulse {
+          width: 10px;
+          height: 10px;
+          border-radius: 50%;
+          background: var(--accent);
+          flex-shrink: 0;
+          animation: voice-pulse-dot 1s ease-in-out infinite;
+        }
+        @keyframes voice-pulse-dot {
+          0%, 100% { transform: scale(1); opacity: 1; }
+          50% { transform: scale(1.6); opacity: 0.5; }
+        }
+        .voice-feedback-text {
+          font-size: 13px;
+          font-weight: 500;
+          color: var(--text);
+          flex: 1;
+          min-width: 0;
+          overflow: hidden;
+          text-overflow: ellipsis;
+          white-space: nowrap;
+        }
+        .voice-error .voice-feedback-text { color: var(--danger); }
+        .voice-hint-list {
+          background: var(--surface-alt);
+          border: 1px solid var(--border);
+          border-radius: 10px;
+          padding: 12px 14px;
+          margin-bottom: 12px;
+          animation: voice-slide-in 200ms ease;
+        }
+        .voice-hint-title {
+          font-size: 11px;
+          font-weight: 600;
+          text-transform: uppercase;
+          letter-spacing: 0.5px;
+          color: var(--text-dim);
+          margin-bottom: 8px;
+        }
+        .voice-hint-item {
+          font-size: 12.5px;
+          color: var(--text-dim);
+          padding: 3px 0;
+          line-height: 1.5;
+        }
+        .voice-hint-item::before {
+          content: "›";
+          color: var(--accent);
+          margin-right: 6px;
+          font-weight: 700;
+        }
+        @media (max-width: 380px) {
+          .voice-btn { width: 32px; height: 32px; }
+          .voice-feedback { padding: 10px 12px; }
+          .voice-hint-list { display: none; }
+        }
       `}</style>
 
       <div className="content" onScroll={handleContentScroll}>
@@ -3023,6 +3137,8 @@ export default function TrainingApp() {
             onCreateCategory={createCalendarCategory}
             onDeleteCategory={deleteCalendarCategory}
             onStartScheduledWorkout={startScheduledWorkout}
+            setTab={setTab}
+            showToast={showToast}
           />
         ) : tab === "exercises" ? (
           <ExercisesView
@@ -3693,6 +3809,450 @@ export default function TrainingApp() {
   );
 }
 
+// ---------------------------------------------------------------------------
+// Voice Control: Sprachsteuerung für den Kalender
+// ---------------------------------------------------------------------------
+// Nutzt die Web Speech API (SpeechRecognition), verfügbar in Chrome, Edge
+// und Opera. Push-to-Talk-Modus: stoppt nach einer Äußerung automatisch.
+// Kein Backend, keine externen Abhängigkeiten.
+// ---------------------------------------------------------------------------
+
+const WEEKDAYS_DE = [
+  "sonntag", "montag", "dienstag", "mittwoch",
+  "donnerstag", "freitag", "samstag",
+];
+
+const MONTHS_DE = [
+  { names: ["januar", "jan", "jan."], index: 0 },
+  { names: ["februar", "feb", "feb."], index: 1 },
+  { names: ["märz", "maerz", "mar", "mär", "mar."], index: 2 },
+  { names: ["april", "apr", "apr."], index: 3 },
+  { names: ["mai"], index: 4 },
+  { names: ["juni", "jun", "jun."], index: 5 },
+  { names: ["juli", "jul", "jul."], index: 6 },
+  { names: ["august", "aug", "aug."], index: 7 },
+  { names: ["september", "sep", "sep.", "sept"], index: 8 },
+  { names: ["oktober", "okt", "okt."], index: 9 },
+  { names: ["november", "nov", "nov."], index: 10 },
+  { names: ["dezember", "dez", "dez."], index: 11 },
+];
+
+// Deutsche Zahlwörter -> Ziffern (für "fünfzehnter" etc.)
+const WORD_TO_NUM = {};
+const _NUMBER_WORDS = [
+  [["eins", "eine", "einer", "eines", "erst", "erste", "erster", "erstes"], 1],
+  [["zwei", "zweiter", "zweite", "zweites"], 2],
+  [["drei", "dritter", "dritte", "drittes"], 3],
+  [["vier", "vierter", "vierte", "viertes"], 4],
+  [["fünf", "fünfter", "fünfte", "fünftes", "fuenf", "fuenfter"], 5],
+  [["sechs", "sechster", "sechste", "sechstes"], 6],
+  [["sieben", "siebter", "siebte", "siebtes"], 7],
+  [["acht", "achter", "achte", "achtes"], 8],
+  [["neun", "neunter", "neunte", "neuntes"], 9],
+  [["zehn", "zehnter", "zehnte", "zehntes"], 10],
+  [["elf", "elfter", "elfte", "elftes"], 11],
+  [["zwölf", "zwölfter", "zwölfte", "zwölftes", "zwoelf", "zwoelfter"], 12],
+  [["dreizehn", "dreizehnter", "dreizehnte"], 13],
+  [["vierzehn", "vierzehnter", "vierzehnte"], 14],
+  [["fünfzehn", "fünfzehnter", "fünfzehnte", "fuenfzehn", "fuenfzehnter"], 15],
+  [["sechzehn", "sechzehnter", "sechzehnte"], 16],
+  [["siebzehn", "siebzehnter", "siebzehnte"], 17],
+  [["achtzehn", "achtzehnter", "achtzehnte"], 18],
+  [["neunzehn", "neunzehnter", "neunzehnte"], 19],
+  [["zwanzig", "zwanzigster", "zwanzigste"], 20],
+  [["einundzwanzig", "einundzwanzigster"], 21],
+  [["zweiundzwanzig", "zweiundzwanzigster"], 22],
+  [["dreiundzwanzig", "dreiundzwanzigster"], 23],
+  [["vierundzwanzig", "vierundzwanzigster"], 24],
+  [["fünfundzwanzig", "fünfundzwanzigster", "fuenfundzwanzig", "fuenfundzwanzigster"], 25],
+  [["sechsundzwanzig", "sechsundzwanzigster"], 26],
+  [["siebenundzwanzig", "siebenundzwanzigster"], 27],
+  [["achtundzwanzig", "achtundzwanzigster"], 28],
+  [["neunundzwanzig", "neunundzwanzigster"], 29],
+  [["dreißig", "dreißigster", "dreißigste", "dreissig", "dreissigster"], 30],
+  [["einunddreißig", "einunddreißigster", "einunddreissig", "einunddreissigster"], 31],
+];
+for (const [words, num] of _NUMBER_WORDS) {
+  for (const w of words) WORD_TO_NUM[w] = num;
+}
+
+function _wordToNumber(word) {
+  const clean = word.toLowerCase().replace(/[.,]/g, "").trim();
+  if (WORD_TO_NUM[clean] !== undefined) return WORD_TO_NUM[clean];
+  const direct = parseInt(clean, 10);
+  if (!isNaN(direct) && direct >= 1 && direct <= 31) return direct;
+  return null;
+}
+
+function _findMonth(text) {
+  const lower = text.toLowerCase();
+  for (const m of MONTHS_DE) {
+    for (const name of m.names) {
+      const re = new RegExp(`\\b${name.replace(/\./g, "\\.")}\\b`, "i");
+      if (re.test(lower)) return m.index;
+    }
+  }
+  return -1;
+}
+
+/**
+ * Wandelt gesprochene deutsche Datumsangaben in YYYY-MM-DD um.
+ * Unterstützt: heute, morgen, übermorgen, gestern, nächste Woche,
+ * nächsten Montag, 15. März, fünfzehnter März, 15.3.
+ */
+function parseSpokenDate(text) {
+  if (!text) return null;
+  const lower = text.toLowerCase().trim();
+  const now = new Date();
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const toKey = (d) => {
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, "0");
+    const dd = String(d.getDate()).padStart(2, "0");
+    return `${y}-${m}-${dd}`;
+  };
+
+  if (lower === "heute" || lower.includes("heute")) return toKey(today);
+  if (lower.includes("uebermorgen") || lower.includes("übermorgen")) {
+    const d = new Date(today); d.setDate(d.getDate() + 2); return toKey(d);
+  }
+  if (lower.includes("morgen") && !lower.includes("ueber") && !lower.includes("über")) {
+    const d = new Date(today); d.setDate(d.getDate() + 1); return toKey(d);
+  }
+  if (lower.includes("gestern")) {
+    const d = new Date(today); d.setDate(d.getDate() - 1); return toKey(d);
+  }
+  if (lower.includes("nächste woche") || lower.includes("naechste woche")) {
+    const d = new Date(today); d.setDate(d.getDate() + 7); return toKey(d);
+  }
+  if (lower.includes("letzte woche")) {
+    const d = new Date(today); d.setDate(d.getDate() - 7); return toKey(d);
+  }
+
+  // "nächsten Montag"
+  const nextWd = lower.match(/nächst(?:e|en|er|es)?\s+(montag|dienstag|mittwoch|donnerstag|freitag|samstag|sonntag)/);
+  if (nextWd) {
+    const target = WEEKDAYS_DE.indexOf(nextWd[1]);
+    if (target !== -1) {
+      const d = new Date(today);
+      let diff = target - d.getDay();
+      if (diff <= 0) diff += 7;
+      d.setDate(d.getDate() + diff); return toKey(d);
+    }
+  }
+
+  // "letzten Freitag"
+  const lastWd = lower.match(/letzt(?:e|en|er|es)?\s+(montag|dienstag|mittwoch|donnerstag|freitag|samstag|sonntag)/);
+  if (lastWd) {
+    const target = WEEKDAYS_DE.indexOf(lastWd[1]);
+    if (target !== -1) {
+      const d = new Date(today);
+      let diff = target - d.getDay();
+      if (diff >= 0) diff -= 7;
+      d.setDate(d.getDate() + diff); return toKey(d);
+    }
+  }
+
+  // Alleinstehender Wochentag -> nächstes Vorkommen
+  for (let i = 0; i < WEEKDAYS_DE.length; i++) {
+    const re = new RegExp(`\\b${WEEKDAYS_DE[i]}\\b`, "i");
+    if (re.test(lower)) {
+      const d = new Date(today);
+      let diff = i - d.getDay();
+      if (diff <= 0) diff += 7;
+      d.setDate(d.getDate() + diff); return toKey(d);
+    }
+  }
+
+  // "15. März" / "fünfzehnter März"
+  const monthIdx = _findMonth(lower);
+  if (monthIdx !== -1) {
+    const words = lower.split(/\s+/);
+    let day = null;
+    for (const w of words) {
+      const n = _wordToNumber(w);
+      if (n !== null && n >= 1 && n <= 31) { day = n; break; }
+    }
+    if (day !== null) {
+      const year = today.getFullYear();
+      let date = new Date(year, monthIdx, day);
+      if (date < today) date = new Date(year + 1, monthIdx, day);
+      return toKey(date);
+    }
+  }
+
+  // "15.3." / "15/3"
+  const num = lower.match(/(\d{1,2})[./-](\d{1,2})(?:[./-](\d{2,4}))?/);
+  if (num) {
+    const day = parseInt(num[1], 10);
+    const month = parseInt(num[2], 10) - 1;
+    let year = num[3] ? parseInt(num[3], 10) : null;
+    if (year !== null && year < 100) year += 2000;
+    const yr = year || today.getFullYear();
+    if (day >= 1 && day <= 31 && month >= 0 && month <= 11) {
+      let date = new Date(yr, month, day);
+      if (!year && date < today) date = new Date(yr + 1, month, day);
+      return toKey(date);
+    }
+  }
+
+  return null;
+}
+
+/**
+ * useVoiceControl: React-Hook für die Web Speech API.
+ * Push-to-Talk: startet bei toggle(), stoppt nach einer Äußerung.
+ */
+function useVoiceControl({ commands, onError }) {
+  const [listening, setListening] = useState(false);
+  const [transcript, setTranscript] = useState("");
+  const [error, setError] = useState(null);
+  const recognitionRef = useRef(null);
+  const commandsRef = useRef(commands);
+  const onErrorRef = useRef(onError);
+
+  useEffect(() => { commandsRef.current = commands; }, [commands]);
+  useEffect(() => { onErrorRef.current = onError; }, [onError]);
+
+  const SR = typeof window !== "undefined"
+    ? (window.SpeechRecognition || window.webkitSpeechRecognition)
+    : null;
+  const supported = !!SR;
+
+  useEffect(() => {
+    if (!SR) return;
+    const recognition = new SR();
+    recognition.lang = "de-DE";
+    recognition.continuous = false;
+    recognition.interimResults = false;
+    recognition.maxAlternatives = 3;
+
+    recognition.onresult = (event) => {
+      const result = event.results[event.results.length - 1];
+      const text = result[0].transcript.trim();
+      setTranscript(text);
+      const lower = text.toLowerCase();
+      for (const cmd of commandsRef.current) {
+        if (cmd.patterns.some((re) => re.test(lower))) {
+          cmd.action(text);
+          break;
+        }
+      }
+    };
+    recognition.onerror = (event) => {
+      let msg = "Spracherkennung fehlgeschlagen.";
+      if (event.error === "not-allowed" || event.error === "service-not-allowed")
+        msg = "Mikrofonzugriff verweigert. Bitte in den Browser-Einstellungen erlauben.";
+      else if (event.error === "no-speech")
+        msg = "Keine Sprache erkannt. Versuche es erneut.";
+      else if (event.error === "audio-capture")
+        msg = "Kein Mikrofon gefunden.";
+      else if (event.error === "network")
+        msg = "Netzwerkfehler bei der Spracherkennung.";
+      setError(msg);
+      setListening(false);
+      onErrorRef.current?.(msg);
+    };
+    recognition.onend = () => setListening(false);
+    recognitionRef.current = recognition;
+    return () => { try { recognition.stop(); } catch (_) {} };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [SR]);
+
+  const toggle = () => {
+    if (!recognitionRef.current) return;
+    if (listening) {
+      try { recognitionRef.current.stop(); } catch (_) {}
+      setListening(false);
+    } else {
+      setError(null);
+      setTranscript("");
+      try { recognitionRef.current.start(); setListening(true); } catch (e) {}
+    }
+  };
+
+  return { supported, listening, transcript, error, toggle };
+}
+
+/**
+ * Erstellt die Liste der Sprachbefehle für den Kalender.
+ * patterns sind RegExp mit Wortgrenzen — verhindert False Positives.
+ * Reihenfolge: spezifischste Befehle zuerst.
+ */
+function createCalendarVoiceCommands({
+  goNextMonth, goPrevMonth, goToday,
+  setSelectedDate, setAddOpen, setNewActionText, setWorkoutQuery,
+  setCategoryManagerOpen, setNewCategoryName, setNewCategoryColor,
+  onAddAction, onScheduleWorkout, onDeleteEntry, onStartScheduledWorkout,
+  onOpenLog, setTab, showToast,
+  plans, categories, entries, logs, selectedDate,
+}) {
+  return [
+    // Tab-Wechsel (spezifischste zuerst)
+    { patterns: [/\b(pläne|pläne anzeigen|zu den plänen|gehe zu pläne)\b/i],
+      action: () => { setTab("plans"); showToast("Pläne"); } },
+    { patterns: [/\b(übungen|übungen anzeigen|zu den übungen|gehe zu übungen)\b/i],
+      action: () => { setTab("exercises"); showToast("Übungen"); } },
+    { patterns: [/\b(fortschritt|statistik|gehe zu fortschritt)\b/i],
+      action: () => { setTab("progress"); showToast("Fortschritt"); } },
+    { patterns: [/\b(gehe zu training|training anzeigen|zum training)\b/i],
+      action: () => { setTab("log"); showToast("Training"); } },
+    { patterns: [/\b(kalender|kalender anzeigen|zum kalender|gehe zu kalender)\b/i],
+      action: () => { setTab("calendar"); showToast("Kalender"); } },
+
+    // Kategorieverwaltung
+    { patterns: [/\bneue kategorie\b/i],
+      action: (text) => {
+        const m = text.match(/neue kategorie\s*(.*)/i);
+        const name = m ? m[1].trim() : "";
+        if (name) {
+          setNewCategoryName(name);
+          setNewCategoryColor?.(CATEGORY_COLORS[0]);
+          showToast(`Kategorie „${name}" — Farbe prüfen und speichern.`);
+        } else {
+          showToast(`Wie soll die Kategorie heißen? Z. B. „Neue Kategorie Ausdauer".`);
+        }
+        setCategoryManagerOpen(true);
+      },
+    },
+    { patterns: [/\b(kategorien|kategorie verwalten|kategorien verwalten)\b/i],
+      action: () => { setCategoryManagerOpen(true); showToast("Kategorien geöffnet."); } },
+
+    // Workout planen (vor "eintrag" prüfen)
+    { patterns: [/\b(plane|workout eintragen|training eintragen|trage workout ein|plane workout|plane training)\b/i],
+      action: (text) => {
+        const m = text.match(/(?:plane|workout eintragen|training eintragen|trage workout ein|plane workout|plane training)\s*(.*)/i);
+        const planName = m ? m[1].trim() : "";
+        if (!planName) { showToast(`Welcher Plan? Z. B. „Plane Push-Pull".`); return; }
+        const found = plans.find((p) =>
+          p.name.toLowerCase().includes(planName.toLowerCase()) ||
+          planName.toLowerCase().includes(p.name.toLowerCase())
+        );
+        if (found) {
+          onScheduleWorkout(selectedDate, found.id);
+          showToast(`Workout eingetragen: ${found.name}`);
+        } else {
+          showToast(`Kein Plan namens „${planName}" gefunden.`);
+        }
+      },
+    },
+
+    // Training starten
+    { patterns: [/\b(starte training|start training|beginne training|training starten)\b/i],
+      action: () => {
+        const dayEntries = entries.filter((e) => e.date === selectedDate && e.type === "workout");
+        if (dayEntries.length === 0) { showToast("Kein Workout für diesen Tag geplant."); return; }
+        const entry = dayEntries[0];
+        const plan = plans.find((p) => p.id === entry.planId);
+        if (plan) { onStartScheduledWorkout(plan, entry.id); showToast("Training gestartet!"); }
+        else { showToast("Der geplante Plan existiert nicht mehr."); }
+      },
+    },
+
+    // Log öffnen
+    { patterns: [/\b(öffne training|zeige training|öffne log|zeige log|öffne training von)\b/i],
+      action: (text) => {
+        const date = parseSpokenDate(text);
+        const targetDate = date || selectedDate;
+        const dayLogs = (logs || []).filter((l) => {
+          if (!l?.date) return false;
+          const d = new Date(l.date);
+          const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+          return key === targetDate;
+        });
+        if (dayLogs.length > 0) {
+          onOpenLog?.(dayLogs[0]);
+          showToast(`Training vom ${new Date(targetDate + "T00:00:00").toLocaleDateString("de-DE")} geöffnet.`);
+        } else {
+          showToast("Kein abgeschlossenes Training an diesem Tag gefunden.");
+        }
+      },
+    },
+
+    // Eintrag/Notiz hinzufügen
+    { patterns: [/\b(notiz|eintrag|aktion|trage ein|füge hinzu|neuer eintrag)\b/i],
+      action: (text) => {
+        const m = text.match(/(?:notiz|eintrag|aktion|trage ein|füge hinzu|neuer eintrag)\s*:?\s*(.*)/i);
+        const content = m ? m[1].trim() : "";
+        if (content) {
+          onAddAction(selectedDate, null, content);
+          showToast(`Eintrag hinzugefügt: ${content}`);
+        } else {
+          showToast(`Kein Text erkannt. Z. B. „Notiz Physio-Termin".`);
+        }
+      },
+    },
+
+    // Eintrag löschen
+    { patterns: [/\b(lösche|entferne)\b/i],
+      action: (text) => {
+        const m = text.match(/(?:lösche|entferne)\s+(.*)/i);
+        const searchTerm = m ? m[1].trim() : "";
+        if (!searchTerm) {
+          const dayEntries = entries.filter((e) => e.date === selectedDate);
+          if (dayEntries.length > 0) {
+            onDeleteEntry(dayEntries[dayEntries.length - 1].id);
+            showToast("Letzten Eintrag gelöscht.");
+          } else { showToast("Keine Einträge an diesem Tag."); }
+          return;
+        }
+        const dayEntries = entries.filter(
+          (e) => e.date === selectedDate && (
+            (e.text && e.text.toLowerCase().includes(searchTerm.toLowerCase())) ||
+            (e.planId && plans.find((p) => p.id === e.planId)?.name.toLowerCase().includes(searchTerm.toLowerCase()))
+          )
+        );
+        if (dayEntries.length > 0) {
+          onDeleteEntry(dayEntries[0].id);
+          showToast(`Eintrag „${searchTerm}" gelöscht.`);
+        } else {
+          showToast(`Kein Eintrag „${searchTerm}" gefunden.`);
+        }
+      },
+    },
+
+    // Datum auswählen mit Trigger-Wort
+    { patterns: [/^gehe zu\b/i, /^öffne datum\b/i, /^wähle\b/i, /^sehe\b/i, /^zeige tag\b/i],
+      action: (text) => {
+        const date = parseSpokenDate(text);
+        if (date) {
+          setSelectedDate(date);
+          showToast(`Datum: ${new Date(date + "T00:00:00").toLocaleDateString("de-DE", { weekday: "long", day: "2-digit", month: "long" })}`);
+        } else {
+          showToast(`Datum nicht erkannt. Z. B. „heute", „morgen", „15. März".`);
+        }
+      },
+    },
+    // Alleinstehende Datumsangaben
+    { patterns: [/^(heute|morgen|übermorgen|uebermorgen|gestern)$/i, /^nächste woche$/i, /^naechste woche$/i],
+      action: (text) => {
+        const date = parseSpokenDate(text);
+        if (date) {
+          setSelectedDate(date);
+          showToast(`Datum: ${new Date(date + "T00:00:00").toLocaleDateString("de-DE", { weekday: "long", day: "2-digit", month: "long" })}`);
+        }
+      },
+    },
+    { patterns: [/^nächst(?:e|en|er|es)?\s+(montag|dienstag|mittwoch|donnerstag|freitag|samstag|sonntag)$/i],
+      action: (text) => {
+        const date = parseSpokenDate(text);
+        if (date) {
+          setSelectedDate(date);
+          showToast(`Datum: ${new Date(date + "T00:00:00").toLocaleDateString("de-DE", { weekday: "long", day: "2-digit", month: "long" })}`);
+        }
+      },
+    },
+
+    // Monatsnavigation
+    { patterns: [/\bnächster monat\b/i, /\bnächstes\b/i],
+      action: () => { goNextMonth(); showToast("Nächster Monat"); } },
+    { patterns: [/\bvorheriger monat\b/i, /\bvoriger monat\b/i, /\bzurück\b/i, /\brückwärts\b/i],
+      action: () => { goPrevMonth(); showToast("Vorheriger Monat"); } },
+    { patterns: [/\bheutiger tag\b/i, /\bheute\b/i],
+      action: () => { goToday(); showToast("Heute"); } },
+  ];
+}
+
 function CalendarView({
   entries,
   categories,
@@ -3706,6 +4266,8 @@ function CalendarView({
   onDeleteCategory,
   onStartScheduledWorkout,
   onOpenLog,
+  setTab,
+  showToast,
 }) {
   const today = new Date();
   const [viewYear, setViewYear] = useState(today.getFullYear());
@@ -3800,6 +4362,29 @@ function CalendarView({
     setNewCategoryColor(CATEGORY_COLORS[0]);
   };
 
+  // === Sprachsteuerung ===
+  const voiceCommands = useMemo(
+    () => createCalendarVoiceCommands({
+      goNextMonth, goPrevMonth, goToday,
+      setSelectedDate, setAddOpen, setNewActionText, setWorkoutQuery,
+      setCategoryManagerOpen, setNewCategoryName, setNewCategoryColor,
+      onAddAction, onScheduleWorkout, onDeleteEntry, onStartScheduledWorkout,
+      onOpenLog, setTab, showToast,
+      plans, categories, entries, logs, selectedDate,
+    }),
+    [plans, categories, entries, logs, selectedDate]
+  );
+  const {
+    supported: voiceSupported,
+    listening: voiceListening,
+    transcript: voiceTranscript,
+    error: voiceError,
+    toggle: toggleVoice,
+  } = useVoiceControl({
+    commands: voiceCommands,
+    onError: (msg) => showToast(msg),
+  });
+
   return (
     <div>
       <div className="cal-header">
@@ -3810,15 +4395,55 @@ function CalendarView({
         <button className="btn-icon" onClick={goNextMonth} title="Nächster Monat">
           <ChevronRight size={16} />
         </button>
+        {voiceSupported && (
+          <button
+            className={`voice-btn ${voiceListening ? "is-listening" : ""}`}
+            onClick={toggleVoice}
+            title={voiceListening ? "Sprachsteuerung stoppen" : "Sprachsteuerung starten"}
+          >
+            <Mic size={18} />
+          </button>
+        )}
         <button
           className="btn-icon"
-          style={{ marginLeft: "auto" }}
+          style={{ marginLeft: voiceSupported ? undefined : "auto" }}
           onClick={() => setCategoryManagerOpen((s) => !s)}
           title="Kategorien verwalten"
         >
           <MoreVertical size={16} />
         </button>
       </div>
+
+      {/* Voice Feedback */}
+      {voiceListening && (
+        <div className="voice-feedback">
+          <div className="voice-feedback-inner">
+            <div className="voice-pulse" />
+            <span className="voice-feedback-text">
+              {voiceTranscript ? `„${voiceTranscript}“` : "Höre zu… Sprich jetzt."}
+            </span>
+          </div>
+        </div>
+      )}
+      {voiceError && !voiceListening && (
+        <div className="voice-feedback voice-error">
+          <span className="voice-feedback-text">{voiceError}</span>
+        </div>
+      )}
+      {voiceSupported && voiceListening && !voiceTranscript && (
+        <div className="voice-hint-list">
+          <div className="voice-hint-title">Sprachbefehle:</div>
+          <div className="voice-hint-item">„Nächster Monat“ / „Zurück“ / „Heute“</div>
+          <div className="voice-hint-item">„Gehe zu morgen“ / „Gehe zu 15. März“</div>
+          <div className="voice-hint-item">„Notiz Physio-Termin“</div>
+          <div className="voice-hint-item">„Plane Push-Pull“</div>
+          <div className="voice-hint-item">„Starte Training“</div>
+          <div className="voice-hint-item">„Lösche Physio“</div>
+          <div className="voice-hint-item">„Kategorien“ / „Neue Kategorie Ausdauer“</div>
+          <div className="voice-hint-item">„Öffne Training von gestern“</div>
+          <div className="voice-hint-item">„Pläne“ / „Fortschritt“ / „Übungen“</div>
+        </div>
+      )}
 
       {categoryManagerOpen && (
         <Modal title="Kategorien" onClose={() => setCategoryManagerOpen(false)}>

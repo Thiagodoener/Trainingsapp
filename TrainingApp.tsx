@@ -8511,7 +8511,7 @@ function ExerciseCharts({ logs, exerciseId, isTimeBased, theme, gyms = [] }) {
           <span className="plan-title">{c.title}</span>
           <div style={{ height: 190, marginTop: 14 }}>
             <ResponsiveContainer width="99%" height="100%" debounce={1}>
-              <LineChart data={chartData} margin={{ top: 6, right: 4, left: -20, bottom: 0 }}>
+              <LineChart data={chartData} margin={{ top: 6, right: 4, left: 0, bottom: 0 }}>
                 <CartesianGrid strokeDasharray="3 3" stroke={chartColors.grid} vertical={false} />
                 <XAxis dataKey="date" stroke={chartColors.axis} fontSize={11} axisLine={false} tickLine={false} />
                 <YAxis stroke={chartColors.axis} fontSize={11} axisLine={false} tickLine={false} width={40} />

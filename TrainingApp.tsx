@@ -3071,15 +3071,12 @@ export default function TrainingApp() {
           vertical-align: -1px;
           margin-right: 2px;
         }
-        /* Planned is the same colour, just muted - done vs. still to come
-           is then visible without looking for the tick. */
+        /* One colour for every workout entry, planned or done - the tick
+           versus play icon is what carries the status, same language as
+           the activity chips. */
         .cal-entry-workout {
           background: color-mix(in srgb, var(--accent) 35%, transparent);
           color: var(--text);
-        }
-        .cal-entry-workout.is-done {
-          background: var(--success);
-          color: #fff;
         }
         .cal-entry-more {
           font-size: 8.5px;
@@ -4030,7 +4027,7 @@ function CalendarView({
                           return (
                             <span
                               key={entry.id}
-                              className="cal-entry-chip cal-entry-workout is-done"
+                              className="cal-entry-chip cal-entry-workout"
                             >
                               <Check size={9} />
                               {entry.log.planName || "Training"}
@@ -4042,7 +4039,7 @@ function CalendarView({
                           return (
                             <span
                               key={entry.id}
-                              className={`cal-entry-chip cal-entry-workout ${entry.logId ? "is-done" : ""}`}
+                              className="cal-entry-chip cal-entry-workout"
                             >
                               {entry.logId ? <Check size={9} /> : <Play size={9} />}
                               {plan ? plan.name : "Gelöschter Plan"}

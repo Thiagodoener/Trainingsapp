@@ -7435,22 +7435,41 @@ function LogView({
       return;
     }
     const tick = () => {
+      // Cheap no-op once the clock is already running - tried on every tick
+      // so a bell that is still due gets the earliest possible chance to
+      // fire once the phone comes back from a screen-off suspension,
+      // instead of waiting until the countdown itself reaches zero.
+      resumeAudioIfSuspended();
       const left = Math.max(0, Math.round((restEndsAt - Date.now()) / 1000));
       setRestLeft(left);
       if (left === 0 && !restBeepedRef.current) {
         restBeepedRef.current = true;
-        // The tone itself was already scheduled on the audio clock when the
-        // rest started, so nothing is played here - firing a second one would
-        // double the beep. Only if that scheduling failed (sound was off at
-        // the time, or no audio context existed yet) does the timer play it.
-        if (soundOn && !restBeepScheduledRef.current) {
-          playBeep({ frequency: 1320, duration: 0.35 });
-        }
+        const wasScheduled = restBeepScheduledRef.current;
         restBeepScheduledRef.current = false;
-        // Backup signal for a muted phone or a device that silenced the
-        // audio context in the background. Vibration needs JS to be running,
-        // so it only lands with the app in the foreground - which is exactly
-        // the case the scheduled tone handles worst.
+        if (soundOn) {
+          if (!wasScheduled) {
+            // Nothing was ever put on the clock (sound was off, or no
+            // audio context existed yet) - play it directly.
+            playBell();
+          } else {
+            // Scheduling succeeded at the time, but that only proves the
+            // call did not throw - not that the bell actually rang. It
+            // normally finishes right about now; if iOS suspended the
+            // clock while the screen was off, it is still sitting there
+            // unplayed. Give it a brief moment to complete on its own,
+            // then treat a bell still pending as stuck and play a fresh
+            // one instead of trusting a stale "scheduling worked" flag.
+            setTimeout(() => {
+              if (hasPendingRestBeep()) {
+                cancelRestBeep();
+                playBell();
+              }
+            }, 500);
+          }
+        }
+        // Backup signal for a muted phone. Vibration needs JS to be
+        // running, so it only lands with the app in the foreground - which
+        // is exactly the case the scheduled tone handles worst.
         if (navigator.vibrate) {
           try { navigator.vibrate([120, 80, 120]); } catch (_) {}
         }
@@ -7633,7 +7652,7 @@ function LogView({
       }
 
       if (autoRun.phase === "rest") {
-        playBeep({ frequency: 1320, duration: 0.35 });
+        playBell();
         const next = findNextSet(autoRun.exerciseId, autoRun.setIdx);
         if (next) startAutoAt(next.exerciseId, next.setIdx);
         else { stopAuto(); playBeep({ frequency: 660, duration: 0.4 }); }
@@ -8106,7 +8125,7 @@ function LogView({
                   onClick={() => {
                     const next = !soundOn;
                     setSoundOn(next);
-                    if (next) { unlockAudio(); playBeep({ frequency: 1320, duration: 0.2 }); }
+                    if (next) playBell();
                   }}
                 >
                   <span style={{ display: "flex", alignItems: "center", gap: 8 }}>
@@ -9023,7 +9042,6 @@ function useMenuFlip(isOpen, setDropUp) {
 // triggered at an exact moment. iOS only allows sound after a user gesture,
 // so the context is created when the user taps "Start".
 let sharedAudioCtx = null;
-// A fraction of a second of silence, inlined so no file has to be shipped.
 function unlockAudio() {
   try {
     // "transient" means: a short signal tone. Music from another app is
@@ -9033,7 +9051,9 @@ function unlockAudio() {
     // channel permanently and pushed other apps out of the way.
     if (navigator.audioSession) navigator.audioSession.type = "transient";
 
-    if (!sharedAudioCtx) {
+    // A context iOS has fully closed (not just suspended) is unusable and
+    // has to be replaced, not reused - it would silently no-op forever.
+    if (!sharedAudioCtx || sharedAudioCtx.state === "closed") {
       const Ctx = window.AudioContext || window.webkitAudioContext;
       if (!Ctx) return null;
       sharedAudioCtx = new Ctx();
@@ -9049,52 +9069,107 @@ function releaseAudio() {
   // Nothing to release: no channel is held open any more.
 }
 
-// The rest-end tone is placed on the audio clock the moment the rest starts,
+// If iOS suspended the audio clock while the screen was off, nothing on it
+// fires until something resumes it again - and nothing did that on its own.
+// Calling this whenever the app becomes visible (or on the running rest
+// timer's own tick) gives a stuck rest tone a chance to still catch up the
+// moment the phone is looked at again, instead of staying silent forever.
+function resumeAudioIfSuspended() {
+  if (sharedAudioCtx && sharedAudioCtx.state === "suspended") {
+    try { sharedAudioCtx.resume(); } catch (_) {}
+  }
+}
+
+// A struck-bell timbre - like a boxing round bell - built from several
+// inharmonic sine partials instead of one pure tone. A single oscillator
+// only ever sounds like a synthesizer beep; a real struck bell/gong has
+// several overtones that are NOT whole-number multiples of the fundamental
+// (unlike a plucked string) and each rings out at its own speed - higher
+// partials fade fastest, which is exactly what gives struck metal its
+// characteristic shimmer-then-hum. Ratios and decay times are chosen by
+// ear for that "boxing bell", not physically modelled from a real bell.
+const BELL_PARTIALS = [
+  { ratio: 1,    gain: 1,    decay: 1.5 },
+  { ratio: 2.01, gain: 0.55, decay: 1.15 },
+  { ratio: 2.76, gain: 0.35, decay: 0.85 },
+  { ratio: 4.07, gain: 0.22, decay: 0.6 },
+  { ratio: 5.4,  gain: 0.14, decay: 0.42 },
+  { ratio: 6.8,  gain: 0.08, decay: 0.3 },
+];
+const BELL_FUNDAMENTAL = 430;
+
+// Schedules every partial at the given audio-clock time and reports back
+// once the longest-ringing one finishes, so callers can tell a completed
+// bell from one still open on the clock (or stuck in a suspended context).
+function scheduleBell(ctx, atTime, volume, onComplete) {
+  const oscillators = [];
+  const gains = [];
+  let longest = null;
+  BELL_PARTIALS.forEach((p) => {
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.type = "sine";
+    osc.frequency.value = BELL_FUNDAMENTAL * p.ratio;
+    const peak = Math.max(0.0001, volume * p.gain);
+    // A bell is struck, not faded in - a fast linear rise into an
+    // exponential decay is what makes the attack read as a hit.
+    gain.gain.setValueAtTime(0.0001, atTime);
+    gain.gain.linearRampToValueAtTime(peak, atTime + 0.006);
+    gain.gain.exponentialRampToValueAtTime(0.0001, atTime + p.decay);
+    osc.connect(gain).connect(ctx.destination);
+    const stopAt = atTime + p.decay + 0.05;
+    osc.start(atTime);
+    osc.stop(stopAt);
+    oscillators.push(osc);
+    gains.push(gain);
+    if (!longest || stopAt > longest.stopAt) longest = { osc, stopAt };
+  });
+  longest.osc.onended = () => onComplete?.();
+  return { oscillators, gains };
+}
+
+function playBell(volume = 0.6) {
+  const ctx = unlockAudio();
+  if (!ctx) return;
+  try {
+    scheduleBell(ctx, ctx.currentTime, volume, () => {});
+  } catch (_) { /* sound is optional, never break the workout over it */ }
+}
+
+// The rest-end bell is placed on the audio clock the moment the rest starts,
 // not fired by a timer when it ends. setInterval is throttled to a standstill
 // as soon as the screen goes off or the app moves to the background, so a
 // timer-driven tone never arrived. The Web Audio clock keeps its own time, so
-// an oscillator started with a delay still sounds. iOS can still suspend the
-// context after a long spell in the background - the vibration in the
-// countdown covers that case.
+// a tone started with a delay still sounds once the clock is running. If iOS
+// suspended the clock for the whole rest, resumeAudioIfSuspended() plus the
+// completion check in the rest-timer effect are what catch that instead of
+// silently trusting that scheduling succeeding earlier means it played.
 let pendingRestBeep = null;
 
-function scheduleRestBeep(delaySeconds, { frequency = 1320, duration = 0.35, volume = 0.6 } = {}) {
+function scheduleRestBeep(delaySeconds, volume = 0.6) {
   const ctx = sharedAudioCtx;
   if (!ctx || ctx.state === "closed") return false;
   try {
     if (ctx.state === "suspended") ctx.resume();
-    const osc = ctx.createOscillator();
-    const gain = ctx.createGain();
-    osc.frequency.value = frequency;
-    osc.type = "sine";
     const at = ctx.currentTime + Math.max(0, delaySeconds);
-    gain.gain.setValueAtTime(0, at);
-    gain.gain.linearRampToValueAtTime(volume, at + 0.01);
-    gain.gain.linearRampToValueAtTime(0, at + duration);
-    osc.connect(gain).connect(ctx.destination);
-    osc.start(at);
-    osc.stop(at + duration + 0.02);
-    // Once it has sounded it is no longer pending - otherwise a remounted
-    // view would believe a tone is still on the clock and stay silent.
-    osc.onended = () => {
-      if (pendingRestBeep && pendingRestBeep.osc === osc) pendingRestBeep = null;
-    };
-    pendingRestBeep = { osc, gain };
+    const handle = scheduleBell(ctx, at, volume, () => {
+      if (pendingRestBeep === handle) pendingRestBeep = null;
+    });
+    pendingRestBeep = handle;
     return true;
   } catch (_) {
     return false;
   }
 }
 
-// Skipping or extending a rest has to take the already-scheduled tone back
+// Skipping or extending a rest has to take the already-scheduled bell back
 // off the clock, otherwise it would sound at the original moment anyway.
 function cancelRestBeep() {
   if (!pendingRestBeep) return;
-  const { osc, gain } = pendingRestBeep;
+  const { oscillators, gains } = pendingRestBeep;
   pendingRestBeep = null;
-  try { osc.stop(); } catch (_) {}
-  try { osc.disconnect(); } catch (_) {}
-  try { gain.disconnect(); } catch (_) {}
+  oscillators.forEach((osc) => { try { osc.stop(); } catch (_) {} try { osc.disconnect(); } catch (_) {} });
+  gains.forEach((gain) => { try { gain.disconnect(); } catch (_) {} });
 }
 
 function hasPendingRestBeep() {

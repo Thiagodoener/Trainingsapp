@@ -857,17 +857,40 @@ function getMuscleLoadSeries(
   });
 }
 
+// Wie viele volle Wochen liegen zwischen jetzt und dem allerersten jemals
+// geloggten Training - unabhängig von Muskelgruppe oder Übung. Das ist die
+// Obergrenze dafür, wie weit ein Vergleichszeitraum zurückreichen darf: eine
+// Woche vor dem ersten Trainingseintrag ist keine "0 %-Woche", sie hat
+// schlicht noch nicht existiert (die App wurde noch nicht genutzt). Ohne
+// diese Grenze würde "vs. Schnitt 4 Wochen" bei erst 2 Wochen Historie zwei
+// nicht vorhandene Wochen als Nullen einrechnen und den Schnitt künstlich
+// nach unten ziehen - genau der Fehler, der beim ersten Test auffiel.
+function logsHistoryWeeks(logs, nowTs = Date.now()) {
+  let oldest = Infinity;
+  (Array.isArray(logs) ? logs : []).forEach((l) => {
+    const ts = new Date(l?.date).getTime();
+    if (Number.isFinite(ts) && ts < oldest) oldest = ts;
+  });
+  if (!Number.isFinite(oldest)) return 0;
+  return Math.max(0, Math.floor((nowTs - oldest) / LOAD_WEEK_MS));
+}
+
 // Prozentuale Veränderung der laufenden Woche gegenüber den Wochen davor.
 // compareWeeks = 1 vergleicht mit der Vorwoche, 4 mit dem Schnitt der letzten
 // vier Wochen. Der Mittelwert ist bewusst wählbar: ein einzelner Ausfalltag
 // verzerrt den Vergleich mit genau einer Woche stark, über vier Wochen kaum.
+// maxLookback (siehe logsHistoryWeeks) kappt den Vergleichszeitraum auf das,
+// was an echter Historie überhaupt existiert - sonst würden Wochen vor dem
+// ersten Trainingseintrag als "0" mitgezählt.
 // Rückgabe null bedeutet "nicht berechenbar" (keine Vorgeschichte oder vorher
 // gar nichts trainiert) - das ist etwas anderes als 0 % und muss in der
 // Anzeige auch anders aussehen.
-function muscleLoadChange(values, compareWeeks) {
+function muscleLoadChange(values, compareWeeks, maxLookback = Infinity) {
   if (!Array.isArray(values) || values.length < 2) return null;
+  const usableWeeks = Math.min(compareWeeks, maxLookback);
+  if (usableWeeks <= 0) return null;
   const current = values[values.length - 1] || 0;
-  const from = Math.max(0, values.length - 1 - compareWeeks);
+  const from = Math.max(0, values.length - 1 - usableWeeks);
   const reference = values.slice(from, values.length - 1);
   if (reference.length === 0) return null;
   const avg = reference.reduce((sum, v) => sum + (v || 0), 0) / reference.length;
@@ -2471,6 +2494,44 @@ export default function TrainingApp() {
           font-size: 12px;
           color: var(--text-dim);
         }
+        .muscle-load-row {
+          display: grid;
+          grid-template-columns: 80px 1fr 46px 14px;
+          align-items: center;
+          gap: 8px;
+          margin-bottom: 9px;
+        }
+        .muscle-load-row-clickable {
+          cursor: pointer;
+        }
+        .muscle-load-row-sub {
+          grid-template-columns: 80px 1fr 46px;
+          margin-bottom: 7px;
+        }
+        .muscle-load-row-sub .muscle-week-label {
+          font-size: 12px;
+        }
+        .sparkline {
+          display: block;
+          overflow: visible;
+        }
+        .sparkline polyline {
+          stroke: var(--accent);
+        }
+        .sparkline-empty line {
+          stroke: var(--border);
+          stroke-width: 1.5;
+          stroke-dasharray: 2 2;
+        }
+        .load-change {
+          font-family: 'Oswald', sans-serif;
+          font-size: 12.5px;
+          text-align: right;
+          white-space: nowrap;
+        }
+        .load-change-up { color: var(--success); }
+        .load-change-down { color: var(--danger); }
+        .load-change-neutral { color: var(--text-dim); }
         .plan-last-done {
           display: inline-block;
           margin-top: 2px;
@@ -8963,6 +9024,48 @@ function Modal({ title, onClose, children, width = 360 }) {
   );
 }
 
+// A tiny inline trend line - no axes, no tooltip, just the shape of the last
+// few weeks at a glance. Plain SVG rather than recharts: a chart this small
+// doesn't need an interactive library, and it stays legible even with only
+// one or two non-zero weeks in the series.
+function Sparkline({ values, width = 64, height = 24 }) {
+  const list = Array.isArray(values) ? values : [];
+  const max = Math.max(0, ...list);
+  if (list.length < 2 || max <= 0) {
+    return (
+      <svg width={width} height={height} className="sparkline sparkline-empty" aria-hidden="true">
+        <line x1={2} y1={height / 2} x2={width - 2} y2={height / 2} />
+      </svg>
+    );
+  }
+  const stepX = (width - 4) / (list.length - 1);
+  const points = list
+    .map((v, i) => {
+      const x = 2 + i * stepX;
+      const y = height - 2 - (Math.max(0, v) / max) * (height - 4);
+      return `${x.toFixed(1)},${y.toFixed(1)}`;
+    })
+    .join(" ");
+  return (
+    <svg width={width} height={height} className="sparkline" aria-hidden="true">
+      <polyline points={points} fill="none" strokeWidth={1.75} strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
+// change is a percentage (can be negative), or null when there is no
+// history yet to compare against - that is not the same as 0 % and reads
+// as a dash instead of a misleading "unchanged".
+function LoadChangeBadge({ change }) {
+  if (change === null) {
+    return <span className="load-change load-change-neutral">–</span>;
+  }
+  const rounded = Math.round(change);
+  const cls = rounded > 0 ? "load-change-up" : rounded < 0 ? "load-change-down" : "load-change-neutral";
+  const sign = rounded > 0 ? "+" : "";
+  return <span className={`load-change ${cls}`}>{sign}{rounded}%</span>;
+}
+
 // ---------------------------------------------------------------------------
 // Progress view
 // ---------------------------------------------------------------------------
@@ -9091,6 +9194,20 @@ function ProgressView({
   const toggleGroupExpanded = (id) =>
     setExpandedGroups((s) => ({ ...s, [id]: !s[id] }));
 
+  // Belastung pro Muskelgruppe - siehe getMuscleLoadSeries für die Herleitung
+  // der Formel. 12 Wochen Reichweite genügt für "Schnitt der letzten 8
+  // Wochen" als weitesten Vergleich, den die Chip-Reihe unten anbietet.
+  const muscleLoadSeries = useMemo(
+    () => getMuscleLoadSeries(logs, exBy, exerciseSubgroupOverrides, timeBasedExercises, 12),
+    [logs, exBy, exerciseSubgroupOverrides, timeBasedExercises]
+  );
+  // Grenze für den Vergleichszeitraum - siehe logsHistoryWeeks. Verhindert,
+  // dass Wochen vor dem allerersten Trainingseintrag als "0" mitgezählt werden.
+  const loadHistoryWeeks = useMemo(() => logsHistoryWeeks(logs), [logs]);
+  const [loadCompareWeeks, setLoadCompareWeeks] = useState(1);
+  const [expandedLoadGroups, setExpandedLoadGroups] = useState({});
+  const toggleLoadGroupExpanded = (id) =>
+    setExpandedLoadGroups((s) => ({ ...s, [id]: !s[id] }));
 
   // Must come after every hook above: bailing out earlier meant this
   // component ran fewer hooks whenever the history was empty, which React
@@ -9207,6 +9324,70 @@ function ProgressView({
                             />
                           </span>
                           <span className="muscle-week-value">{sg.sets}</span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+
+      <div className="card">
+        <span className="plan-title">Belastung pro Muskelgruppe</span>
+        <div className="chip-row" style={{ marginTop: 10, marginBottom: 4 }}>
+          <span
+            className={`chip chip-sm ${loadCompareWeeks === 1 ? "active" : ""}`}
+            onClick={() => setLoadCompareWeeks(1)}
+          >
+            vs. Vorwoche
+          </span>
+          <span
+            className={`chip chip-sm ${loadCompareWeeks === 4 ? "active" : ""}`}
+            onClick={() => setLoadCompareWeeks(4)}
+          >
+            vs. Schnitt 4 Wochen
+          </span>
+          <span
+            className={`chip chip-sm ${loadCompareWeeks === 8 ? "active" : ""}`}
+            onClick={() => setLoadCompareWeeks(8)}
+          >
+            vs. Schnitt 8 Wochen
+          </span>
+        </div>
+        {muscleLoadSeries.every((g) => g.current === 0) ? (
+          <div className="empty-state" style={{ padding: "14px 0" }}>
+            Noch keine Trainingsdaten für diese Auswertung.
+          </div>
+        ) : (
+          <div style={{ marginTop: 8 }}>
+            {muscleLoadSeries.map((g) => {
+              const isExpanded = !!expandedLoadGroups[g.id];
+              const change = muscleLoadChange(g.values, loadCompareWeeks, loadHistoryWeeks);
+              return (
+                <div key={g.id}>
+                  <div
+                    className="muscle-load-row muscle-load-row-clickable"
+                    onClick={() => toggleLoadGroupExpanded(g.id)}
+                  >
+                    <span className="muscle-week-label">{g.label}</span>
+                    <Sparkline values={g.values} />
+                    <LoadChangeBadge change={change} />
+                    {isExpanded ? (
+                      <ChevronDown size={14} color="var(--text-dim)" />
+                    ) : (
+                      <ChevronRight size={14} color="var(--text-dim)" />
+                    )}
+                  </div>
+                  {isExpanded && (
+                    <div className="muscle-week-subs">
+                      {g.subs.map((sg) => (
+                        <div className="muscle-load-row muscle-load-row-sub" key={sg.id}>
+                          <span className="muscle-week-label">{sg.label}</span>
+                          <Sparkline values={sg.values} />
+                          <LoadChangeBadge change={muscleLoadChange(sg.values, loadCompareWeeks, loadHistoryWeeks)} />
                         </div>
                       ))}
                     </div>

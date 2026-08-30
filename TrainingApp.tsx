@@ -2577,16 +2577,6 @@ export default function TrainingApp() {
           border-color: var(--brass);
           color: var(--bg);
         }
-        .note-toggle-inline {
-          width: auto;
-          height: auto;
-          padding: 6px 10px;
-          border-radius: 8px;
-          gap: 6px;
-          font-size: 12.5px;
-          font-family: 'Inter', sans-serif;
-          margin: 4px 0 6px;
-        }
         .floating-timer {
           position: fixed;
           top: calc(env(safe-area-inset-top) + 8px);
@@ -7819,6 +7809,16 @@ function LogView({
                     <button
                       className="program-menu-item"
                       onClick={() => {
+                        toggleEntryNotes(entry.exerciseId);
+                        setOpenEntryMenu(null);
+                      }}
+                    >
+                      <StickyNote size={14} />
+                      {entry.notes ? "Notiz bearbeiten" : "Notiz hinzufügen"}
+                    </button>
+                    <button
+                      className="program-menu-item"
+                      onClick={() => {
                         setOpenRestPicker((s) => ({ ...s, [entry.exerciseId]: true }));
                         setOpenEntryMenu(null);
                       }}
@@ -7985,24 +7985,15 @@ function LogView({
               </div>
             )}
 
-            {/* Single note control: a slim toggle so the entry stays compact,
-                expanding into the same editable field whether there's
-                already a note or not - there is no separate place to add a
-                first note versus edit an existing one. */}
-            <button
-              type="button"
-              className={`note-toggle note-toggle-inline ${entry.notes ? "has-note" : ""}`}
-              onClick={() => toggleEntryNotes(entry.exerciseId)}
-            >
-              <StickyNote size={14} />
-              Notiz{entry.notes ? " · gesetzt" : ""}
-            </button>
-
-            {openNotes[entry.exerciseId] && (
+            {/* Note field: reached via the ⋮-menu ("Notiz hinzufügen" /
+                "Notiz bearbeiten") instead of its own button, so the entry
+                stays compact. Once a note has text it keeps showing here
+                permanently - no toggle needed to see it again later. */}
+            {(openNotes[entry.exerciseId] || entry.notes) && (
               <textarea
                 className="session-notes note-inline"
                 placeholder="Notiz zu dieser Übung, z. B. Ausführung, Beschwerden, Griffweite…"
-                autoFocus
+                autoFocus={openNotes[entry.exerciseId]}
                 value={entry.notes || history.lastNote || ""}
                 onChange={(e) => updateEntryNotes(entry.exerciseId, e.target.value)}
               />

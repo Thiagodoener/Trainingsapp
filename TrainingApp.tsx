@@ -715,6 +715,166 @@ function getTimePR(logs, exerciseId) {
   return best;
 }
 
+// ---------------------------------------------------------------------------
+// Belastung pro Muskelgruppe
+//
+// Die Frage dahinter: "Habe ich diese Muskelgruppe mehr oder weniger belastet
+// als in den Wochen davor?" - und zwar so, dass die Antwort stimmt.
+//
+// Warum nicht Kilogramm: Kilogramm-Volumen ist zwischen Übungen NICHT
+// vergleichbar. Wer von der Langhantel auf Kurzhanteln wechselt, bewegt bei
+// gleicher Anstrengung viel weniger Kilogramm - die Kurve würde einen
+// Rückschritt zeigen, den es nie gab.
+//
+// Warum nicht nur Sätze: Sätze lösen das Geräte-Problem, stagnieren aber
+// zwangsläufig. Wer bei gleicher Satzzahl schwerer wird, sieht davon nichts.
+//
+// Deshalb wird JEDER Satz an der eigenen Bestleistung in GENAU DIESER Übung
+// gemessen: "Wie viel von meinem besten Satz war das?" Ein Satz auf
+// Bestniveau zählt 1,0. Ein Kurzhantel-Satz mit 22 kg ist damit genauso viel
+// wert wie ein Langhantel-Satz mit 60 kg, wenn beide gleich nah am jeweiligen
+// persönlichen Bestwert liegen - und mehr Gewicht bei gleicher Satzzahl hebt
+// den Wert trotzdem an.
+//
+// Der Bestwert ist dabei nur eine Umrechnungseinheit: Er wird auf ALLE Wochen
+// gleich angewendet und kürzt sich beim Prozentvergleich einer einzelnen
+// Übung vollständig heraus. Ein neuer Rekord verfälscht die Historie also
+// nicht, er skaliert sie einheitlich um - genau deshalb bleibt der Vergleich
+// über Wochen hinweg ehrlich.
+// ---------------------------------------------------------------------------
+
+const LOAD_WEEK_MS = 7 * 86400000;
+
+// Womit die "Arbeit" eines Satzes gemessen wird, hängt an der Übungsart.
+// Bei Übungen ohne Gewicht wären Kilogramm immer 0, bei Zeit-Übungen gibt es
+// gar keine Wiederholungen - jede Art braucht ihr eigenes Maß.
+function loadSetWork(set, mode) {
+  if (mode === "time") return toNum(set.duration);
+  if (mode === "reps") return toNum(set.reps);
+  return toNum(set.weight) * toNum(set.reps);
+}
+
+// weekCount = wie viele 7-Tage-Fenster zurück betrachtet werden. Fenster 0 ist
+// immer "die letzten 7 Tage", damit die Zahlen zur bestehenden Karte
+// "Sätze pro Muskelgruppe (7 Tage)" passen.
+function getMuscleLoadSeries(
+  logs,
+  exBy,
+  subgroupOverrides,
+  timeBasedExercises,
+  weekCount = 12,
+  nowTs = Date.now()
+) {
+  const safeLogs = Array.isArray(logs) ? logs : [];
+  const emptyWeeks = () => new Array(weekCount).fill(0);
+
+  // Schritt 1: Pro Übung festlegen, wie "Arbeit" gemessen wird. Ob eine Übung
+  // zeitbasiert ist, entscheidet weiterhin isTimeBasedInLogs - das ist die
+  // eine Stelle im Code, die das beantwortet, und das soll so bleiben. Das
+  // Ergebnis wird gemerkt, weil die Funktion sonst pro Übung erneut alle Logs
+  // durchsucht.
+  const timeCache = {};
+  const hasWeight = {};
+  safeLogs.forEach((l) => {
+    logEntries(l).forEach((e) => {
+      entrySets(e).forEach((s) => {
+        if (!s.done || s.warmup) return;
+        if (toNum(s.weight) > 0) hasWeight[e.exerciseId] = true;
+      });
+    });
+  });
+  const modeOf = (exerciseId) => {
+    if (!(exerciseId in timeCache)) {
+      timeCache[exerciseId] = isTimeBasedInLogs(safeLogs, exerciseId, timeBasedExercises);
+    }
+    if (timeCache[exerciseId]) return "time";
+    return hasWeight[exerciseId] ? "weight" : "reps";
+  };
+
+  // Schritt 2: Der beste Einzelsatz aller Zeiten je Übung - der Maßstab, an
+  // dem später jeder Satz gemessen wird.
+  const best = {};
+  safeLogs.forEach((l) => {
+    logEntries(l).forEach((e) => {
+      const mode = modeOf(e.exerciseId);
+      entrySets(e).forEach((s) => {
+        if (!s.done || s.warmup) return;
+        const work = loadSetWork(s, mode);
+        if (work > (best[e.exerciseId] || 0)) best[e.exerciseId] = work;
+      });
+    });
+  });
+
+  // Schritt 3: Jeden Satz seinem 7-Tage-Fenster und seinen Muskelgruppen
+  // zuordnen.
+  const groupWeeks = {};
+  const subWeeks = {};
+  safeLogs.forEach((l) => {
+    const ts = new Date(l?.date).getTime();
+    if (!Number.isFinite(ts)) return;
+    // Ein Datum minimal in der Zukunft (Zeitzonen, Uhr verstellt) würde einen
+    // negativen Index ergeben und den Eintrag verschlucken - der zählt zur
+    // laufenden Woche.
+    const idx = Math.max(0, Math.floor((nowTs - ts) / LOAD_WEEK_MS));
+    if (idx >= weekCount) return;
+    logEntries(l).forEach((e) => {
+      const ex = exBy[e.exerciseId];
+      if (!ex) return;
+      const reference = best[e.exerciseId] || 0;
+      if (reference <= 0) return; // ohne Bestwert kein Maßstab
+      const mode = modeOf(e.exerciseId);
+      let score = 0;
+      entrySets(e).forEach((s) => {
+        if (!s.done || s.warmup) return;
+        score += loadSetWork(s, mode) / reference;
+      });
+      if (score === 0) return;
+      if (!groupWeeks[ex.group]) groupWeeks[ex.group] = emptyWeeks();
+      groupWeeks[ex.group][idx] += score;
+      // Gleiche Regel wie bei den Sätzen: ohne zugewiesene Untergruppe läuft
+      // die Arbeit unter "Sonstige", bei mehreren zählt sie in jeder davon -
+      // aber nur einmal in der Summe der Hauptgruppe.
+      const subs = getExerciseSubgroups(ex, subgroupOverrides);
+      if (!subWeeks[ex.group]) subWeeks[ex.group] = {};
+      (subs.length > 0 ? subs : ["sonstige"]).forEach((key) => {
+        if (!subWeeks[ex.group][key]) subWeeks[ex.group][key] = emptyWeeks();
+        subWeeks[ex.group][key][idx] += score;
+      });
+    });
+  });
+
+  // Schritt 4: Ausgabe von alt nach neu drehen, damit eine Sparkline die
+  // Werte direkt von links nach rechts zeichnen kann.
+  const toSeries = (weeks) => (weeks ? [...weeks].reverse() : emptyWeeks());
+  return MUSCLE_GROUPS.map((g) => {
+    const values = toSeries(groupWeeks[g.id]);
+    const subDefs = SUBGROUPS[g.id] || [];
+    const subs = subDefs
+      .map((sg) => ({ id: sg.id, label: sg.label, values: toSeries(subWeeks[g.id]?.[sg.id]) }))
+      .concat([{ id: "sonstige", label: "Sonstige", values: toSeries(subWeeks[g.id]?.sonstige) }])
+      .map((sg) => ({ ...sg, current: sg.values[sg.values.length - 1] || 0 }));
+    return { id: g.id, label: g.label, values, current: values[values.length - 1] || 0, subs };
+  });
+}
+
+// Prozentuale Veränderung der laufenden Woche gegenüber den Wochen davor.
+// compareWeeks = 1 vergleicht mit der Vorwoche, 4 mit dem Schnitt der letzten
+// vier Wochen. Der Mittelwert ist bewusst wählbar: ein einzelner Ausfalltag
+// verzerrt den Vergleich mit genau einer Woche stark, über vier Wochen kaum.
+// Rückgabe null bedeutet "nicht berechenbar" (keine Vorgeschichte oder vorher
+// gar nichts trainiert) - das ist etwas anderes als 0 % und muss in der
+// Anzeige auch anders aussehen.
+function muscleLoadChange(values, compareWeeks) {
+  if (!Array.isArray(values) || values.length < 2) return null;
+  const current = values[values.length - 1] || 0;
+  const from = Math.max(0, values.length - 1 - compareWeeks);
+  const reference = values.slice(from, values.length - 1);
+  if (reference.length === 0) return null;
+  const avg = reference.reduce((sum, v) => sum + (v || 0), 0) / reference.length;
+  if (avg <= 0) return null;
+  return ((current - avg) / avg) * 100;
+}
+
 const EQUIPMENT_OPTIONS = ["Langhantel", "Kurzhanteln", "Kabelzug", "Maschine", "Kettlebell", "Gewichtsscheibe", "Körpergewicht", "Band", "Sonstiges"];
 
 function getExerciseMeta(exercise) {

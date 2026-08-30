@@ -3014,6 +3014,14 @@ export default function TrainingApp() {
           display: flex;
           flex-direction: column;
           gap: 2px;
+          /* Grid columns default to shrinking no further than their content's
+             own width. A long, unbroken entry like "Arbeitsweg" would then
+             force this column past its 1fr share, pushing the whole week -
+             and with it Sunday, the last column - past the screen edge and
+             behind the app shell's overflow:hidden. min-width: 0 lets the
+             column actually shrink to its fair share, so the chip's own
+             ellipsis (not the missing screen space) is what truncates text. */
+          min-width: 0;
         }
         .cal-day.is-outside {
           opacity: 0.35;

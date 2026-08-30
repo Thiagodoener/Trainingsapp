@@ -468,6 +468,34 @@ function getExerciseHistory(logs, exerciseId, excludeSessionId, isTimeBased = fa
   };
 }
 
+// Live-Vergleich zum letzten Mal, während der Eingabe - nicht erst wenn ein
+// Satz abgehakt wird. "Volumen" heißt hier je nach Übungsart Gewicht×Wdh.,
+// Sekunden oder reine Wiederholungen - dieselben drei Maße, die der Rest der
+// App für diese Übungsarten schon verwendet.
+// Anders als bei der Muskelgruppen-Belastung gibt es hier kein Geräte-
+// Problem: Es wird immer dieselbe Übung mit sich selbst verglichen, nie
+// Langhantel gegen Kurzhantel - deshalb ist rohes Volumen hier unproblematisch.
+// Vorbelegte Felder entsprechen zu Beginn exakt dem letzten Mal, macht also
+// bewusst 0 % - erst eine tatsächliche Änderung an Gewicht oder Wdh. bewegt
+// die Zahl. null bedeutet "keine Vorgeschichte", nicht 0 %.
+function exerciseVolumeChange(currentSets, lastSets, isTimeBased, usesWeight) {
+  if (!Array.isArray(lastSets) || lastSets.length === 0) return null;
+  const metric = (set) =>
+    isTimeBased
+      ? toNum(set.duration)
+      : usesWeight
+      ? toNum(set.weight) * toNum(set.reps)
+      : toNum(set.reps);
+  const sum = (sets) =>
+    (Array.isArray(sets) ? sets : [])
+      .filter((s) => s && !s.warmup)
+      .reduce((total, s) => total + metric(s), 0);
+  const lastTotal = sum(lastSets);
+  if (lastTotal <= 0) return null;
+  const currentTotal = sum(currentSets);
+  return ((currentTotal - lastTotal) / lastTotal) * 100;
+}
+
 // Liefert die komplette Verlaufsliste einer Übung über alle Trainings hinweg
 // (jüngstes zuerst), inkl. der Notiz, die pro Trainingseinheit dazu hinterlegt wurde.
 function getExerciseTimeline(logs, exerciseId) {
@@ -3098,6 +3126,21 @@ export default function TrainingApp() {
           justify-content: center;
           box-shadow: 0 0 0 2px var(--surface);
         }
+        /* Live-Vorschau des Volumen-Vergleichs zum letzten Mal - neben dem
+           Übungsnamen, damit sie beim Eintragen im Blick bleibt. */
+        .volume-change-badge {
+          margin-left: 4px;
+          flex-shrink: 0;
+          font-family: 'Oswald', sans-serif;
+          font-size: 12px;
+          font-weight: 600;
+          padding: 2px 7px;
+          border-radius: 999px;
+          background: var(--surface-alt);
+        }
+        .volume-change-up { color: var(--success); }
+        .volume-change-down { color: var(--danger); }
+        .volume-change-neutral { color: var(--text-dim); }
 
         .auto-run-bar {
           background: var(--surface);
@@ -8048,6 +8091,8 @@ function LogView({
           if (score > bestScore) { bestScore = score; setPrIndex = i; setPrList = prs; }
         });
         const exercisePrs = describeExercisePRs(entry.sets, history, isTimeBased, hasWeightHere);
+        const volumeChange = exerciseVolumeChange(entry.sets, history.lastSets, isTimeBased, usesWeight);
+        const volumeChangeRounded = volumeChange === null ? null : Math.round(volumeChange);
         const ssInfo = supersetGroupInfo[entry.exerciseId] || { groupSize: 1, isFirst: true, isLast: true };
         const isSuperset = ssInfo.groupSize > 1;
         return (
@@ -8095,6 +8140,21 @@ function LogView({
                     }}
                   >
                     <Trophy size={12} />
+                  </span>
+                )}
+                {volumeChange !== null && (
+                  <span
+                    className={`volume-change-badge ${
+                      volumeChangeRounded > 0
+                        ? "volume-change-up"
+                        : volumeChangeRounded < 0
+                        ? "volume-change-down"
+                        : "volume-change-neutral"
+                    }`}
+                    title="Volumen dieser Übung im Vergleich zum letzten Mal – live, während du einträgst"
+                  >
+                    {volumeChangeRounded > 0 ? "+" : ""}
+                    {volumeChangeRounded}%
                   </span>
                 )}
               </div>

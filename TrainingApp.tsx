@@ -28,6 +28,7 @@ import {
   Repeat,
   Sun,
   Moon,
+  Globe,
 } from "lucide-react";
 import {
   LineChart,
@@ -371,6 +372,24 @@ function isTimeBasedInLogs(logs, exerciseId, timeBasedExercises) {
   return (logs || []).some((l) =>
     logEntries(l).some((e) => e.exerciseId === exerciseId && e.targetUseTime)
   );
+}
+
+// Übungen, die überall gleich sind - Liegestütze, Plank, alles mit Band.
+// Bei ihnen hängt die Leistung nicht am Studio, also darf die Historie auch
+// nicht pro Gym auseinandergerissen werden: eine durchgehende Linie im
+// Diagramm, ein durchgehender Rekord, ein "letztes Mal" über alle Gyms.
+// Die Einstellung wird pro Übung gesetzt und bleibt dauerhaft.
+function isGymIndependent(exerciseId, gymIndependentExercises) {
+  return !!(gymIndependentExercises && gymIndependentExercises[exerciseId]);
+}
+
+// Die eine Stelle, die entscheidet, ob nach Gym getrennt wird. Wer null
+// zurückbekommt, vergleicht über alle Gyms hinweg. Jede Auswertung, die ein
+// gymId weiterreicht, schickt es zuerst hier durch - sonst würde eine
+// vergessene Stelle die Übung weiterhin aufsplitten, während der Rest der
+// App sie längst als überall-gleich behandelt.
+function effectiveGymId(exerciseId, gymId, gymIndependentExercises) {
+  return isGymIndependent(exerciseId, gymIndependentExercises) ? null : gymId;
 }
 
 function getExerciseHistory(logs, exerciseId, excludeSessionId, isTimeBased = false, gymId = null) {
@@ -1006,6 +1025,7 @@ const BACKUP_KEYS = [
   "exercise-notes",
   "exercise-name-overrides",
   "exercise-time-based",
+  "exercise-gym-independent",
   "exercise-subgroup-overrides",
   "exercise-equipment-overrides",
   "training-programs",
@@ -1168,6 +1188,7 @@ export default function TrainingApp() {
   const [exerciseSubgroupOverrides, setExerciseSubgroupOverrides] = useState({});
   const [exerciseEquipmentOverrides, setExerciseEquipmentOverrides] = useState({});
   const [timeBasedExercises, setTimeBasedExercises] = useState({});
+  const [gymIndependentExercises, setGymIndependentExercises] = useState({});
 
   const [building, setBuilding] = useState(false); // plan builder open
   const [editingPlan, setEditingPlan] = useState(null);
@@ -1212,7 +1233,7 @@ export default function TrainingApp() {
 
   useEffect(() => {
     (async () => {
-      const [p, l, c, f, en, no, tb, active, prog, activeProg, sg, ce, cc, eq, th, gy, activeGy, restEnd] = await Promise.all([
+      const [p, l, c, f, en, no, tb, gi, active, prog, activeProg, sg, ce, cc, eq, th, gy, activeGy, restEnd] = await Promise.all([
         loadJSON("training-plans", []),
         loadJSON("workout-logs", []),
         loadJSON("custom-exercises", []),
@@ -1220,6 +1241,7 @@ export default function TrainingApp() {
         loadJSON("exercise-notes", {}),
         loadJSON("exercise-name-overrides", {}),
         loadJSON("exercise-time-based", {}),
+        loadJSON("exercise-gym-independent", {}),
         loadJSON("active-workout", null),
         loadJSON("training-programs", []),
         loadJSON("active-program-id", null),
@@ -1258,6 +1280,7 @@ export default function TrainingApp() {
       setExerciseNameOverrides(no);
       setExerciseSubgroupOverrides(sg);
       setTimeBasedExercises(tb);
+      setGymIndependentExercises(gi);
       setSession(active || null);
       // A rest that already expired while the app was closed is not restored -
       // it would show a dead "0:00" bar with nothing to count down to.
@@ -1391,6 +1414,10 @@ export default function TrainingApp() {
     setTimeBasedExercises(next);
     await saveJSON("exercise-time-based", next);
   };
+  const persistGymIndependentExercises = async (next) => {
+    setGymIndependentExercises(next);
+    await saveJSON("exercise-gym-independent", next);
+  };
 
   const createSessionFromPlan = (plan, gymId = null) => ({
     id: uid(),
@@ -1403,8 +1430,12 @@ export default function TrainingApp() {
       // Start from what was actually achieved last time rather than the
       // numbers stored in the plan - the plan holds the starting point, the
       // last workout holds the current state. With a gym selected the search
-      // prefers that gym (weights differ between gyms).
-      const history = getExerciseHistory(logs, it.exerciseId, null, !!it.useTime, gymId);
+      // prefers that gym (weights differ between gyms) - unless the exercise
+      // is marked as being the same everywhere.
+      const history = getExerciseHistory(
+        logs, it.exerciseId, null, !!it.useTime,
+        effectiveGymId(it.exerciseId, gymId, gymIndependentExercises)
+      );
       const lastWorking = history?.lastSets?.find((set) => !set.warmup);
       const targetReps =
         lastWorking && toNum(lastWorking.reps) > 0 ? toNum(lastWorking.reps) : it.reps || 10;
@@ -1536,6 +1567,9 @@ export default function TrainingApp() {
   };
   const handleToggleTimeBased = async (exerciseId, enabled) => {
     await persistTimeBasedExercises({ ...timeBasedExercises, [exerciseId]: enabled });
+  };
+  const handleToggleGymIndependent = async (exerciseId, enabled) => {
+    await persistGymIndependentExercises({ ...gymIndependentExercises, [exerciseId]: enabled });
   };
   const handleAddCustomExercise = async (exercise) => {
     await persistCustomExercises([...customExercises, exercise]);
@@ -3408,7 +3442,9 @@ export default function TrainingApp() {
             onUpdateExerciseNote={handleUpdateExerciseNote}
             onRenameExercise={handleRenameExercise}
             timeBasedExercises={timeBasedExercises}
+            gymIndependentExercises={gymIndependentExercises}
             onToggleTimeBased={handleToggleTimeBased}
+            onToggleGymIndependent={handleToggleGymIndependent}
             onRequestConfirm={askConfirm}
           />
         ) : tab === "plans" ? (
@@ -3428,9 +3464,11 @@ export default function TrainingApp() {
               onSetExerciseEquipment={handleSetExerciseEquipment}
               onAddCustom={handleAddCustomExercise}
               timeBasedExercises={timeBasedExercises}
+              gymIndependentExercises={gymIndependentExercises}
               onUpdateExerciseNote={handleUpdateExerciseNote}
               onRenameExercise={handleRenameExercise}
               onToggleTimeBased={handleToggleTimeBased}
+              onToggleGymIndependent={handleToggleGymIndependent}
               onCancel={() => { setBuilding(false); setEditingPlan(null); }}
               onSave={async (plan) => {
                 const next = editingPlan
@@ -3530,9 +3568,11 @@ export default function TrainingApp() {
             exerciseEquipmentOverrides={exerciseEquipmentOverrides}
             onSetExerciseEquipment={handleSetExerciseEquipment}
             timeBasedExercises={timeBasedExercises}
+            gymIndependentExercises={gymIndependentExercises}
             onUpdateExerciseNote={handleUpdateExerciseNote}
             onRenameExercise={handleRenameExercise}
             onToggleTimeBased={handleToggleTimeBased}
+            onToggleGymIndependent={handleToggleGymIndependent}
             onStartFromPlan={(plan) => requestStart(plan)}
             onUpdateSession={updateSession}
             onRequestConfirm={askConfirm}
@@ -3597,7 +3637,8 @@ export default function TrainingApp() {
                     isTimeBasedInLogs(logs, entry.exerciseId, timeBasedExercises) ||
                     !!entry.targetUseTime;
                   const best = getExerciseHistory(
-                    logs, entry.exerciseId, cleaned.id, isTimeBased, cleaned.gymId
+                    logs, entry.exerciseId, cleaned.id, isTimeBased,
+                    effectiveGymId(entry.exerciseId, cleaned.gymId, gymIndependentExercises)
                   );
                   let bestOfEntry = null;
                   entry.sets.forEach((set) => {
@@ -3718,9 +3759,11 @@ export default function TrainingApp() {
             exerciseEquipmentOverrides={exerciseEquipmentOverrides}
             onSetExerciseEquipment={handleSetExerciseEquipment}
             timeBasedExercises={timeBasedExercises}
+            gymIndependentExercises={gymIndependentExercises}
             onUpdateExerciseNote={handleUpdateExerciseNote}
             onRenameExercise={handleRenameExercise}
             onToggleTimeBased={handleToggleTimeBased}
+            onToggleGymIndependent={handleToggleGymIndependent}
           />
         )}
         </div>
@@ -5079,7 +5122,9 @@ function ExercisesView({
   onUpdateExerciseNote,
   onRenameExercise,
   timeBasedExercises,
+  gymIndependentExercises,
   onToggleTimeBased,
+  onToggleGymIndependent,
   onRequestConfirm,
   gyms = [],
 }) {
@@ -5238,9 +5283,11 @@ function ExercisesView({
           exerciseEquipmentOverrides={exerciseEquipmentOverrides}
           onSetExerciseEquipment={onSetExerciseEquipment}
           timeBasedExercises={timeBasedExercises}
+          gymIndependentExercises={gymIndependentExercises}
           onUpdateExerciseNote={onUpdateExerciseNote}
           onRenameExercise={onRenameExercise}
           onToggleTimeBased={onToggleTimeBased}
+          onToggleGymIndependent={onToggleGymIndependent}
           onClose={() => setSelectedExerciseId(null)}
         />
       )}
@@ -5263,9 +5310,11 @@ function ExerciseDetailSheet({
   exerciseEquipmentOverrides,
   onSetExerciseEquipment,
   timeBasedExercises,
+  gymIndependentExercises,
   onUpdateExerciseNote,
   onRenameExercise,
   onToggleTimeBased,
+  onToggleGymIndependent,
   onClose,
   gyms = [],
 }) {
@@ -5318,6 +5367,7 @@ function ExerciseDetailSheet({
     [logs, exercise.id]
   );
   const isTimeBasedExercise = isTimeBasedInLogs(logs, exercise.id, timeBasedExercises);
+  const isGymIndependentExercise = isGymIndependent(exercise.id, gymIndependentExercises);
   const bestStats = useMemo(
     () => (isTimeBasedExercise ? null : getExerciseBestStats(logs, exercise.id)),
     [logs, exercise.id, isTimeBasedExercise]
@@ -5461,6 +5511,7 @@ function ExerciseDetailSheet({
                   exerciseId={exercise.id}
                   isTimeBased={isTimeBasedExercise}
                   gyms={gyms}
+                  gymIndependent={isGymIndependentExercise}
                 />
               )}
             </>
@@ -5517,6 +5568,17 @@ function ExerciseDetailSheet({
               title="Zeitangabe für diese Übung aktivieren (z. B. Plank, Sprints)"
             >
               <Clock size={11} /> Zeitbasiert
+            </button>
+
+            {/* Liegestütze, Plank, Bandübungen: die Leistung hängt nicht am
+                Studio. Ohne diesen Schalter würde die Historie beim Wechsel
+                des Gyms in getrennte Linien zerfallen. */}
+            <button
+              className={`chip chip-sm ${isGymIndependentExercise ? "active" : ""}`}
+              onClick={() => onToggleGymIndependent(exercise.id, !isGymIndependentExercise)}
+              title="Diese Übung ist in jedem Gym gleich (z. B. Liegestütze, Plank, Bandübungen) – Verlauf, Rekorde und „letztes Mal“ werden dann nicht nach Gym getrennt"
+            >
+              <Globe size={11} /> Überall gleich
             </button>
 
             {availableSubgroups.length > 0 && (
@@ -5627,9 +5689,11 @@ function PlanBuilder({
   onSetExerciseEquipment,
   onAddCustom,
   timeBasedExercises,
+  gymIndependentExercises,
   onUpdateExerciseNote,
   onRenameExercise,
   onToggleTimeBased,
+  onToggleGymIndependent,
   onCancel,
   onSave,
   onCreateFolder,
@@ -5820,7 +5884,10 @@ function PlanBuilder({
     // build a plan around an exercise you already train, those numbers are
     // the useful starting point.
     const wasTimed = isTimeBasedInLogs(logs, exerciseId, timeBasedExercises);
-    const history = getExerciseHistory(logs, exerciseId, null, wasTimed, activeGymId);
+    const history = getExerciseHistory(
+      logs, exerciseId, null, wasTimed,
+      effectiveGymId(exerciseId, activeGymId, gymIndependentExercises)
+    );
     const working = (history?.lastSets || []).filter((set) => !set.warmup);
     const last = working[0];
     const warmCount = (history?.lastSets || []).filter((set) => set.warmup).length;
@@ -6631,9 +6698,11 @@ function PlanBuilder({
           exerciseEquipmentOverrides={exerciseEquipmentOverrides}
           onSetExerciseEquipment={onSetExerciseEquipment}
           timeBasedExercises={timeBasedExercises}
+          gymIndependentExercises={gymIndependentExercises}
           onUpdateExerciseNote={onUpdateExerciseNote}
           onRenameExercise={onRenameExercise}
           onToggleTimeBased={onToggleTimeBased}
+          onToggleGymIndependent={onToggleGymIndependent}
           onClose={() => setSelectedExerciseId(null)}
         />
       )}
@@ -7229,9 +7298,11 @@ function LogView({
   exerciseEquipmentOverrides,
   onSetExerciseEquipment,
   timeBasedExercises,
+  gymIndependentExercises,
   onUpdateExerciseNote,
   onRenameExercise,
   onToggleTimeBased,
+  onToggleGymIndependent,
   onStartFromPlan,
   onUpdateSession,
   onFinish,
@@ -8075,7 +8146,10 @@ function LogView({
             : isTimeBasedInLogs(logs, entry.exerciseId, timeBasedExercises) || !!entry.targetUseTime;
         // Comparing against the same gym only - a record set on a machine
         // that runs lighter elsewhere is not a record here.
-        const history = getExerciseHistory(logs, entry.exerciseId, session.id, isTimeBased, session.gymId);
+        const history = getExerciseHistory(
+          logs, entry.exerciseId, session.id, isTimeBased,
+          effectiveGymId(entry.exerciseId, session.gymId, gymIndependentExercises)
+        );
         // Only the single best set of this workout carries the trophy: when
         // you work up 60/70/80 all three would beat the old best, and three
         // trophies in a row say less than one on the set that counts.
@@ -8701,9 +8775,11 @@ function LogView({
           exerciseEquipmentOverrides={exerciseEquipmentOverrides}
           onSetExerciseEquipment={onSetExerciseEquipment}
           timeBasedExercises={timeBasedExercises}
+          gymIndependentExercises={gymIndependentExercises}
           onUpdateExerciseNote={onUpdateExerciseNote}
           onRenameExercise={onRenameExercise}
           onToggleTimeBased={onToggleTimeBased}
+          onToggleGymIndependent={onToggleGymIndependent}
           onClose={() => setSelectedExerciseId(null)}
         />
       )}
@@ -8738,17 +8814,19 @@ function useChartColors(theme) {
   }, [theme]);
 }
 
-function ExerciseCharts({ logs, exerciseId, isTimeBased, theme, gyms = [] }) {
+function ExerciseCharts({ logs, exerciseId, isTimeBased, theme, gyms = [], gymIndependent = false }) {
   const chartColors = useChartColors(theme);
 
   const selectedIsTimeBased = isTimeBased;
   const selected = exerciseId;
   // Weights are not comparable between gyms, so as soon as an exercise has
   // been trained in more than one, each gym gets its own line instead of a
-  // single line that jumps up and down for no real reason.
+  // single line that jumps up and down for no real reason. Exercises marked
+  // as being the same everywhere (bodyweight, bands) are the exception -
+  // there the split would tear one continuous progression into fragments.
   const relevantLogs = logs.filter((l) => logEntries(l).some((e) => e.exerciseId === selected));
   const gymKeys = [...new Set(relevantLogs.map((l) => l.gymId || "none"))];
-  const splitByGym = gymKeys.length > 1;
+  const splitByGym = gymKeys.length > 1 && !gymIndependent;
   const gymLabel = (key) =>
     key === "none" ? "Ohne Gym" : gyms.find((g) => g.id === key)?.name || "Unbekanntes Gym";
 
@@ -9141,9 +9219,11 @@ function ProgressView({
   exerciseEquipmentOverrides,
   onSetExerciseEquipment,
   timeBasedExercises,
+  gymIndependentExercises,
   onUpdateExerciseNote,
   onRenameExercise,
   onToggleTimeBased,
+  onToggleGymIndependent,
   gyms = [],
   onResumeLog,
   focusLogId,
@@ -9300,9 +9380,11 @@ function ProgressView({
           exerciseEquipmentOverrides={exerciseEquipmentOverrides}
           onSetExerciseEquipment={onSetExerciseEquipment}
           timeBasedExercises={timeBasedExercises}
+          gymIndependentExercises={gymIndependentExercises}
           onUpdateExerciseNote={onUpdateExerciseNote}
           onRenameExercise={onRenameExercise}
           onToggleTimeBased={onToggleTimeBased}
+          onToggleGymIndependent={onToggleGymIndependent}
         />
       </div>
     );
@@ -9519,6 +9601,7 @@ function ProgressView({
             isTimeBased={selectedIsTimeBased}
             theme={theme}
             gyms={gyms}
+            gymIndependent={isGymIndependent(selected, gymIndependentExercises)}
           />
         </>
       )}
@@ -9536,9 +9619,11 @@ function ProgressView({
           exerciseEquipmentOverrides={exerciseEquipmentOverrides}
           onSetExerciseEquipment={onSetExerciseEquipment}
           timeBasedExercises={timeBasedExercises}
+          gymIndependentExercises={gymIndependentExercises}
           onUpdateExerciseNote={onUpdateExerciseNote}
           onRenameExercise={onRenameExercise}
           onToggleTimeBased={onToggleTimeBased}
+          onToggleGymIndependent={onToggleGymIndependent}
           onClose={() => setSelectedExerciseId(null)}
         />
       )}
@@ -9560,9 +9645,11 @@ function HistoryView({
   exerciseEquipmentOverrides,
   onSetExerciseEquipment,
   timeBasedExercises,
+  gymIndependentExercises,
   onUpdateExerciseNote,
   onRenameExercise,
   onToggleTimeBased,
+  onToggleGymIndependent,
   gyms = [],
   onResumeLog,
   focusLogId,
@@ -9710,9 +9797,11 @@ function HistoryView({
           exerciseEquipmentOverrides={exerciseEquipmentOverrides}
           onSetExerciseEquipment={onSetExerciseEquipment}
           timeBasedExercises={timeBasedExercises}
+          gymIndependentExercises={gymIndependentExercises}
           onUpdateExerciseNote={onUpdateExerciseNote}
           onRenameExercise={onRenameExercise}
           onToggleTimeBased={onToggleTimeBased}
+          onToggleGymIndependent={onToggleGymIndependent}
           onClose={() => setSelectedExerciseId(null)}
         />
       )}

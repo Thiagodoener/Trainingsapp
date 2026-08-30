@@ -1330,11 +1330,35 @@ export default function TrainingApp() {
     await persistCustomExercises([...customExercises, exercise]);
   };
 
-  const addCalendarAction = async (date, categoryId, text) => {
+  // Activities are training too, just a kind the workout logger cannot hold:
+  // a walk to work, breathing drills, tendon rehab. They get the two things
+  // that make an entry a diary record instead of a note - an optional
+  // duration and a "done" mark - without the detour through exercises and
+  // sets. durationMinutes/doneAt stay absent on older entries, which read
+  // as "no duration" and "not done" without any migration.
+  const addCalendarAction = async (date, categoryId, text, durationMinutes) => {
     await persistCalendarEntries([
       ...calendarEntries,
-      { id: uid(), date, type: "action", categoryId, text },
+      {
+        id: uid(),
+        date,
+        type: "action",
+        categoryId,
+        text,
+        durationMinutes: durationMinutes || null,
+        doneAt: null,
+      },
     ]);
+  };
+  // One tap marks an activity as done or undone. The timestamp is kept
+  // rather than a plain boolean so a later "what did I do when" view has
+  // something to work with.
+  const toggleCalendarActionDone = async (id) => {
+    await persistCalendarEntries(
+      calendarEntries.map((ce) =>
+        ce.id === id ? { ...ce, doneAt: ce.doneAt ? null : new Date().toISOString() } : ce
+      )
+    );
   };
   const scheduleCalendarWorkout = async (date, planId) => {
     await persistCalendarEntries([
@@ -3066,6 +3090,13 @@ export default function TrainingApp() {
           border-radius: 10px;
           padding: 10px 12px;
         }
+        /* Anything already done gets a green left edge, so a day reads as
+           "what happened" versus "what is still planned" without having to
+           compare the individual rows. The class was used before this rule
+           existed and simply did nothing. */
+        .cal-detail-done {
+          border-left: 3px solid var(--success);
+        }
       `}</style>
 
       <div className="content" onScroll={handleContentScroll}>
@@ -3086,6 +3117,7 @@ export default function TrainingApp() {
             onAddAction={addCalendarAction}
             onScheduleWorkout={scheduleCalendarWorkout}
             onDeleteEntry={deleteCalendarEntry}
+            onToggleActionDone={toggleCalendarActionDone}
             onCreateCategory={createCalendarCategory}
             onDeleteCategory={deleteCalendarCategory}
             onStartScheduledWorkout={startScheduledWorkout}
@@ -3771,6 +3803,7 @@ function CalendarView({
   onAddAction,
   onScheduleWorkout,
   onDeleteEntry,
+  onToggleActionDone,
   onCreateCategory,
   onDeleteCategory,
   onStartScheduledWorkout,
@@ -3784,6 +3817,7 @@ function CalendarView({
   const [addMode, setAddMode] = useState("action");
   const [newActionText, setNewActionText] = useState("");
   const [newActionCategory, setNewActionCategory] = useState(null);
+  const [newActionDuration, setNewActionDuration] = useState("");
   const [workoutQuery, setWorkoutQuery] = useState("");
   const [categoryManagerOpen, setCategoryManagerOpen] = useState(false);
   const [newCategoryName, setNewCategoryName] = useState("");
@@ -3852,9 +3886,17 @@ function CalendarView({
   const handleAddAction = () => {
     const trimmed = newActionText.trim();
     if (!trimmed) return;
-    onAddAction(selectedDate, newActionCategory, trimmed);
-    setNewActionText("");
+    onAddAction(selectedDate, newActionCategory, trimmed, toNum(newActionDuration));
+    closeAddDialog();
+  };
+  // Closing without saving has to clear the draft as well, otherwise the
+  // abandoned text and duration greet you again the next time the dialog
+  // opens.
+  const closeAddDialog = () => {
     setAddOpen(false);
+    setNewActionText("");
+    setNewActionDuration("");
+    setWorkoutQuery("");
   };
 
   const filteredPlansForSchedule = plans.filter((p) =>
@@ -4000,12 +4042,15 @@ function CalendarView({
                           );
                         }
                         const cat = categoryById[entry.categoryId];
+                        // Same visual language as workouts: a tick means it
+                        // happened, no tick means it is still ahead.
                         return (
                           <span
                             key={entry.id}
                             className="cal-entry-chip"
                             style={cat ? { background: cat.color, color: readableTextOn(cat.color) } : undefined}
                           >
+                            {entry.doneAt && <Check size={9} />}
                             {entry.text}
                           </span>
                         );
@@ -4120,12 +4165,41 @@ function CalendarView({
               );
             }
             const cat = categoryById[entry.categoryId];
+            const isDone = !!entry.doneAt;
             return (
-              <div key={entry.id} className="cal-detail-item">
+              <div key={entry.id} className={`cal-detail-item ${isDone ? "cal-detail-done" : ""}`}>
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
                   <span style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0 }}>
+                    {/* One tap is the whole logging flow for these - no
+                        exercise picker, no sets, just done or not done. */}
+                    <span
+                      className={`set-check ${isDone ? "checked" : ""}`}
+                      role="checkbox"
+                      aria-checked={isDone}
+                      title={isDone ? "Als offen markieren" : "Als erledigt markieren"}
+                      onClick={() => onToggleActionDone?.(entry.id)}
+                    >
+                      {isDone && <Check size={13} color="var(--bg)" />}
+                    </span>
                     <span className="folder-dot" style={{ background: cat ? cat.color : "var(--text-dim)", flexShrink: 0 }} />
-                    <span style={{ overflow: "hidden", textOverflow: "ellipsis" }}>{entry.text}</span>
+                    <span style={{ minWidth: 0 }}>
+                      <span
+                        style={{
+                          display: "block",
+                          overflow: "hidden",
+                          textOverflow: "ellipsis",
+                          opacity: isDone ? 0.65 : 1,
+                        }}
+                      >
+                        {entry.text}
+                      </span>
+                      {entry.durationMinutes ? (
+                        <span style={{ fontSize: 12.5, color: "var(--text-dim)" }}>
+                          <Clock size={11} style={{ marginRight: 4, verticalAlign: -1 }} />
+                          {entry.durationMinutes} Min.
+                        </span>
+                      ) : null}
+                    </span>
                   </span>
                   <button className="btn-icon" onClick={() => onDeleteEntry(entry.id)} title="Eintrag löschen">
                     <Trash2 size={13} />
@@ -4137,7 +4211,7 @@ function CalendarView({
         </div>
 
         {addOpen && (
-          <Modal title="Eintrag hinzufügen" onClose={() => setAddOpen(false)} width={420}>
+          <Modal title="Eintrag hinzufügen" onClose={closeAddDialog} width={420}>
             <div className="sub-tab-row" style={{ marginBottom: 10 }}>
               <button
                 className={`sub-tab ${addMode === "action" ? "active" : ""}`}
@@ -4177,9 +4251,19 @@ function CalendarView({
                 <label className="field-label">Eintrag</label>
                 <input
                   type="text"
-                  placeholder="z. B. Physio-Termin, Ruhetag, Waage…"
+                  placeholder="z. B. Arbeitsweg, Atemübung, Sehnenreha…"
                   value={newActionText}
                   onChange={(e) => setNewActionText(e.target.value)}
+                />
+                <label className="field-label" style={{ marginTop: 10 }}>
+                  Dauer in Minuten (optional)
+                </label>
+                <input
+                  type="text"
+                  inputMode="numeric"
+                  placeholder="z. B. 15"
+                  value={newActionDuration}
+                  onChange={(e) => setNewActionDuration(e.target.value)}
                 />
                 <button
                   className="btn btn-primary btn-block btn-sm"
@@ -4209,7 +4293,7 @@ function CalendarView({
                         <span className="ex-name">{p.name}</span>
                         <button
                           className="btn btn-primary btn-sm"
-                          onClick={() => { onScheduleWorkout(selectedDate, p.id); setAddOpen(false); }}
+                          onClick={() => { onScheduleWorkout(selectedDate, p.id); closeAddDialog(); }}
                         >
                           Eintragen
                         </button>

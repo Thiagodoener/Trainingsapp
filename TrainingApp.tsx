@@ -29,6 +29,7 @@ import {
   Sun,
   Moon,
   Globe,
+  Wind,
 } from "lucide-react";
 import {
   LineChart,
@@ -69,6 +70,113 @@ const SWATCH_COLORS = [
 ];
 const FOLDER_COLORS = SWATCH_COLORS;
 const CATEGORY_COLORS = SWATCH_COLORS;
+
+// ---------------------------------------------------------------------------
+// Atemübungen
+//
+// Eine Atemübung ist eine Liste von Phasen, die als Runde mehrfach
+// durchlaufen wird. Bewusst frei zusammenstellbar statt fester
+// Einatmen/Halten/Ausatmen-Vorlage: Box Breathing, 4-7-8, der
+// physiologische Seufzer, CO2-Tabellen und Wim Hof haben strukturell
+// nichts gemeinsam außer "Phasen nacheinander".
+//
+// seconds === null heißt "offene Phase": kein Countdown, die Zeit läuft
+// hoch und weiter geht es erst auf Antippen. Genau das braucht der
+// Atemanhalte-Teil bei Wim Hof, wo die Dauer eben nicht vorher feststeht.
+//
+// direction steuert die Grafik und ist deshalb Pflicht, nicht optional:
+// beim Kreis wächst/schrumpft er, bei der Linie läuft der Punkt nach
+// oben, unten oder waagerecht.
+// ---------------------------------------------------------------------------
+const BREATHING_COLOR = "#6ea8d8"; // Himmelblau, auch im Kalender
+const BREATHING_DIRECTIONS = [
+  { id: "in", label: "Einatmen" },
+  { id: "hold", label: "Halten" },
+  { id: "out", label: "Ausatmen" },
+];
+const BREATHING_DISPLAYS = [
+  { id: "line", label: "Linie" },
+  { id: "circle", label: "Kreis" },
+];
+
+// Fertige Vorlagen, damit man nicht bei jeder bekannten Übung von Null
+// anfängt. Werden beim Anlegen als Startpunkt angeboten und danach ganz
+// normal weiterbearbeitet.
+const BREATHING_TEMPLATES = [
+  {
+    name: "Box Breathing",
+    display: "line",
+    rounds: 6,
+    phases: [
+      { label: "Einatmen", direction: "in", seconds: 4 },
+      { label: "Halten", direction: "hold", seconds: 4 },
+      { label: "Ausatmen", direction: "out", seconds: 4 },
+      { label: "Halten", direction: "hold", seconds: 4 },
+    ],
+  },
+  {
+    name: "4-7-8 Atmung",
+    display: "line",
+    rounds: 4,
+    phases: [
+      { label: "Einatmen", direction: "in", seconds: 4 },
+      { label: "Halten", direction: "hold", seconds: 7 },
+      { label: "Ausatmen", direction: "out", seconds: 8 },
+    ],
+  },
+  {
+    name: "Physiologischer Seufzer",
+    display: "line",
+    rounds: 5,
+    phases: [
+      { label: "Einatmen", direction: "in", seconds: 2 },
+      { label: "Nochmal kurz einatmen", direction: "in", seconds: 1 },
+      { label: "Lang ausatmen", direction: "out", seconds: 6 },
+    ],
+  },
+  {
+    name: "Wim Hof",
+    display: "circle",
+    rounds: 3,
+    phases: [
+      { label: "30 schnelle Atemzüge", direction: "in", seconds: 60 },
+      { label: "Ausatmen & halten", direction: "hold", seconds: null },
+      { label: "Einatmen & halten", direction: "hold", seconds: 15 },
+    ],
+  },
+  {
+    name: "CO2-Schwellentraining",
+    display: "line",
+    rounds: 1,
+    phases: [
+      { label: "Ruhig atmen", direction: "in", seconds: 60 },
+      { label: "Anhalten", direction: "hold", seconds: 30 },
+      { label: "Ruhig atmen", direction: "in", seconds: 60 },
+      { label: "Anhalten", direction: "hold", seconds: 40 },
+      { label: "Ruhig atmen", direction: "in", seconds: 60 },
+      { label: "Anhalten", direction: "hold", seconds: 50 },
+      { label: "Ruhig atmen", direction: "in", seconds: 60 },
+      { label: "Anhalten", direction: "hold", seconds: 60 },
+    ],
+  },
+];
+
+// Eine Übung ohne Phasen liefe sonst als Endlosschleife durch nichts.
+function breathingPhases(exercise) {
+  return Array.isArray(exercise?.phases) ? exercise.phases.filter(Boolean) : [];
+}
+function breathingRounds(exercise) {
+  const n = toNum(exercise?.rounds);
+  return n > 0 ? n : 1;
+}
+// Gesamtdauer in Sekunden - null, sobald eine offene Phase dabei ist, denn
+// dann steht die Dauer vorher schlicht nicht fest.
+function breathingTotalSeconds(exercise) {
+  const phases = breathingPhases(exercise);
+  if (phases.length === 0) return 0;
+  if (phases.some((p) => p.seconds == null)) return null;
+  return phases.reduce((sum, p) => sum + toNum(p.seconds), 0) * breathingRounds(exercise);
+}
 
 // Exercise pickers only render a screenful at a time. Drawing all ~150
 // rows made every tap inside the picker redraw the entire list, which
@@ -1026,6 +1134,8 @@ const BACKUP_KEYS = [
   "exercise-name-overrides",
   "exercise-time-based",
   "exercise-gym-independent",
+  "breathing-exercises",
+  "breathing-logs",
   "exercise-subgroup-overrides",
   "exercise-equipment-overrides",
   "training-programs",
@@ -1189,6 +1299,14 @@ export default function TrainingApp() {
   const [exerciseEquipmentOverrides, setExerciseEquipmentOverrides] = useState({});
   const [timeBasedExercises, setTimeBasedExercises] = useState({});
   const [gymIndependentExercises, setGymIndependentExercises] = useState({});
+  const [breathingExercises, setBreathingExercises] = useState([]);
+  const [breathingLogs, setBreathingLogs] = useState([]);
+  const [breathingManagerOpen, setBreathingManagerOpen] = useState(false);
+  // null = Liste, sonst die gerade bearbeitete Übung (ohne id = neu).
+  const [breathingEditing, setBreathingEditing] = useState(null);
+  // Die laufende Atem-Sitzung. Liegt wie der Pausentimer in der Root-
+  // Komponente, damit ein Tabwechsel sie nicht abräumt.
+  const [breathingSession, setBreathingSession] = useState(null);
 
   const [building, setBuilding] = useState(false); // plan builder open
   const [editingPlan, setEditingPlan] = useState(null);
@@ -1233,7 +1351,7 @@ export default function TrainingApp() {
 
   useEffect(() => {
     (async () => {
-      const [p, l, c, f, en, no, tb, gi, active, prog, activeProg, sg, ce, cc, eq, th, gy, activeGy, restEnd] = await Promise.all([
+      const [p, l, c, f, en, no, tb, gi, active, prog, activeProg, sg, ce, cc, eq, th, gy, activeGy, restEnd, brEx, brLogs] = await Promise.all([
         loadJSON("training-plans", []),
         loadJSON("workout-logs", []),
         loadJSON("custom-exercises", []),
@@ -1253,6 +1371,8 @@ export default function TrainingApp() {
         loadJSON("gyms", []),
         loadJSON("active-gym-id", null),
         loadJSON("rest-timer", 0),
+        loadJSON("breathing-exercises", []),
+        loadJSON("breathing-logs", []),
       ]);
       // Migration: users who already had folders before "programs" existed
       // get one default program that all their existing folders are
@@ -1281,6 +1401,8 @@ export default function TrainingApp() {
       setExerciseSubgroupOverrides(sg);
       setTimeBasedExercises(tb);
       setGymIndependentExercises(gi);
+      setBreathingExercises(Array.isArray(brEx) ? brEx : []);
+      setBreathingLogs(Array.isArray(brLogs) ? brLogs : []);
       setSession(active || null);
       // A rest that already expired while the app was closed is not restored -
       // it would show a dead "0:00" bar with nothing to count down to.
@@ -1417,6 +1539,14 @@ export default function TrainingApp() {
   const persistGymIndependentExercises = async (next) => {
     setGymIndependentExercises(next);
     await saveJSON("exercise-gym-independent", next);
+  };
+  const persistBreathingExercises = async (next) => {
+    setBreathingExercises(next);
+    await saveJSON("breathing-exercises", next);
+  };
+  const persistBreathingLogs = async (next) => {
+    setBreathingLogs(next);
+    await saveJSON("breathing-logs", next);
   };
 
   const createSessionFromPlan = (plan, gymId = null) => ({
@@ -1611,6 +1741,72 @@ export default function TrainingApp() {
       { id: uid(), date, type: "workout", planId, logId: null },
     ]);
   };
+  // Atemübungen im Kalender funktionieren genau wie Workouts: geplant mit
+  // logId null, nach dem Abschluss zeigt logId auf die absolvierte Sitzung.
+  const scheduleCalendarBreathing = async (date, breathingId) => {
+    await persistCalendarEntries([
+      ...calendarEntries,
+      { id: uid(), date, type: "breathing", breathingId, logId: null },
+    ]);
+  };
+
+  const saveBreathingExercise = async (exercise) => {
+    const exists = breathingExercises.some((b) => b.id === exercise.id);
+    await persistBreathingExercises(
+      exists
+        ? breathingExercises.map((b) => (b.id === exercise.id ? exercise : b))
+        : [...breathingExercises, exercise]
+    );
+  };
+  const deleteBreathingExercise = (id) => {
+    const ex = breathingExercises.find((b) => b.id === id);
+    askConfirm(
+      `Atemübung „${ex?.name || ""}“ löschen? Bereits absolvierte Sitzungen bleiben im Verlauf erhalten.`,
+      async () => {
+        await persistBreathingExercises(breathingExercises.filter((b) => b.id !== id));
+      }
+    );
+  };
+  const startBreathingSession = (exercise, calendarEntryId = null) => {
+    if (breathingPhases(exercise).length === 0) {
+      showToast("Diese Atemübung hat noch keine Phasen.");
+      return;
+    }
+    setBreathingManagerOpen(false);
+    setBreathingSession({ exercise, calendarEntryId, startedAt: Date.now() });
+  };
+  // Abschluss einer Atem-Sitzung: Protokoll schreiben und - wie beim
+  // Training - einen offenen Kalendereintrag von heute automatisch abhaken,
+  // egal ob die Übung über den Kalender oder direkt gestartet wurde. Ohne
+  // das stünde dieselbe Sitzung zweimal im Tag.
+  const finishBreathingSession = async ({ exercise, calendarEntryId, startedAt, completedRounds }) => {
+    const log = {
+      id: uid(),
+      breathingId: exercise.id,
+      name: exercise.name,
+      date: new Date().toISOString(),
+      rounds: completedRounds,
+      plannedRounds: breathingRounds(exercise),
+      durationSeconds: Math.max(0, Math.round((Date.now() - startedAt) / 1000)),
+    };
+    await persistBreathingLogs([...breathingLogs, log]);
+    const dayKey = toDateKey(new Date(log.date));
+    const match =
+      calendarEntries.find((ce) => ce.id === calendarEntryId) ||
+      calendarEntries.find(
+        (ce) =>
+          ce.type === "breathing" &&
+          !ce.logId &&
+          ce.date === dayKey &&
+          ce.breathingId === exercise.id
+      );
+    if (match) {
+      await persistCalendarEntries(
+        calendarEntries.map((ce) => (ce.id === match.id ? { ...ce, logId: log.id } : ce))
+      );
+    }
+    setBreathingSession(null);
+  };
   // Calendar deletions go through the same confirmation step as deleting a
   // plan or a folder, so a mis-tap can't silently wipe an entry.
   const deleteCalendarEntry = (id) => {
@@ -1618,6 +1814,8 @@ export default function TrainingApp() {
     const label =
       entry?.type === "workout"
         ? `Diesen Workout-Termin wirklich aus dem Kalender entfernen?`
+        : entry?.type === "breathing"
+        ? `Diese Atemübung wirklich aus dem Kalender entfernen?`
         : `Eintrag „${entry?.text || ""}“ wirklich löschen?`;
     askConfirm(label, async () => {
       await persistCalendarEntries(calendarEntries.filter((ce) => ce.id !== id));
@@ -2341,6 +2539,14 @@ export default function TrainingApp() {
           max-height: none !important;
           width: 100% !important;
           height: 100% !important;
+        }
+        /* Aus demselben Grund wie bei recharts: die 32px-Sperre oben ist für
+           Icons gedacht und würde auch selbstgezeichnete SVGs auf
+           Briefmarkengröße stauchen. Beide brauchen ihre echte Größe. */
+        .sparkline,
+        .breathing-line {
+          max-width: none;
+          max-height: none;
         }
 
         .set-row {
@@ -3376,6 +3582,13 @@ export default function TrainingApp() {
           background: color-mix(in srgb, var(--accent) 35%, transparent);
           color: var(--text);
         }
+        /* Atemübungen im Himmelblau - gleiche Logik wie bei den Workouts:
+           eine Farbe für geplant wie erledigt, den Unterschied macht das
+           Symbol (▷ bzw. ✓). */
+        .cal-entry-breathing {
+          background: color-mix(in srgb, ${BREATHING_COLOR} 42%, transparent);
+          color: var(--text);
+        }
         .cal-entry-more {
           font-size: 8.5px;
           color: var(--text-dim);
@@ -3399,6 +3612,110 @@ export default function TrainingApp() {
            existed and simply did nothing. */
         .cal-detail-done {
           border-left: 3px solid var(--success);
+        }
+
+        /* --- Atemübung: geführte Sitzung ---------------------------------
+           Vollbild statt Popup: während der Übung soll nichts anderes im
+           Blick sein, und die Grafik braucht die ganze Fläche. */
+        .breathing-overlay {
+          position: absolute;
+          inset: 0;
+          z-index: 60;
+          background: var(--bg);
+          display: flex;
+          flex-direction: column;
+          padding: calc(env(safe-area-inset-top) + 14px) 18px 24px;
+        }
+        .breathing-head {
+          display: flex;
+          justify-content: space-between;
+          align-items: flex-start;
+          gap: 10px;
+        }
+        .breathing-title {
+          font-family: 'Oswald', sans-serif;
+          font-size: 18px;
+          color: var(--text);
+        }
+        .breathing-round {
+          font-size: 12.5px;
+          color: var(--text-dim);
+          margin-top: 2px;
+        }
+        .breathing-stage {
+          flex: 1;
+          min-height: 0;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          padding: 18px 0;
+        }
+        .breathing-circle-wrap {
+          position: relative;
+          width: min(62vw, 240px);
+          height: min(62vw, 240px);
+          display: flex;
+          align-items: center;
+          justify-content: center;
+        }
+        .breathing-circle {
+          position: absolute;
+          inset: 0;
+          border-radius: 50%;
+          background: color-mix(in srgb, ${BREATHING_COLOR} 55%, transparent);
+          /* Kein CSS-Übergang: die Größe kommt aus dem gemessenen
+             Phasenfortschritt und wird pro Bild neu gesetzt. Ein zusätzlicher
+             transition würde der Atmung hinterherlaufen statt ihr zu folgen. */
+        }
+        .breathing-circle-ring {
+          position: absolute;
+          inset: 0;
+          border-radius: 50%;
+          border: 1.5px dashed color-mix(in srgb, ${BREATHING_COLOR} 45%, transparent);
+        }
+        .breathing-line-wrap {
+          position: relative;
+          width: 100%;
+          height: min(46vh, 260px);
+        }
+        .breathing-line {
+          width: 100%;
+          height: 100%;
+          display: block;
+        }
+        .breathing-line polyline {
+          stroke: color-mix(in srgb, ${BREATHING_COLOR} 45%, transparent);
+        }
+        .breathing-dot {
+          position: absolute;
+          width: 16px;
+          height: 16px;
+          margin: -8px 0 0 -8px;
+          border-radius: 50%;
+          background: ${BREATHING_COLOR};
+          box-shadow: 0 0 0 5px color-mix(in srgb, ${BREATHING_COLOR} 22%, transparent);
+        }
+        .breathing-phase {
+          text-align: center;
+          font-family: 'Oswald', sans-serif;
+          font-size: 22px;
+          color: var(--text);
+        }
+        .breathing-time {
+          text-align: center;
+          font-family: 'JetBrains Mono', monospace;
+          font-size: 40px;
+          color: ${BREATHING_COLOR};
+          margin: 2px 0 18px;
+        }
+        .breathing-controls {
+          flex-shrink: 0;
+        }
+        .breathing-phase-row {
+          background: var(--surface-alt);
+          border: 1px solid var(--border);
+          border-radius: 10px;
+          padding: 10px;
         }
       `}</style>
 
@@ -3424,6 +3741,10 @@ export default function TrainingApp() {
             onCreateCategory={createCalendarCategory}
             onDeleteCategory={deleteCalendarCategory}
             onStartScheduledWorkout={startScheduledWorkout}
+            breathingExercises={breathingExercises}
+            breathingLogs={breathingLogs}
+            onScheduleBreathing={scheduleCalendarBreathing}
+            onStartScheduledBreathing={startBreathingSession}
           />
         ) : tab === "exercises" ? (
           <ExercisesView
@@ -3486,6 +3807,7 @@ export default function TrainingApp() {
             <PlansView
             logs={logs}
             onManageGyms={() => setGymManagerOpen(true)}
+            onManageBreathing={() => { setBreathingEditing(null); setBreathingManagerOpen(true); }}
             onReorderFolders={persistFolders}
             onOpenBackup={() => setBackupOpen(true)}
               plans={allPlans}
@@ -3892,6 +4214,94 @@ export default function TrainingApp() {
         </Modal>
       )}
 
+      {breathingManagerOpen && (
+        <Modal
+          title={breathingEditing ? (breathingEditing.id ? "Atemübung bearbeiten" : "Neue Atemübung") : "Atemübungen"}
+          width={420}
+          onClose={() => { setBreathingManagerOpen(false); setBreathingEditing(null); }}
+        >
+          {breathingEditing ? (
+            <BreathingEditor
+              // Auch eine Vorlage muss den Editor vorbefüllen. Nur die id
+              // fehlt ihr - daran hängt lediglich, ob gespeichert oder neu
+              // angelegt wird, nicht ob Felder übernommen werden.
+              initial={breathingEditing}
+              onCancel={() => setBreathingEditing(null)}
+              onSave={async (ex) => {
+                await saveBreathingExercise(ex);
+                setBreathingEditing(null);
+              }}
+            />
+          ) : (
+            <>
+              {breathingExercises.length === 0 && (
+                <div className="empty-state" style={{ padding: "14px 0" }}>
+                  Noch keine Atemübung angelegt. Nimm unten eine Vorlage oder baue dir eine eigene.
+                </div>
+              )}
+              <div className="modal-list">
+                {breathingExercises.map((b) => {
+                  const total = breathingTotalSeconds(b);
+                  return (
+                    <div className="modal-option" key={b.id}>
+                      <span style={{ minWidth: 0 }}>
+                        <span style={{ display: "block" }}>{b.name}</span>
+                        <span style={{ fontSize: 12, color: "var(--text-dim)" }}>
+                          {breathingPhases(b).length} Phasen · {breathingRounds(b)} Runden
+                          {total == null ? " · offene Dauer" : ` · ca. ${Math.round(total / 60)} Min.`}
+                        </span>
+                      </span>
+                      <span style={{ display: "flex", gap: 4, flexShrink: 0 }}>
+                        <button
+                          className="btn btn-primary btn-sm"
+                          onClick={() => startBreathingSession(b)}
+                          title="Starten"
+                        >
+                          <Play size={13} />
+                        </button>
+                        <button className="btn-icon" title="Bearbeiten" onClick={() => setBreathingEditing(b)}>
+                          <Pencil size={14} />
+                        </button>
+                        <button className="btn-icon" title="Löschen" onClick={() => deleteBreathingExercise(b.id)}>
+                          <Trash2 size={14} />
+                        </button>
+                      </span>
+                    </div>
+                  );
+                })}
+              </div>
+              <button
+                className="btn btn-primary btn-block btn-sm"
+                style={{ marginTop: 12 }}
+                onClick={() => setBreathingEditing({ phases: [] })}
+              >
+                <Plus size={14} /> Eigene Atemübung
+              </button>
+              <label className="field-label" style={{ marginTop: 14 }}>Vorlagen</label>
+              <div className="chip-row">
+                {BREATHING_TEMPLATES.map((t) => (
+                  <span
+                    key={t.name}
+                    className="chip chip-sm"
+                    onClick={() => setBreathingEditing({ ...t, phases: t.phases.map((p) => ({ ...p })) })}
+                  >
+                    <Plus size={11} /> {t.name}
+                  </span>
+                ))}
+              </div>
+            </>
+          )}
+        </Modal>
+      )}
+
+      {breathingSession && (
+        <BreathingSessionView
+          session={breathingSession}
+          onFinish={finishBreathingSession}
+          onCancel={() => setBreathingSession(null)}
+        />
+      )}
+
       {gymManagerOpen && (
         <Modal
           title="Gyms verwalten"
@@ -4120,6 +4530,10 @@ function CalendarView({
   onDeleteCategory,
   onStartScheduledWorkout,
   onOpenLog,
+  breathingExercises = [],
+  breathingLogs = [],
+  onScheduleBreathing,
+  onStartScheduledBreathing,
 }) {
   const today = new Date();
   const [viewYear, setViewYear] = useState(today.getFullYear());
@@ -4143,7 +4557,8 @@ function CalendarView({
     entries.forEach((e) => {
       // A planned workout that never happened simply disappears once the day
       // is over - keeping it around would only ever be a reproach.
-      const verpasst = e.type === "workout" && !e.logId && e.date < todayKey;
+      const verpasst =
+        (e.type === "workout" || e.type === "breathing") && !e.logId && e.date < todayKey;
       if (verpasst) return;
       (map[e.date] = map[e.date] || []).push(e);
     });
@@ -4166,6 +4581,14 @@ function CalendarView({
     [categories]
   );
   const planById = useMemo(() => Object.fromEntries(plans.map((p) => [p.id, p])), [plans]);
+  const breathingById = useMemo(
+    () => Object.fromEntries(breathingExercises.map((b) => [b.id, b])),
+    [breathingExercises]
+  );
+  const breathingLogById = useMemo(
+    () => Object.fromEntries(breathingLogs.map((l) => [l.id, l])),
+    [breathingLogs]
+  );
 
   const goPrevMonth = () => {
     const d = new Date(viewYear, viewMonth - 1, 1);
@@ -4353,6 +4776,15 @@ function CalendarView({
                             </span>
                           );
                         }
+                        if (entry.type === "breathing") {
+                          const br = breathingById[entry.breathingId];
+                          return (
+                            <span key={entry.id} className="cal-entry-chip cal-entry-breathing">
+                              {entry.logId ? <Check size={9} /> : <Play size={9} />}
+                              {br ? br.name : "Gelöschte Atemübung"}
+                            </span>
+                          );
+                        }
                         const cat = categoryById[entry.categoryId];
                         // Same visual language as workouts: a tick means it
                         // happened, no tick means it is still ahead.
@@ -4476,6 +4908,43 @@ function CalendarView({
                 </div>
               );
             }
+            if (entry.type === "breathing") {
+              const br = breathingById[entry.breathingId];
+              const log = entry.logId ? breathingLogById[entry.logId] : null;
+              return (
+                <div key={entry.id} className={`cal-detail-item ${log ? "cal-detail-done" : ""}`}>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                    <span className="ex-name">
+                      <Wind size={13} style={{ marginRight: 6, verticalAlign: -2, color: BREATHING_COLOR }} />
+                      {br ? br.name : "Gelöschte Atemübung"}
+                    </span>
+                    <button className="btn-icon" onClick={() => onDeleteEntry(entry.id)} title="Termin entfernen">
+                      <Trash2 size={13} />
+                    </button>
+                  </div>
+                  {log ? (
+                    <div style={{ fontSize: 12.5, color: "var(--text-dim)", marginTop: 6 }}>
+                      {log.rounds} von {log.plannedRounds} Runden
+                      {log.durationSeconds
+                        ? ` · ${Math.max(1, Math.round(log.durationSeconds / 60))} Min.`
+                        : ""}
+                    </div>
+                  ) : br ? (
+                    <button
+                      className="btn btn-primary btn-block btn-sm"
+                      style={{ marginTop: 10 }}
+                      onClick={() => onStartScheduledBreathing?.(br, entry.id)}
+                    >
+                      <Play size={14} /> Atemübung starten
+                    </button>
+                  ) : (
+                    <p style={{ fontSize: 12.5, color: "var(--text-dim)", marginTop: 6 }}>
+                      Diese Atemübung wurde gelöscht.
+                    </p>
+                  )}
+                </div>
+              );
+            }
             const cat = categoryById[entry.categoryId];
             const isDone = !!entry.doneAt;
             return (
@@ -4537,6 +5006,12 @@ function CalendarView({
               >
                 <Dumbbell size={13} /> Workout
               </button>
+              <button
+                className={`sub-tab ${addMode === "breathing" ? "active" : ""}`}
+                onClick={() => setAddMode("breathing")}
+              >
+                <Wind size={13} /> Atem
+              </button>
             </div>
 
             {addMode === "action" ? (
@@ -4586,6 +5061,26 @@ function CalendarView({
                   <Save size={14} /> Speichern
                 </button>
               </>
+            ) : addMode === "breathing" ? (
+              <div style={{ maxHeight: 260, overflowY: "auto" }}>
+                {breathingExercises.length === 0 ? (
+                  <div className="empty-state" style={{ padding: "10px 0" }}>
+                    Noch keine Atemübung angelegt. Lege sie im Programm-Menü unter „Atemübungen“ an.
+                  </div>
+                ) : (
+                  breathingExercises.map((b) => (
+                    <div className="ex-row" key={b.id}>
+                      <span className="ex-name">{b.name}</span>
+                      <button
+                        className="btn btn-primary btn-sm"
+                        onClick={() => { onScheduleBreathing?.(selectedDate, b.id); closeAddDialog(); }}
+                      >
+                        Eintragen
+                      </button>
+                    </div>
+                  ))
+                )}
+              </div>
             ) : (
               <>
                 <div className="search-box" style={{ marginBottom: 10 }}>
@@ -6820,6 +7315,7 @@ function PlansView({
   onDeleteFolder,
   onMovePlan,
   onManageGyms = () => {},
+  onManageBreathing = () => {},
   onOpenBackup = () => {},
   onReorderFolders = () => {},
   logs = [],
@@ -6985,6 +7481,12 @@ function PlansView({
               onClick={() => { setProgramMenuOpen(false); onManageGyms(); }}
             >
               <Dumbbell size={14} /> Gyms verwalten
+            </button>
+            <button
+              className="program-menu-item"
+              onClick={() => { setProgramMenuOpen(false); onManageBreathing(); }}
+            >
+              <Wind size={14} /> Atemübungen
             </button>
             <button
               className="program-menu-item"
@@ -9194,6 +9696,354 @@ function playBeep({ frequency = 880, duration = 0.18, volume = 0.6 } = {}) {
     osc.start(now);
     osc.stop(now + duration + 0.02);
   } catch (_) { /* sound is optional, never break the workout over it */ }
+}
+
+// ---------------------------------------------------------------------------
+// Atemübung: geführte Sitzung
+// ---------------------------------------------------------------------------
+
+// Baut den Linienverlauf einer kompletten Runde: pro Phase ein Streckenstück,
+// dessen Breite der Dauer entspricht und dessen Höhe die Atemrichtung
+// abbildet - hoch beim Einatmen, runter beim Ausatmen, waagerecht beim
+// Halten. Bei Box Breathing (4 gleich lange Phasen) ergibt das genau die
+// namensgebende Kastenform.
+//
+// Die Höhe wird am Ende auf 0..1 normiert statt fest zugeordnet: eine Übung
+// wie der physiologische Seufzer atmet zweimal hintereinander ein und nur
+// einmal aus, da würde eine feste Skala oben aus dem Bild laufen.
+const BREATHING_OPEN_WIDTH = 8; // Breite einer offenen Phase (Dauer unbekannt)
+
+// Füllstand der Lunge nach jeder Phase: 0 = leer, 1 = voll. levels[0] ist der
+// Start (leer), levels[i+1] der Stand nach Phase i.
+//
+// Aufeinanderfolgende Phasen gleicher Richtung teilen sich den Weg, statt
+// jede für sich eine feste Stufe zu gehen. Der physiologische Seufzer atmet
+// zweimal hintereinander ein und einmal lang aus - würde jede Phase pauschal
+// eine Stufe zählen, käme das Ausatmen nur auf halbe Höhe zurück statt die
+// Lunge zu leeren, und die Linie liefe von Runde zu Runde weg.
+function breathingLevels(phases) {
+  const levels = [0];
+  let i = 0;
+  while (i < phases.length) {
+    const dir = phases[i].direction;
+    if (dir !== "in" && dir !== "out") {
+      levels.push(levels[levels.length - 1]); // Halten: Stand bleibt
+      i += 1;
+      continue;
+    }
+    let run = 0;
+    while (i + run < phases.length && phases[i + run].direction === dir) run += 1;
+    const start = levels[levels.length - 1];
+    const target = dir === "in" ? 1 : 0;
+    for (let j = 1; j <= run; j++) levels.push(start + (target - start) * (j / run));
+    i += run;
+  }
+  return levels;
+}
+
+function buildBreathingPath(phases) {
+  if (!phases.length) return [{ x: 0, y: 0 }, { x: 1, y: 0 }];
+  const widths = phases.map((p) =>
+    p.seconds == null ? BREATHING_OPEN_WIDTH : Math.max(0.5, toNum(p.seconds))
+  );
+  const total = widths.reduce((a, b) => a + b, 0) || 1;
+  const levels = breathingLevels(phases);
+  let x = 0;
+  const points = [{ x: 0, y: levels[0] }];
+  widths.forEach((w, i) => {
+    x += w / total;
+    points.push({ x, y: levels[i + 1] });
+  });
+  return points;
+}
+
+function BreathingSessionView({ session, onFinish, onCancel }) {
+  const { exercise } = session;
+  const phases = breathingPhases(exercise);
+  const totalRounds = breathingRounds(exercise);
+  const isCircle = exercise.display === "circle";
+
+  const [round, setRound] = useState(1);
+  const [phaseIndex, setPhaseIndex] = useState(0);
+  const [phaseStart, setPhaseStart] = useState(() => Date.now());
+  const [paused, setPaused] = useState(false);
+  const [pausedAt, setPausedAt] = useState(0);
+  const [now, setNow] = useState(() => Date.now());
+
+  const phase = phases[phaseIndex] || null;
+  const isOpen = phase ? phase.seconds == null : false;
+  const phaseSeconds = phase && !isOpen ? Math.max(0.1, toNum(phase.seconds)) : 0;
+  const elapsed = Math.max(0, ((paused ? pausedAt : now) - phaseStart) / 1000);
+  const progress = isOpen ? 0 : Math.min(1, elapsed / phaseSeconds);
+
+  // Eine Referenz auf den aktuellen Zustand, damit die Animationsschleife
+  // nicht bei jedem Frame neu aufgebaut werden muss.
+  const advanceRef = useRef(null);
+  const goNext = () => {
+    const nextIndex = phaseIndex + 1;
+    if (nextIndex < phases.length) {
+      setPhaseIndex(nextIndex);
+      setPhaseStart(Date.now());
+      return;
+    }
+    if (round < totalRounds) {
+      setRound(round + 1);
+      setPhaseIndex(0);
+      setPhaseStart(Date.now());
+      return;
+    }
+    onFinish({ ...session, completedRounds: totalRounds });
+  };
+  advanceRef.current = goNext;
+
+  useEffect(() => {
+    if (paused) return;
+    let raf = null;
+    const loop = () => {
+      setNow(Date.now());
+      raf = requestAnimationFrame(loop);
+    };
+    raf = requestAnimationFrame(loop);
+    return () => { if (raf) cancelAnimationFrame(raf); };
+  }, [paused]);
+
+  // Der Phasenwechsel hängt am gemessenen Fortschritt, nicht an einem
+  // eigenen Timer: so bleibt die Anzeige und der Wechsel garantiert
+  // synchron, auch wenn ein Frame mal ausfällt.
+  useEffect(() => {
+    if (paused || isOpen || !phase) return;
+    if (elapsed >= phaseSeconds) advanceRef.current?.();
+  }, [now, paused, isOpen, phase, elapsed, phaseSeconds]);
+
+  const togglePause = () => {
+    if (paused) {
+      // Die im Pausenzustand vergangene Zeit darf nicht als Phasenfortschritt
+      // zählen, deshalb wandert der Startzeitpunkt mit.
+      setPhaseStart(Date.now() - (pausedAt - phaseStart));
+      setPaused(false);
+    } else {
+      setPausedAt(Date.now());
+      setPaused(true);
+    }
+  };
+
+  const path = useMemo(() => buildBreathingPath(phases), [phases]);
+  const levels = useMemo(() => breathingLevels(phases), [phases]);
+  if (!phase) return null;
+
+  const polyline = path.map((p) => `${(p.x * 100).toFixed(2)},${((1 - p.y) * 100).toFixed(2)}`).join(" ");
+  const from = path[phaseIndex] || path[0];
+  const to = path[phaseIndex + 1] || from;
+  const dotX = from.x + (to.x - from.x) * (isOpen ? 1 : progress);
+  const dotY = from.y + (to.y - from.y) * (isOpen ? 1 : progress);
+
+  // Der Kreis folgt demselben Füllstand wie die Linie - beide Darstellungen
+  // zeigen dieselbe Übung, nur anders gezeichnet.
+  const startLevel = levels[phaseIndex] ?? 0;
+  const endLevel = levels[phaseIndex + 1] ?? startLevel;
+  const level = startLevel + (endLevel - startLevel) * (isOpen ? 1 : progress);
+  const circleScale = 0.35 + 0.65 * level;
+
+  const remaining = isOpen ? elapsed : Math.max(0, phaseSeconds - elapsed);
+  const timeLabel = isOpen
+    ? `${Math.floor(remaining / 60)}:${String(Math.floor(remaining % 60)).padStart(2, "0")}`
+    : String(Math.ceil(remaining));
+
+  return (
+    <div className="breathing-overlay">
+      <div className="breathing-head">
+        <div style={{ minWidth: 0 }}>
+          <div className="breathing-title">{exercise.name}</div>
+          <div className="breathing-round">Runde {round} von {totalRounds}</div>
+        </div>
+        <button className="btn-icon" onClick={onCancel} title="Beenden">
+          <X size={18} />
+        </button>
+      </div>
+
+      <div className="breathing-stage">
+        {isCircle ? (
+          <div className="breathing-circle-wrap">
+            <span
+              className="breathing-circle"
+              style={{ transform: `scale(${circleScale.toFixed(3)})` }}
+            />
+            <span className="breathing-circle-ring" />
+          </div>
+        ) : (
+          // Der Punkt liegt als eigenes Element über der Grafik statt als
+          // SVG-Kreis darin: die Linie wird in die Breite gezogen
+          // (preserveAspectRatio "none"), ein Kreis im selben Koordinaten-
+          // system würde genauso mitgezogen und als Ei erscheinen.
+          <div className="breathing-line-wrap">
+            <svg className="breathing-line" viewBox="0 0 100 100" preserveAspectRatio="none">
+              <polyline points={polyline} fill="none" strokeWidth="1.5" vectorEffect="non-scaling-stroke" />
+            </svg>
+            <span
+              className="breathing-dot"
+              style={{ left: `${(dotX * 100).toFixed(2)}%`, top: `${((1 - dotY) * 100).toFixed(2)}%` }}
+            />
+          </div>
+        )}
+      </div>
+
+      <div className="breathing-phase">{phase.label || BREATHING_DIRECTIONS.find((d) => d.id === phase.direction)?.label}</div>
+      <div className="breathing-time">{timeLabel}</div>
+
+      <div className="breathing-controls">
+        {isOpen ? (
+          <button className="btn btn-primary btn-block" onClick={() => advanceRef.current?.()}>
+            Weiter <ChevronRight size={16} />
+          </button>
+        ) : (
+          <button className="btn btn-ghost btn-block" onClick={togglePause}>
+            {paused ? <><Play size={15} /> Fortsetzen</> : <><Timer size={15} /> Pause</>}
+          </button>
+        )}
+        <button
+          className="btn btn-ghost btn-sm btn-block"
+          style={{ marginTop: 8 }}
+          onClick={() => onFinish({ ...session, completedRounds: round - 1 })}
+        >
+          <Check size={14} /> Vorzeitig beenden & speichern
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// Editor für eine Atemübung: Phasen frei zusammenstellbar, jede mit Name,
+// Richtung und Dauer - oder "offen", wenn die Dauer nicht vorher feststeht.
+function BreathingEditor({ initial, onSave, onCancel }) {
+  const [name, setName] = useState(initial?.name || "");
+  const [rounds, setRounds] = useState(String(initial?.rounds ?? 4));
+  const [display, setDisplay] = useState(initial?.display || "line");
+  const [phases, setPhases] = useState(
+    initial?.phases?.length
+      ? initial.phases.map((p) => ({ ...p, seconds: p.seconds == null ? "" : String(p.seconds) }))
+      : [{ label: "Einatmen", direction: "in", seconds: "4" }]
+  );
+
+  const updatePhase = (idx, patch) =>
+    setPhases(phases.map((p, i) => (i === idx ? { ...p, ...patch } : p)));
+  const addPhase = () =>
+    setPhases([...phases, { label: "", direction: "hold", seconds: "4" }]);
+  const removePhase = (idx) => setPhases(phases.filter((_, i) => i !== idx));
+  const movePhase = (idx, delta) => {
+    const target = idx + delta;
+    if (target < 0 || target >= phases.length) return;
+    const next = [...phases];
+    [next[idx], next[target]] = [next[target], next[idx]];
+    setPhases(next);
+  };
+
+  const canSave = name.trim() && phases.length > 0;
+  const save = () => {
+    if (!canSave) return;
+    onSave({
+      id: initial?.id || uid(),
+      name: name.trim(),
+      display,
+      rounds: Math.max(1, toNum(rounds) || 1),
+      phases: phases.map((p) => ({
+        label: p.label.trim() || BREATHING_DIRECTIONS.find((d) => d.id === p.direction)?.label || "Phase",
+        direction: p.direction,
+        // Leeres Feld heißt bewusst "offen" - das ist die Wim-Hof-Phase,
+        // bei der man selbst weitertippt statt einem Countdown zu folgen.
+        seconds: String(p.seconds).trim() === "" ? null : Math.max(1, toNum(p.seconds) || 1),
+      })),
+    });
+  };
+
+  return (
+    <>
+      <label className="field-label">Name</label>
+      <input type="text" placeholder="z. B. Box Breathing" value={name} onChange={(e) => setName(e.target.value)} />
+
+      <label className="field-label" style={{ marginTop: 12 }}>Darstellung</label>
+      <div className="chip-row" style={{ marginTop: 4, marginBottom: 4 }}>
+        {BREATHING_DISPLAYS.map((d) => (
+          <span
+            key={d.id}
+            className={`chip chip-sm ${display === d.id ? "active" : ""}`}
+            onClick={() => setDisplay(d.id)}
+          >
+            {d.label}
+          </span>
+        ))}
+      </div>
+
+      <label className="field-label" style={{ marginTop: 8 }}>Phasen</label>
+      <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+        {phases.map((p, idx) => (
+          <div className="breathing-phase-row" key={idx}>
+            <div style={{ display: "flex", gap: 6, alignItems: "center", marginBottom: 6 }}>
+              <span className="set-num" style={{ minWidth: 16 }}>{idx + 1}</span>
+              <input
+                type="text"
+                placeholder="Bezeichnung (optional)"
+                value={p.label}
+                onChange={(e) => updatePhase(idx, { label: e.target.value })}
+                style={{ flex: 1 }}
+              />
+              <button className="btn-icon" title="Nach oben" onClick={() => movePhase(idx, -1)}>
+                <ChevronRight size={14} style={{ transform: "rotate(-90deg)" }} />
+              </button>
+              <button className="btn-icon" title="Nach unten" onClick={() => movePhase(idx, 1)}>
+                <ChevronRight size={14} style={{ transform: "rotate(90deg)" }} />
+              </button>
+              <button className="btn-icon" title="Phase entfernen" onClick={() => removePhase(idx)}>
+                <Trash2 size={14} />
+              </button>
+            </div>
+            <div className="chip-row" style={{ marginBottom: 6 }}>
+              {BREATHING_DIRECTIONS.map((d) => (
+                <span
+                  key={d.id}
+                  className={`chip chip-sm ${p.direction === d.id ? "active" : ""}`}
+                  onClick={() => updatePhase(idx, { direction: d.id })}
+                >
+                  {d.label}
+                </span>
+              ))}
+            </div>
+            <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+              <input
+                type="text"
+                inputMode="numeric"
+                placeholder="Sekunden"
+                value={p.seconds}
+                onChange={(e) => updatePhase(idx, { seconds: e.target.value })}
+                style={{ flex: 1 }}
+              />
+              <span
+                className={`chip chip-sm ${String(p.seconds).trim() === "" ? "active" : ""}`}
+                onClick={() => updatePhase(idx, { seconds: String(p.seconds).trim() === "" ? "4" : "" })}
+                title="Offene Phase: kein Countdown, du tippst selbst auf Weiter"
+              >
+                Offen
+              </span>
+            </div>
+          </div>
+        ))}
+      </div>
+      <button className="btn btn-ghost btn-sm btn-block" style={{ marginTop: 8 }} onClick={addPhase}>
+        <Plus size={14} /> Phase hinzufügen
+      </button>
+
+      <label className="field-label" style={{ marginTop: 12 }}>Runden</label>
+      <input type="text" inputMode="numeric" value={rounds} onChange={(e) => setRounds(e.target.value)} />
+
+      <div style={{ display: "flex", gap: 8, marginTop: 14 }}>
+        <button className="btn btn-ghost btn-block" onClick={onCancel}>
+          <X size={14} /> Abbrechen
+        </button>
+        <button className="btn btn-primary btn-block" disabled={!canSave} onClick={save}>
+          <Save size={14} /> Speichern
+        </button>
+      </div>
+    </>
+  );
 }
 
 // ---------------------------------------------------------------------------

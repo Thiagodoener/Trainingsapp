@@ -4597,6 +4597,11 @@ function CalendarView({
     [categories]
   );
   const planById = useMemo(() => Object.fromEntries(plans.map((p) => [p.id, p])), [plans]);
+  // A completed session keeps its own snapshot of the plan's name (taken at
+  // the time it was done), so a calendar entry for an already-finished
+  // workout can still show the right name even after the plan itself was
+  // deleted from the folder structure afterwards.
+  const logById = useMemo(() => Object.fromEntries((logs || []).map((l) => [l.id, l])), [logs]);
   const breathingById = useMemo(
     () => Object.fromEntries(breathingExercises.map((b) => [b.id, b])),
     [breathingExercises]
@@ -4782,22 +4787,24 @@ function CalendarView({
                         }
                         if (entry.type === "workout") {
                           const plan = planById[entry.planId];
+                          const doneName = entry.logId ? logById[entry.logId]?.planName : null;
                           return (
                             <span
                               key={entry.id}
                               className="cal-entry-chip cal-entry-workout"
                             >
                               {entry.logId ? <Check size={9} /> : <Play size={9} />}
-                              {plan ? plan.name : "Gelöschter Plan"}
+                              {plan ? plan.name : doneName || "Gelöschter Plan"}
                             </span>
                           );
                         }
                         if (entry.type === "breathing") {
                           const br = breathingById[entry.breathingId];
+                          const doneName = entry.logId ? breathingLogById[entry.logId]?.name : null;
                           return (
                             <span key={entry.id} className="cal-entry-chip cal-entry-breathing">
                               {entry.logId ? <Check size={9} /> : <Play size={9} />}
-                              {br ? br.name : "Gelöschte Atemübung"}
+                              {br ? br.name : doneName || "Gelöschte Atemübung"}
                             </span>
                           );
                         }
@@ -4881,7 +4888,7 @@ function CalendarView({
                   <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
                     <span className="ex-name">
                       <Dumbbell size={13} style={{ marginRight: 6, verticalAlign: -2 }} />
-                      {plan ? plan.name : "Gelöschter Plan"}
+                      {plan ? plan.name : log?.planName || "Gelöschter Plan"}
                     </span>
                     <button className="btn-icon" onClick={() => onDeleteEntry(entry.id)} title="Termin entfernen">
                       <Trash2 size={13} />
@@ -4932,7 +4939,7 @@ function CalendarView({
                   <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
                     <span className="ex-name">
                       <Wind size={13} style={{ marginRight: 6, verticalAlign: -2, color: BREATHING_COLOR }} />
-                      {br ? br.name : "Gelöschte Atemübung"}
+                      {br ? br.name : log?.name || "Gelöschte Atemübung"}
                     </span>
                     <button className="btn-icon" onClick={() => onDeleteEntry(entry.id)} title="Termin entfernen">
                       <Trash2 size={13} />

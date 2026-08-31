@@ -2464,7 +2464,10 @@ export default function TrainingApp() {
            subgroup labels wrapped onto two lines and ran into the name. */
         .ex-row .ex-name {
           flex: 1 1 auto;
-          min-width: 0;
+          /* A floor, not 0: with two subgroup tags plus an equipment tag,
+             none of which ever shrink, the name used to be squeezed down to
+             a single letter before it had a chance to ellipsize. */
+          min-width: 64px;
           overflow: hidden;
           text-overflow: ellipsis;
           white-space: nowrap;
@@ -2670,11 +2673,18 @@ export default function TrainingApp() {
         }
         .entry-card {
           transition: box-shadow 160ms ease;
-          will-change: transform;
         }
+        /* will-change only while actually dragging, not on every card all
+           the time: it forces a new stacking context, which was trapping
+           each exercise's "..." dropdown menu inside its own card - any
+           part of the menu extending past the card's bottom edge got
+           painted over by the next exercise card instead of floating above
+           it, since sibling stacking contexts always paint in DOM order
+           regardless of z-index inside them. */
         .entry-card.is-dragging {
           position: relative;
           z-index: 20;
+          will-change: transform;
           box-shadow: 0 12px 30px rgba(0,0,0,calc(var(--shadow-strength) * 2.6));
           cursor: grabbing;
         }
@@ -3254,11 +3264,14 @@ export default function TrainingApp() {
           /* The row lifts off the list while dragging; keeping the shadow
              and background on a transition avoids a hard visual pop. */
           transition: box-shadow 160ms ease, background 160ms ease;
-          will-change: transform;
         }
+        /* will-change moved here (see .entry-card.is-dragging for why): it
+           creates a stacking context, which otherwise traps this row's
+           "..." dropdown menu and lets the next row paint over it. */
         .plan-item-row.is-dragging {
           position: relative;
           z-index: 20;
+          will-change: transform;
           box-shadow: 0 12px 30px rgba(0,0,0,calc(var(--shadow-strength) * 2.6));
           background: var(--surface-alt);
           border-radius: 10px;
@@ -6093,9 +6106,22 @@ function ExercisesView({
               onClick={() => setSelectedExerciseId(e.id)}
             >
               <span className="ex-name">{e.name}</span>
-              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                <MuscleTag exercise={e} subgroupOverrides={exerciseSubgroupOverrides} />
-                <span className="tag tag-equipment">{getExerciseEquipment(e, exerciseEquipmentOverrides)}</span>
+              <div style={{ display: "flex", alignItems: "center", gap: 8, flexShrink: 0 }}>
+                {/* Tags wrap onto a second line instead of squeezing the name
+                    down to nothing when an exercise has two subgroups. */}
+                <div
+                  style={{
+                    display: "flex",
+                    flexWrap: "wrap",
+                    alignItems: "center",
+                    justifyContent: "flex-end",
+                    gap: 6,
+                    maxWidth: "48vw",
+                  }}
+                >
+                  <MuscleTag exercise={e} subgroupOverrides={exerciseSubgroupOverrides} />
+                  <span className="tag tag-equipment">{getExerciseEquipment(e, exerciseEquipmentOverrides)}</span>
+                </div>
                 {e.custom && (
                   <button
                     className="btn-icon"
@@ -8322,6 +8348,26 @@ function LogView({
     return () => document.removeEventListener("click", closeOnOutsideClick);
   }, [openEntryMenu]);
 
+  // The inline rest-time picker used to have no way to close at all - picking
+  // a preset closes it directly (see setEntryRestDuration below), and this
+  // is the safety net for tapping away without picking anything.
+  useEffect(() => {
+    const anyOpen = Object.values(openRestPicker).some(Boolean);
+    if (!anyOpen) return;
+    // mousedown, not click: the trigger button (the "Pausenzeit" menu item)
+    // lives outside .rest-picker-inline, since that row doesn't exist until
+    // after this same click opens it. Listening for "click" meant the still-
+    // bubbling click that opened the picker also reached this listener and
+    // closed it again immediately. "mousedown" fires and finishes before
+    // "click" does, so a listener added in reaction to a click can never
+    // catch that same click's mousedown - only a genuinely later one.
+    const closeOnOutsideClick = (e) => {
+      if (!e.target.closest?.(".rest-picker-inline")) setOpenRestPicker({});
+    };
+    document.addEventListener("mousedown", closeOnOutsideClick);
+    return () => document.removeEventListener("mousedown", closeOnOutsideClick);
+  }, [openRestPicker]);
+
   useEffect(() => {
     if (!settingsMenuOpen) return;
     const closeOnOutsideClick = (e) => {
@@ -9319,18 +9365,27 @@ function LogView({
             )}
 
             {openRestPicker[entry.exerciseId] && (
-              <div className="chip-row" style={{ marginTop: 4, marginBottom: 8 }}>
+              <div className="chip-row rest-picker-inline" style={{ marginTop: 4, marginBottom: 8 }}>
                 {REST_PRESETS.map((sec) => (
                   <span
                     key={sec}
                     className={`chip ${(entry.restSeconds ?? restDuration) === sec ? "active" : ""}`}
-                    onClick={() => setEntryRestDuration(entry.exerciseId, sec)}
+                    onClick={() => {
+                      setEntryRestDuration(entry.exerciseId, sec);
+                      setOpenRestPicker((s) => ({ ...s, [entry.exerciseId]: false }));
+                    }}
                   >
                     {sec === 0 ? "Aus" : `${sec}s`}
                   </span>
                 ))}
                 {entry.restSeconds != null ? (
-                  <span className="chip" onClick={() => setEntryRestDuration(entry.exerciseId, null)}>
+                  <span
+                    className="chip"
+                    onClick={() => {
+                      setEntryRestDuration(entry.exerciseId, null);
+                      setOpenRestPicker((s) => ({ ...s, [entry.exerciseId]: false }));
+                    }}
+                  >
                     Standard nutzen
                   </span>
                 ) : null}

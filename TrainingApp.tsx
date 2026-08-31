@@ -1071,6 +1071,42 @@ function getWeeklySetSeries(logs, exBy, subgroupOverrides, weekCount = 21, nowTs
   }).sort((a, b) => b.current - a.current);
 }
 
+// Wochenweise Anzahl absolvierter Atemübungs-Sitzungen - keine Gruppen wie
+// bei den Muskelgruppen, nur eine einzelne Reihe, dieselbe rollierende
+// 7-Tage-Fenster-Logik wie oben.
+function getBreathingWeeklySeries(breathingLogs, weekCount = 21, nowTs = Date.now()) {
+  const weeks = new Array(weekCount).fill(0);
+  (Array.isArray(breathingLogs) ? breathingLogs : []).forEach((l) => {
+    const ts = new Date(l?.date).getTime();
+    if (!Number.isFinite(ts)) return;
+    const idx = Math.max(0, Math.floor((nowTs - ts) / LOAD_WEEK_MS));
+    if (idx >= weekCount) return;
+    weeks[idx] += 1;
+  });
+  const values = [...weeks].reverse();
+  return { values, current: values[values.length - 1] || 0 };
+}
+
+// Tage in Folge (bis heute zurückgerechnet) mit mindestens einer Sitzung.
+// Ein Tag ohne Sitzung bricht die Serie erst, sobald er tatsächlich vorbei
+// ist - "heute noch nichts gemacht" darf die gestrige Serie nicht sofort
+// auf 0 zurücksetzen, der Tag läuft schließlich noch.
+function breathingStreak(breathingLogs, nowTs = Date.now()) {
+  const days = new Set(
+    (Array.isArray(breathingLogs) ? breathingLogs : [])
+      .map((l) => (Number.isFinite(new Date(l?.date).getTime()) ? toDateKey(new Date(l.date)) : null))
+      .filter(Boolean)
+  );
+  let cursor = new Date(nowTs);
+  if (!days.has(toDateKey(cursor))) cursor = new Date(cursor.getTime() - 86400000);
+  let streak = 0;
+  while (days.has(toDateKey(cursor))) {
+    streak++;
+    cursor = new Date(cursor.getTime() - 86400000);
+  }
+  return streak;
+}
+
 // Wie viele volle Wochen liegen zwischen jetzt und dem allerersten jemals
 // geloggten Training - unabhängig von Muskelgruppe oder Übung. Das ist die
 // Obergrenze dafür, wie weit ein Vergleichszeitraum zurückreichen darf: eine
@@ -1838,7 +1874,7 @@ export default function TrainingApp() {
   // Training - einen offenen Kalendereintrag von heute automatisch abhaken,
   // egal ob die Übung über den Kalender oder direkt gestartet wurde. Ohne
   // das stünde dieselbe Sitzung zweimal im Tag.
-  const finishBreathingSession = async ({ exercise, calendarEntryId, startedAt, completedRounds }) => {
+  const finishBreathingSession = async ({ exercise, calendarEntryId, startedAt, completedRounds, maxHoldSeconds }) => {
     const log = {
       id: uid(),
       breathingId: exercise.id,
@@ -1847,6 +1883,9 @@ export default function TrainingApp() {
       rounds: completedRounds,
       plannedRounds: breathingRounds(exercise),
       durationSeconds: Math.max(0, Math.round((Date.now() - startedAt) / 1000)),
+      // null statt 0, wenn die Übung gar keine offene Phase hatte - "nicht
+      // gemessen" ist etwas anderes als "0 Sekunden gehalten".
+      maxHoldSeconds: maxHoldSeconds > 0 ? Math.round(maxHoldSeconds) : null,
     };
     await persistBreathingLogs([...breathingLogs, log]);
     const dayKey = toDateKey(new Date(log.date));
@@ -4162,6 +4201,8 @@ export default function TrainingApp() {
             onRenameExercise={handleRenameExercise}
             onToggleTimeBased={handleToggleTimeBased}
             onToggleGymIndependent={handleToggleGymIndependent}
+            breathingExercises={breathingExercises}
+            breathingLogs={breathingLogs}
           />
         )}
         </div>
@@ -10249,10 +10290,17 @@ function BreathingSessionView({ session, onFinish, onCancel }) {
   const elapsed = Math.max(0, ((paused ? pausedAt : now) - phaseStart) / 1000);
   const progress = isOpen ? 0 : Math.min(1, elapsed / phaseSeconds);
 
+  // Offene Phasen (z.B. eine Wim-Hof-Retention) haben keine vorgegebene
+  // Dauer - wie lange sie tatsächlich gedauert haben, bevor "Weiter" getippt
+  // wurde, ist selbst die interessante Kennzahl. Der längste Wert der ganzen
+  // Sitzung wandert ins Protokoll ("maximale Atemanhaltedauer").
+  const maxOpenSecondsRef = useRef(0);
+
   // Eine Referenz auf den aktuellen Zustand, damit die Animationsschleife
   // nicht bei jedem Frame neu aufgebaut werden muss.
   const advanceRef = useRef(null);
   const goNext = () => {
+    if (isOpen) maxOpenSecondsRef.current = Math.max(maxOpenSecondsRef.current, elapsed);
     const nextIndex = phaseIndex + 1;
     if (nextIndex < phases.length) {
       setPhaseIndex(nextIndex);
@@ -10265,7 +10313,7 @@ function BreathingSessionView({ session, onFinish, onCancel }) {
       setPhaseStart(Date.now());
       return;
     }
-    onFinish({ ...session, completedRounds: totalRounds });
+    onFinish({ ...session, completedRounds: totalRounds, maxHoldSeconds: maxOpenSecondsRef.current });
   };
   advanceRef.current = goNext;
 
@@ -10376,7 +10424,13 @@ function BreathingSessionView({ session, onFinish, onCancel }) {
         <button
           className="btn btn-ghost btn-sm btn-block"
           style={{ marginTop: 8 }}
-          onClick={() => onFinish({ ...session, completedRounds: round - 1 })}
+          onClick={() => {
+            // Wird mitten in einer offenen Phase abgebrochen, zählt der bis
+            // dahin gehaltene Atem noch mit - das war schließlich der
+            // tatsächliche Versuch, auch wenn er nie per "Weiter" bestätigt wurde.
+            const finalMax = isOpen ? Math.max(maxOpenSecondsRef.current, elapsed) : maxOpenSecondsRef.current;
+            onFinish({ ...session, completedRounds: round - 1, maxHoldSeconds: finalMax });
+          }}
         >
           <Check size={14} /> Vorzeitig beenden & speichern
         </button>
@@ -10628,6 +10682,8 @@ function ProgressView({
   onResumeLog,
   focusLogId,
   onFocusHandled,
+  breathingExercises = [],
+  breathingLogs = [],
 }) {
   const [progressTab, setProgressTab] = useState(focusLogId ? "history" : "stats");
   useEffect(() => {
@@ -10675,6 +10731,12 @@ function ProgressView({
         onClick={() => setProgressTab("history")}
       >
         <Calendar size={14} /> Verlauf
+      </button>
+      <button
+        className={`sub-tab ${progressTab === "breathing" ? "active" : ""}`}
+        onClick={() => setProgressTab("breathing")}
+      >
+        <Wind size={14} /> Atem
       </button>
     </div>
   );
@@ -10762,15 +10824,29 @@ function ProgressView({
   const toggleLoadGroupExpanded = (id) =>
     setExpandedLoadGroups((s) => ({ ...s, [id]: !s[id] }));
 
-  // Must come after every hook above: bailing out earlier meant this
-  // component ran fewer hooks whenever the history was empty, which React
-  // rejects outright. That happened the moment a workout was resumed - the
-  // log leaves the history for the duration and briefly leaves it empty.
-  if (logs.length === 0) {
+  // Both of these (like the empty-state bail below) must come after every
+  // hook above - React rejects a component that calls a different number
+  // of hooks between renders, which an earlier return would cause the
+  // moment progressTab actually changes.
+  if (progressTab === "breathing") {
     return (
-      <div className="empty-state">
-        <TrendingUp size={26} />
-        <p>Noch keine Trainingsdaten. Logge dein erstes Training, um Fortschritt zu sehen.</p>
+      <div>
+        {subTabs}
+        <BreathingProgressView breathingExercises={breathingExercises} breathingLogs={breathingLogs} />
+      </div>
+    );
+  }
+  if (logs.length === 0) {
+    // Die Reiterleiste bleibt sichtbar, auch ohne Trainingsdaten - sonst
+    // käme jemand, der ausschließlich Atemübungen protokolliert, nie an
+    // deren Statistik heran.
+    return (
+      <div>
+        {subTabs}
+        <div className="empty-state">
+          <TrendingUp size={26} />
+          <p>Noch keine Trainingsdaten. Logge dein erstes Training, um Fortschritt zu sehen.</p>
+        </div>
       </div>
     );
   }
@@ -11087,6 +11163,128 @@ function ProgressView({
           </div>
         </Modal>
       )}
+    </div>
+  );
+}
+
+// Fortschritt für Atemübungen - bewusst schlank gehalten (siehe Absprache):
+// Häufigkeit, Gesamtzeit, Konsistenz, Verteilung auf die einzelnen Übungen
+// und die längste gehaltene Atemanhaltedauer. Eine Statistik- und
+// Fortschrittsseite für einzelne Atemübungen kommt erst später dazu.
+function BreathingProgressView({ breathingExercises = [], breathingLogs = [] }) {
+  const weeklySeries = useMemo(() => getBreathingWeeklySeries(breathingLogs, 21), [breathingLogs]);
+  const historyWeeks = useMemo(() => logsHistoryWeeks(breathingLogs), [breathingLogs]);
+  const [compareWeeks, setCompareWeeks] = useState(1);
+  const change = muscleLoadChange(weeklySeries.values, compareWeeks, historyWeeks);
+  const streak = useMemo(() => breathingStreak(breathingLogs), [breathingLogs]);
+  const totalMinutesAll = useMemo(
+    () => Math.round(breathingLogs.reduce((sum, l) => sum + (l.durationSeconds || 0), 0) / 60),
+    [breathingLogs]
+  );
+  const totalMinutesWeek = useMemo(() => {
+    const since = Date.now() - 7 * 86400000;
+    return Math.round(
+      breathingLogs
+        .filter((l) => new Date(l.date).getTime() >= since)
+        .reduce((sum, l) => sum + (l.durationSeconds || 0), 0) / 60
+    );
+  }, [breathingLogs]);
+  const maxHold = useMemo(
+    () => breathingLogs.reduce((max, l) => (l.maxHoldSeconds > max ? l.maxHoldSeconds : max), 0),
+    [breathingLogs]
+  );
+  const breathingById = useMemo(
+    () => Object.fromEntries(breathingExercises.map((b) => [b.id, b])),
+    [breathingExercises]
+  );
+  // Nach Name gruppiert statt nur nach id, weil eine gelöschte Übung sonst
+  // unter mehreren Einträgen mit demselben (dann unbekannten) Namen verteilt
+  // würde, sobald mehrere ihrer Sitzungen zusammengezählt werden sollen.
+  const perExercise = useMemo(() => {
+    const counts = {};
+    breathingLogs.forEach((l) => {
+      const label = breathingById[l.breathingId]?.name || l.name || "Unbekannte Übung";
+      if (!counts[label]) counts[label] = { label, count: 0 };
+      counts[label].count += 1;
+    });
+    return Object.values(counts).sort((a, b) => b.count - a.count);
+  }, [breathingLogs, breathingById]);
+
+  if (breathingLogs.length === 0) {
+    return (
+      <div className="empty-state">
+        <Wind size={26} />
+        <p>Noch keine Atemübungs-Sitzungen. Starte deine erste über das Programm-Menü oder den Kalender.</p>
+      </div>
+    );
+  }
+
+  const fmtHold = (s) => {
+    const m = Math.floor(s / 60);
+    const sec = Math.round(s % 60);
+    return m > 0 ? `${m}:${String(sec).padStart(2, "0")} Min.` : `${sec} Sek.`;
+  };
+
+  return (
+    <div>
+      <div className="stats-grid stats-grid-secondary">
+        <div className="stat-item">
+          <span className="stat-value">{streak}</span>
+          <span className="stat-label">Tage Serie</span>
+        </div>
+        <div className="stat-item">
+          <span className="stat-value">{totalMinutesWeek}</span>
+          <span className="stat-label">Min. diese Woche</span>
+        </div>
+        <div className="stat-item">
+          <span className="stat-value">{totalMinutesAll}</span>
+          <span className="stat-label">Min. gesamt</span>
+        </div>
+      </div>
+
+      {maxHold > 0 && (
+        <div className="stat-hero">
+          <span className="stat-hero-label">Längste Atemanhaltedauer</span>
+          <span className="stat-hero-value">{fmtHold(maxHold)}</span>
+        </div>
+      )}
+
+      <div className="card">
+        <span className="plan-title">Sitzungen pro Woche</span>
+        <div className="chip-row" style={{ marginTop: 10, marginBottom: 4 }}>
+          {WEEK_COMPARE_OPTIONS.map(([weeks, label]) => (
+            <span
+              key={weeks}
+              className={`chip chip-sm ${compareWeeks === weeks ? "active" : ""}`}
+              onClick={() => setCompareWeeks(weeks)}
+            >
+              {label}
+            </span>
+          ))}
+        </div>
+        <div style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 10 }}>
+          <span className="muscle-week-label" style={{ minWidth: 66 }}>Sitzungen</span>
+          <span style={{ flex: 1 }}>
+            <Sparkline values={weeklySeries.values} />
+          </span>
+          <LoadChangeBadge change={change} />
+        </div>
+      </div>
+
+      <div className="card">
+        <span className="plan-title">Pro Übung</span>
+        <div style={{ marginTop: 10 }}>
+          {perExercise.map((ex) => (
+            <div
+              key={ex.label}
+              style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "7px 0" }}
+            >
+              <span className="muscle-week-label" style={{ whiteSpace: "normal" }}>{ex.label}</span>
+              <span className="muscle-week-value">{ex.count}×</span>
+            </div>
+          ))}
+        </div>
+      </div>
     </div>
   );
 }

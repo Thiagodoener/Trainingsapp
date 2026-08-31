@@ -2698,12 +2698,21 @@ export default function TrainingApp() {
           margin-bottom: 8px;
           padding: 0 2px;
         }
+        .folder-header .tag {
+          flex-shrink: 0;
+          white-space: nowrap;
+        }
         .folder-header-title {
           font-family: 'Oswald', sans-serif;
           font-weight: 600;
           font-size: 15px;
           letter-spacing: 0.3px;
           text-transform: uppercase;
+          flex: 1 1 auto;
+          min-width: 0;
+          overflow: hidden;
+          text-overflow: ellipsis;
+          white-space: nowrap;
         }
         .muscle-week-row {
           display: grid;
@@ -3874,6 +3883,11 @@ export default function TrainingApp() {
                   plans.map((p) => (p.id === planId ? { ...p, folderId } : p))
                 );
               }}
+              onToggleFolderStatsExcluded={async (id) => {
+                await persistFolders(
+                  folders.map((f) => (f.id === id ? { ...f, statsExcluded: !f.statsExcluded } : f))
+                );
+              }}
               onStart={(plan) => requestStart(plan)}
             />
           )
@@ -4072,6 +4086,8 @@ export default function TrainingApp() {
             onResumeLog={resumeLog}
             gyms={gyms}
             logs={logs}
+            plans={allPlans}
+            folders={folders}
             exBy={allExBy}
             exercises={allExercises}
             theme={theme}
@@ -7313,6 +7329,7 @@ function PlansView({
   onStart,
   onCreateFolder,
   onDeleteFolder,
+  onToggleFolderStatsExcluded = () => {},
   onMovePlan,
   onManageGyms = () => {},
   onManageBreathing = () => {},
@@ -7332,6 +7349,17 @@ function PlansView({
   const [newProgramName, setNewProgramName] = useState("");
   const [renamingProgram, setRenamingProgram] = useState(false);
   const [renameProgramName, setRenameProgramName] = useState("");
+  const [folderMenuId, setFolderMenuId] = useState(null);
+  const [folderMenuUp, setFolderMenuUp] = useState(false);
+  const folderMenuRef = useMenuFlip(folderMenuId, setFolderMenuUp);
+  useEffect(() => {
+    if (!folderMenuId) return;
+    const closeOnOutsideClick = (e) => {
+      if (!e.target.closest?.(".item-menu-wrap")) setFolderMenuId(null);
+    };
+    document.addEventListener("click", closeOnOutsideClick);
+    return () => document.removeEventListener("click", closeOnOutsideClick);
+  }, [folderMenuId]);
   const toggleFolderCollapsed = (id) =>
     setCollapsedFolders((prev) => {
       const next = { ...prev, [id]: !prev[id] };
@@ -7688,14 +7716,52 @@ function PlansView({
               />
               <span className="folder-dot" style={{ background: f.color }} />
               <span className="folder-header-title">{f.name}</span>
+              {f.statsExcluded && (
+                <span className="tag" title="Sätze aus diesem Ordner zählen nicht in „Sätze pro Muskelgruppe“ und „Belastung pro Muskelgruppe“">
+                  ohne Statistik
+                </span>
+              )}
               <span className="tag" style={{ marginLeft: "auto" }}>{folderPlans.length}</span>
-              <button
-                className="btn-icon"
-                onClick={(e) => { e.stopPropagation(); onDeleteFolder(f.id); }}
-                title="Ordner löschen"
+              <div
+                className={`item-menu-wrap ${folderMenuUp && folderMenuId === f.id ? "drop-up" : ""}`}
+                onClick={(e) => e.stopPropagation()}
               >
-                <Trash2 size={13} />
-              </button>
+                <button
+                  className="btn-icon"
+                  onClick={(e) => {
+                    const opening = folderMenuId !== f.id;
+                    setFolderMenuUp(opening ? shouldDropUp(e.target) : false);
+                    setFolderMenuId(opening ? f.id : null);
+                  }}
+                  title="Weitere Optionen"
+                >
+                  <MoreVertical size={14} />
+                </button>
+                {folderMenuId === f.id && (
+                  <div
+                    ref={folderMenuRef}
+                    className="program-menu"
+                    style={{ top: "calc(100% + 4px)", right: 0, left: "auto" }}
+                  >
+                    <button
+                      className="program-menu-item"
+                      onClick={() => { onToggleFolderStatsExcluded(f.id); setFolderMenuId(null); }}
+                    >
+                      <TrendingUp size={14} />
+                      {f.statsExcluded
+                        ? "Wieder für Muskelgruppen-Statistik zählen"
+                        : "Nicht für Muskelgruppen-Statistik zählen"}
+                    </button>
+                    <div className="program-menu-divider" />
+                    <button
+                      className="program-menu-item danger"
+                      onClick={() => { setFolderMenuId(null); onDeleteFolder(f.id); }}
+                    >
+                      <Trash2 size={14} /> Ordner löschen
+                    </button>
+                  </div>
+                )}
+              </div>
             </div>
             {!collapsed && (
               folderPlans.length === 0 ? (
@@ -10135,6 +10201,8 @@ function LoadChangeBadge({ change }) {
 
 function ProgressView({
   logs,
+  plans = [],
+  folders = [],
   exBy,
   exercises,
   theme,
@@ -10206,6 +10274,23 @@ function ProgressView({
 
   const stats = useMemo(() => calculateTrainingStats(logs, exBy, timeBasedExercises), [logs, exBy, timeBasedExercises]);
 
+  // Folders can be marked "ohne Statistik" (e.g. EMOM/Conditioning) so their
+  // sets don't dilute the two hypertrophy-focused cards below. Everything
+  // else - PRs, "Letztes Mal", the per-exercise charts, Verlauf - keeps
+  // seeing every logged set regardless of this flag.
+  const excludedFolderIds = useMemo(
+    () => new Set(folders.filter((f) => f.statsExcluded).map((f) => f.id)),
+    [folders]
+  );
+  const excludedPlanIds = useMemo(
+    () => new Set(plans.filter((p) => p.folderId && excludedFolderIds.has(p.folderId)).map((p) => p.id)),
+    [plans, excludedFolderIds]
+  );
+  const hypertrophyLogs = useMemo(
+    () => (excludedPlanIds.size === 0 ? logs : logs.filter((l) => !l.planId || !excludedPlanIds.has(l.planId))),
+    [logs, excludedPlanIds]
+  );
+
   // Weekly set count per muscle group - the number that actually steers
   // hypertrophy training, and the one gap that showed up when looking at
   // what the app already knows but never displays.
@@ -10215,7 +10300,7 @@ function ProgressView({
     // Subgroup counts nested per main group, so expanding "Beine" doesn't
     // need a second pass over the logs - both levels come out of one walk.
     const subCounts = {};
-    logs.forEach((l) => {
+    hypertrophyLogs.forEach((l) => {
       if (new Date(l.date).getTime() < since) return;
       logEntries(l).forEach((e) => {
         const ex = exBy[e.exerciseId];
@@ -10250,7 +10335,7 @@ function ProgressView({
         return { id: g.id, label: g.label, sets: counts[g.id] || 0, subs };
       })
       .sort((a, b) => b.sets - a.sets);
-  }, [logs, exBy, exerciseSubgroupOverrides]);
+  }, [hypertrophyLogs, exBy, exerciseSubgroupOverrides]);
   const weeklySetsMax = Math.max(1, ...weeklySetsByGroup.map((g) => g.sets));
   const weeklySetsTotal = weeklySetsByGroup.reduce((sum, g) => sum + g.sets, 0);
   // Collapsed by default - opening a group is a deliberate look at detail,
@@ -10263,12 +10348,12 @@ function ProgressView({
   // der Formel. 12 Wochen Reichweite genügt für "Schnitt der letzten 8
   // Wochen" als weitesten Vergleich, den die Chip-Reihe unten anbietet.
   const muscleLoadSeries = useMemo(
-    () => getMuscleLoadSeries(logs, exBy, exerciseSubgroupOverrides, timeBasedExercises, 12),
-    [logs, exBy, exerciseSubgroupOverrides, timeBasedExercises]
+    () => getMuscleLoadSeries(hypertrophyLogs, exBy, exerciseSubgroupOverrides, timeBasedExercises, 12),
+    [hypertrophyLogs, exBy, exerciseSubgroupOverrides, timeBasedExercises]
   );
   // Grenze für den Vergleichszeitraum - siehe logsHistoryWeeks. Verhindert,
   // dass Wochen vor dem allerersten Trainingseintrag als "0" mitgezählt werden.
-  const loadHistoryWeeks = useMemo(() => logsHistoryWeeks(logs), [logs]);
+  const loadHistoryWeeks = useMemo(() => logsHistoryWeeks(hypertrophyLogs), [hypertrophyLogs]);
   const [loadCompareWeeks, setLoadCompareWeeks] = useState(1);
   const [expandedLoadGroups, setExpandedLoadGroups] = useState({});
   const toggleLoadGroupExpanded = (id) =>

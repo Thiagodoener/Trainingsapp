@@ -39,6 +39,7 @@ import {
   CartesianGrid,
   Tooltip,
   Legend,
+  ReferenceLine,
   ResponsiveContainer,
 } from "recharts";
 
@@ -900,6 +901,17 @@ function getTimePR(logs, exerciseId) {
 
 const LOAD_WEEK_MS = 7 * 86400000;
 
+// Gemeinsame Vergleichszeiträume für "Sätze pro Muskelgruppe" und die
+// Prozent-Ansicht der Übungs-Charts - an einer Stelle definiert, damit beide
+// immer dieselben Chips zeigen.
+const WEEK_COMPARE_OPTIONS = [
+  [1, "Vorwoche"],
+  [3, "3 Wochen"],
+  [5, "5 Wochen"],
+  [10, "10 Wochen"],
+  [20, "20 Wochen"],
+];
+
 // Womit die "Arbeit" eines Satzes gemessen wird, hängt an der Übungsart.
 // Bei Übungen ohne Gewicht wären Kilogramm immer 0, bei Zeit-Übungen gibt es
 // gar keine Wiederholungen - jede Art braucht ihr eigenes Maß.
@@ -1010,6 +1022,53 @@ function getMuscleLoadSeries(
       .map((sg) => ({ ...sg, current: sg.values[sg.values.length - 1] || 0 }));
     return { id: g.id, label: g.label, values, current: values[values.length - 1] || 0, subs };
   });
+}
+
+// Wochenweise Satzzahl pro Muskelgruppe (und Untergruppe) - dieselbe
+// rollierende 7-Tage-Fenster-Bucketing wie getMuscleLoadSeries oben, nur
+// dass hier schlicht abgehakte Arbeitssätze gezählt werden statt relativer
+// Arbeit. weekCount=21, weil der weiteste angebotene Vergleich "vor 20
+// Wochen" ist und dafür 20 Wochen Vorgeschichte plus die aktuelle Woche
+// gebraucht werden.
+function getWeeklySetSeries(logs, exBy, subgroupOverrides, weekCount = 21, nowTs = Date.now()) {
+  const safeLogs = Array.isArray(logs) ? logs : [];
+  const emptyWeeks = () => new Array(weekCount).fill(0);
+  const groupWeeks = {};
+  const subWeeks = {};
+  safeLogs.forEach((l) => {
+    const ts = new Date(l?.date).getTime();
+    if (!Number.isFinite(ts)) return;
+    const idx = Math.max(0, Math.floor((nowTs - ts) / LOAD_WEEK_MS));
+    if (idx >= weekCount) return;
+    logEntries(l).forEach((e) => {
+      const ex = exBy[e.exerciseId];
+      if (!ex) return;
+      const done = entrySets(e).filter((x) => x.done && !x.warmup).length;
+      if (done === 0) return;
+      if (!groupWeeks[ex.group]) groupWeeks[ex.group] = emptyWeeks();
+      groupWeeks[ex.group][idx] += done;
+      const subs = getExerciseSubgroups(ex, subgroupOverrides);
+      if (!subWeeks[ex.group]) subWeeks[ex.group] = {};
+      (subs.length > 0 ? subs : ["sonstige"]).forEach((key) => {
+        if (!subWeeks[ex.group][key]) subWeeks[ex.group][key] = emptyWeeks();
+        subWeeks[ex.group][key][idx] += done;
+      });
+    });
+  });
+  const toSeries = (weeks) => (weeks ? [...weeks].reverse() : emptyWeeks());
+  return MUSCLE_GROUPS.map((g) => {
+    const values = toSeries(groupWeeks[g.id]);
+    const subDefs = SUBGROUPS[g.id] || [];
+    const subs = subDefs
+      .map((sg) => ({ id: sg.id, label: sg.label, values: toSeries(subWeeks[g.id]?.[sg.id]) }))
+      .map((sg) => ({ ...sg, current: sg.values[sg.values.length - 1] || 0 }))
+      .sort((a, b) => b.current - a.current);
+    // "Sonstige" hängt immer unsortiert hinten dran, auch bei 0 - siehe
+    // getMuscleLoadSeries/weeklySetsByGroup für die Begründung.
+    const sonstige = { id: "sonstige", label: "Sonstige", values: toSeries(subWeeks[g.id]?.sonstige) };
+    subs.push({ ...sonstige, current: sonstige.values[sonstige.values.length - 1] || 0 });
+    return { id: g.id, label: g.label, values, current: values[values.length - 1] || 0, subs };
+  }).sort((a, b) => b.current - a.current);
 }
 
 // Wie viele volle Wochen liegen zwischen jetzt und dem allerersten jemals
@@ -2714,13 +2773,6 @@ export default function TrainingApp() {
           text-overflow: ellipsis;
           white-space: nowrap;
         }
-        .muscle-week-row {
-          display: grid;
-          grid-template-columns: 88px 1fr 28px;
-          align-items: center;
-          gap: 8px;
-          margin-bottom: 7px;
-        }
         .muscle-week-label {
           font-size: 12.5px;
           color: var(--text-dim);
@@ -2728,48 +2780,46 @@ export default function TrainingApp() {
           overflow: hidden;
           text-overflow: ellipsis;
         }
-        .muscle-week-bar {
-          height: 8px;
-          border-radius: 4px;
-          background: var(--surface-alt);
-          overflow: hidden;
-        }
-        .muscle-week-fill {
-          display: block;
-          height: 100%;
-          border-radius: 4px;
-          background: var(--accent);
-          transition: width 0.3s ease;
-        }
-        /* A group with zero sets is the interesting case - it should read as
-           a gap, not disappear into the background. */
-        .muscle-week-fill.is-empty {
-          background: transparent;
-        }
         .muscle-week-value {
           font-family: 'Oswald', sans-serif;
           font-size: 13px;
           text-align: right;
           color: var(--text);
         }
-        .muscle-week-row-clickable {
-          grid-template-columns: 88px 1fr 28px 14px;
-          cursor: pointer;
-        }
         .muscle-week-subs {
           margin: -1px 0 10px 14px;
           padding-left: 10px;
           border-left: 1px solid var(--border);
         }
-        .muscle-week-row-sub {
-          margin-bottom: 6px;
+        /* Sparkline + Badge instead of the old proportional bar - label,
+           trend, current count, % change, expand-chevron. */
+        .muscle-week-row-v2 {
+          display: grid;
+          grid-template-columns: 76px 1fr 30px 46px 14px;
+          align-items: center;
+          gap: 8px;
+          margin-bottom: 9px;
         }
-        .muscle-week-row-sub .muscle-week-label {
+        .muscle-week-row-v2-clickable {
+          cursor: pointer;
+        }
+        .muscle-week-row-v2-sub {
+          grid-template-columns: 76px 1fr 30px 46px;
+          margin-bottom: 7px;
+        }
+        .muscle-week-row-v2-sub .muscle-week-label {
           font-size: 12px;
         }
-        .muscle-week-row-sub .muscle-week-value {
+        .muscle-week-row-v2-sub .muscle-week-value {
           font-size: 12px;
           color: var(--text-dim);
+        }
+        .muscle-week-chevron {
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          padding: 6px;
+          margin: -6px;
         }
         .muscle-load-row {
           display: grid;
@@ -9408,6 +9458,41 @@ function useChartColors(theme) {
   }, [theme]);
 }
 
+// Punkt-zu-Punkt-Vergleich für die Übungs-Charts: für jeden Datenpunkt wird
+// der Wert von ungefähr compareWeeks Wochen zuvor gesucht (±toleranceDays
+// Tage, gegen zufällige Ausreißer/Trainingslücken am exakten Stichtag) und
+// die prozentuale Veränderung daraus berechnet. Bewusst kein Wochen-
+// Mittelwert wie bei den Muskelgruppen-Karten: eine einzelne Übung wird oft
+// unregelmäßig trainiert, ein Mittelwert über leere Wochen würde das genau
+// wie dort verwässern. keys erlaubt mehrere Datenreihen auf einmal (z. B.
+// eine pro Gym, wenn nach Gym aufgesplittet wird) - jede wird nur gegen
+// ihre eigene Historie verglichen.
+function buildPercentSeries(data, keys, compareWeeks, toleranceDays = 3) {
+  const targetOffsetMs = compareWeeks * LOAD_WEEK_MS;
+  const toleranceMs = toleranceDays * 86400000;
+  return data.map((pt, i) => {
+    const out = { date: pt.date, ts: pt.ts };
+    keys.forEach((key) => {
+      const val = pt[key];
+      if (!(val > 0)) { out[key] = null; return; }
+      const targetTs = pt.ts - targetOffsetMs;
+      let best = null;
+      let bestDiff = Infinity;
+      for (let j = 0; j < i; j++) {
+        const cVal = data[j][key];
+        if (!(cVal > 0)) continue;
+        const diff = Math.abs(data[j].ts - targetTs);
+        if (diff <= toleranceMs && diff < bestDiff) {
+          bestDiff = diff;
+          best = cVal;
+        }
+      }
+      out[key] = best == null ? null : ((val - best) / best) * 100;
+    });
+    return out;
+  });
+}
+
 function ExerciseCharts({ logs, exerciseId, isTimeBased, theme, gyms = [], gymIndependent = false }) {
   const chartColors = useChartColors(theme);
 
@@ -9479,36 +9564,6 @@ function ExerciseCharts({ logs, exerciseId, isTimeBased, theme, gyms = [], gymIn
     })
     .sort((a, b) => a.ts - b.ts);
 
-  const renderLines = (key, fallbackColor) =>
-    splitByGym
-      ? gymKeys.map((g, i) => {
-          const color = GYM_LINE_COLORS[i % GYM_LINE_COLORS.length];
-          return (
-            <Line
-              key={g}
-              type="monotone"
-              dataKey={`${key}_${g}`}
-              name={gymLabel(g)}
-              stroke={color}
-              strokeWidth={2.5}
-              dot={{ r: 3, fill: color, strokeWidth: 0 }}
-              activeDot={{ r: 5 }}
-              connectNulls
-            />
-          );
-        })
-      : (
-        <Line
-          type="monotone"
-          dataKey={key}
-          stroke={fallbackColor}
-          strokeWidth={2.5}
-          dot={{ r: 3, fill: fallbackColor, strokeWidth: 0 }}
-          activeDot={{ r: 5 }}
-        />
-      );
-  const gymLegend = splitByGym ? <Legend wrapperStyle={{ fontSize: 11 }} /> : null;
-
   if (!selected) return null;
 
   // Which charts make sense depends on how the exercise is trained. Bodyweight
@@ -9540,30 +9595,139 @@ function ExerciseCharts({ logs, exerciseId, isTimeBased, theme, gyms = [], gymIn
   ) : (
     <>
       {cards.map((c) => (
-        <div className="card chart-card" key={c.key}>
-          <span className="plan-title">{c.title}</span>
-          <div style={{ height: 190, marginTop: 14 }}>
-            <ResponsiveContainer width="99%" height="100%" debounce={1}>
-              <LineChart data={chartData} margin={{ top: 6, right: 4, left: 0, bottom: 0 }}>
-                <CartesianGrid strokeDasharray="3 3" stroke={chartColors.grid} vertical={false} />
-                <XAxis dataKey="date" stroke={chartColors.axis} fontSize={11} axisLine={false} tickLine={false} />
-                <YAxis stroke={chartColors.axis} fontSize={11} axisLine={false} tickLine={false} width={40} />
-                <Tooltip
-                  contentStyle={{
-                    background: chartColors.tooltipBg,
-                    border: `1px solid ${chartColors.tooltipBorder}`,
-                    borderRadius: 10,
-                    fontSize: 12,
-                  }}
-                />
-                {renderLines(c.key, c.color)}
-                {gymLegend}
-              </LineChart>
-            </ResponsiveContainer>
-          </div>
-        </div>
+        <ExerciseStatCard
+          key={c.key}
+          title={c.title}
+          dataKey={c.key}
+          color={c.color}
+          chartData={chartData}
+          splitByGym={splitByGym}
+          gymKeys={gymKeys}
+          gymLabel={gymLabel}
+          chartColors={chartColors}
+        />
       ))}
     </>
+  );
+}
+
+// Eine einzelne Übungs-Statistik-Karte mit zwei Reitern: "Absolut" (wie
+// bisher) und "Verlauf in %" - dieselbe Karte, nur mit einer anderen
+// Datenreihe (siehe buildPercentSeries), damit man nicht zwischen zwei
+// getrennten Karten hin- und herspringen muss.
+function ExerciseStatCard({ title, dataKey, color, chartData, splitByGym, gymKeys, gymLabel, chartColors }) {
+  const [mode, setMode] = useState("absolute");
+  const [compareWeeks, setCompareWeeks] = useState(1);
+  const percentKeys = useMemo(
+    () => (splitByGym ? gymKeys.map((g) => `${dataKey}_${g}`) : [dataKey]),
+    [splitByGym, gymKeys, dataKey]
+  );
+  const percentData = useMemo(
+    () => buildPercentSeries(chartData, percentKeys, compareWeeks),
+    [chartData, percentKeys, compareWeeks]
+  );
+  const hasPercentValues = percentData.some((pt) => percentKeys.some((k) => pt[k] != null));
+  const activeData = mode === "percent" ? percentData : chartData;
+
+  const renderLines = () =>
+    splitByGym
+      ? gymKeys.map((g, i) => {
+          const lineColor = GYM_LINE_COLORS[i % GYM_LINE_COLORS.length];
+          return (
+            <Line
+              key={g}
+              type="monotone"
+              dataKey={`${dataKey}_${g}`}
+              name={gymLabel(g)}
+              stroke={lineColor}
+              strokeWidth={2.5}
+              dot={{ r: 3, fill: lineColor, strokeWidth: 0 }}
+              activeDot={{ r: 5 }}
+              connectNulls={mode === "absolute"}
+            />
+          );
+        })
+      : (
+        <Line
+          type="monotone"
+          dataKey={dataKey}
+          stroke={color}
+          strokeWidth={2.5}
+          dot={{ r: 3, fill: color, strokeWidth: 0 }}
+          activeDot={{ r: 5 }}
+        />
+      );
+  const gymLegend = splitByGym ? <Legend wrapperStyle={{ fontSize: 11 }} /> : null;
+  const compareLabel = WEEK_COMPARE_OPTIONS.find(([w]) => w === compareWeeks)?.[1] || `${compareWeeks} Wochen`;
+
+  return (
+    <div className="card chart-card">
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8 }}>
+        <span className="plan-title">{title}</span>
+        <div className="chip-row" style={{ margin: 0, padding: 0, overflow: "visible" }}>
+          <span
+            className={`chip chip-sm ${mode === "absolute" ? "active" : ""}`}
+            onClick={() => setMode("absolute")}
+          >
+            Absolut
+          </span>
+          <span
+            className={`chip chip-sm ${mode === "percent" ? "active" : ""}`}
+            onClick={() => setMode("percent")}
+          >
+            Verlauf in %
+          </span>
+        </div>
+      </div>
+      {mode === "percent" && (
+        <div className="chip-row" style={{ marginTop: 10, marginBottom: 0 }}>
+          {WEEK_COMPARE_OPTIONS.map(([weeks, label]) => (
+            <span
+              key={weeks}
+              className={`chip chip-sm ${compareWeeks === weeks ? "active" : ""}`}
+              onClick={() => setCompareWeeks(weeks)}
+            >
+              {label}
+            </span>
+          ))}
+        </div>
+      )}
+      {mode === "percent" && !hasPercentValues ? (
+        <div className="empty-state" style={{ padding: "14px 0" }}>
+          Noch kein Vergleichswert für „{compareLabel}" – dafür fehlt ein Training von vor
+          diesem Zeitraum (±3 Tage Toleranz).
+        </div>
+      ) : (
+        <div style={{ height: 190, marginTop: 14 }}>
+          <ResponsiveContainer width="99%" height="100%" debounce={1}>
+            <LineChart data={activeData} margin={{ top: 6, right: 4, left: 0, bottom: 0 }}>
+              <CartesianGrid strokeDasharray="3 3" stroke={chartColors.grid} vertical={false} />
+              <XAxis dataKey="date" stroke={chartColors.axis} fontSize={11} axisLine={false} tickLine={false} />
+              <YAxis
+                stroke={chartColors.axis}
+                fontSize={11}
+                axisLine={false}
+                tickLine={false}
+                width={mode === "percent" ? 44 : 40}
+                tickFormatter={mode === "percent" ? (v) => `${Math.round(v)}%` : undefined}
+              />
+              <Tooltip
+                contentStyle={{
+                  background: chartColors.tooltipBg,
+                  border: `1px solid ${chartColors.tooltipBorder}`,
+                  borderRadius: 10,
+                  fontSize: 12,
+                }}
+                formatter={mode === "percent" ? (v) => [`${v == null ? "–" : Math.round(v)}%`, ""] : undefined}
+              />
+              {mode === "percent" && <ReferenceLine y={0} stroke={chartColors.axis} strokeDasharray="3 3" />}
+              {renderLines()}
+              {gymLegend}
+            </LineChart>
+          </ResponsiveContainer>
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -10303,56 +10467,49 @@ function ProgressView({
 
   // Weekly set count per muscle group - the number that actually steers
   // hypertrophy training, and the one gap that showed up when looking at
-  // what the app already knows but never displays.
-  const weeklySetsByGroup = useMemo(() => {
-    const since = Date.now() - 7 * 86400000;
-    const counts = {};
-    // Subgroup counts nested per main group, so expanding "Beine" doesn't
-    // need a second pass over the logs - both levels come out of one walk.
-    const subCounts = {};
-    hypertrophyLogs.forEach((l) => {
-      if (new Date(l.date).getTime() < since) return;
-      logEntries(l).forEach((e) => {
-        const ex = exBy[e.exerciseId];
-        if (!ex) return;
-        const done = entrySets(e).filter((x) => x.done && !x.warmup).length;
-        if (done === 0) return;
-        counts[ex.group] = (counts[ex.group] || 0) + done;
-        const subs = getExerciseSubgroups(ex, exerciseSubgroupOverrides);
-        if (!subCounts[ex.group]) subCounts[ex.group] = {};
-        // An exercise with no assigned subgroup, or more than one, still
-        // has to be accounted for somewhere so the breakdown's total keeps
-        // matching the group's total: unassigned work goes to "Sonstige",
-        // and an exercise tagged with several subgroups counts under each -
-        // it genuinely trained all of them, splitting the sets arbitrarily
-        // between them would just be inventing a number.
-        const keys = subs.length > 0 ? subs : ["sonstige"];
-        keys.forEach((key) => {
-          subCounts[ex.group][key] = (subCounts[ex.group][key] || 0) + done;
-        });
-      });
-    });
-    return MUSCLE_GROUPS
-      .map((g) => {
-        const subDefs = SUBGROUPS[g.id] || [];
-        const subs = subDefs
-          .map((sg) => ({ id: sg.id, label: sg.label, sets: subCounts[g.id]?.[sg.id] || 0 }))
-          .sort((a, b) => b.sets - a.sets);
-        // "Sonstige" always shows, even at zero - otherwise sets that were
-        // just never tagged with a subgroup would silently vanish from the
-        // breakdown instead of reading as "not categorised yet".
-        subs.push({ id: "sonstige", label: "Sonstige", sets: subCounts[g.id]?.sonstige || 0 });
-        return { id: g.id, label: g.label, sets: counts[g.id] || 0, subs };
-      })
-      .sort((a, b) => b.sets - a.sets);
-  }, [hypertrophyLogs, exBy, exerciseSubgroupOverrides]);
-  const weeklySetsMax = Math.max(1, ...weeklySetsByGroup.map((g) => g.sets));
+  // what the app already knows but never displays. weekCount=21 so the
+  // "vor 20 Wochen" comparison chip below always has enough history.
+  const weeklySetSeries = useMemo(
+    () => getWeeklySetSeries(hypertrophyLogs, exBy, exerciseSubgroupOverrides, 21),
+    [hypertrophyLogs, exBy, exerciseSubgroupOverrides]
+  );
+  // Same shape as the old single-window version (g.sets/sg.sets) so the
+  // existing render code keeps working, plus .values for sparkline/badge/
+  // full chart.
+  const weeklySetsByGroup = useMemo(
+    () => weeklySetSeries.map((g) => ({
+      id: g.id,
+      label: g.label,
+      sets: g.current,
+      values: g.values,
+      subs: g.subs.map((sg) => ({ id: sg.id, label: sg.label, sets: sg.current, values: sg.values })),
+    })),
+    [weeklySetSeries]
+  );
   const weeklySetsTotal = weeklySetsByGroup.reduce((sum, g) => sum + g.sets, 0);
+  // Grenze für den Vergleichszeitraum, wie bei der Belastungs-Historie -
+  // verhindert, dass Wochen vor dem ersten (nicht ausgeschlossenen)
+  // Trainingseintrag als "0" in den Schnitt einfließen.
+  const setsHistoryWeeks = useMemo(() => logsHistoryWeeks(hypertrophyLogs), [hypertrophyLogs]);
+  const [setsCompareWeeks, setSetsCompareWeeks] = useState(1);
   // Collapsed by default - opening a group is a deliberate look at detail,
   // not something that should greet you on every visit to the tab.
   const [expandedGroups, setExpandedGroups] = useState({});
   const toggleGroupExpanded = (id) =>
     setExpandedGroups((s) => ({ ...s, [id]: !s[id] }));
+  // Tapping a muscle group opens a full chart (axes + tooltip) of its
+  // weekly set history - the sparkline next to it is deliberately minimal.
+  const [chartGroup, setChartGroup] = useState(null);
+  const chartColors = useChartColors(theme);
+  const chartGroupData = useMemo(() => {
+    if (!chartGroup) return [];
+    const weekCount = chartGroup.values.length;
+    return chartGroup.values.map((v, i) => {
+      const weeksAgo = weekCount - 1 - i;
+      const ts = Date.now() - weeksAgo * LOAD_WEEK_MS;
+      return { date: fmtDate(new Date(ts).toISOString()), sets: v };
+    });
+  }, [chartGroup]);
 
   // Belastung pro Muskelgruppe - siehe getMuscleLoadSeries für die Herleitung
   // der Formel. 12 Wochen Reichweite genügt für "Schnitt der letzten 8
@@ -10445,47 +10602,56 @@ function ProgressView({
 
       <div className="card">
         <span className="plan-title">Sätze pro Muskelgruppe (7 Tage)</span>
+        <div className="chip-row" style={{ marginTop: 10, marginBottom: 4 }}>
+          {WEEK_COMPARE_OPTIONS.map(([weeks, label]) => (
+            <span
+              key={weeks}
+              className={`chip chip-sm ${setsCompareWeeks === weeks ? "active" : ""}`}
+              onClick={() => setSetsCompareWeeks(weeks)}
+            >
+              {label}
+            </span>
+          ))}
+        </div>
         {weeklySetsTotal === 0 ? (
           <div className="empty-state" style={{ padding: "14px 0" }}>
             Noch keine abgehakten Sätze in dieser Woche.
           </div>
         ) : (
-          <div style={{ marginTop: 12 }}>
+          <div style={{ marginTop: 8 }}>
             {weeklySetsByGroup.map((g) => {
               const isExpanded = !!expandedGroups[g.id];
-              const subMax = Math.max(1, ...g.subs.map((sg) => sg.sets));
+              const change = muscleLoadChange(g.values, setsCompareWeeks, setsHistoryWeeks);
               return (
                 <div key={g.id}>
                   <div
-                    className="muscle-week-row muscle-week-row-clickable"
-                    onClick={() => toggleGroupExpanded(g.id)}
+                    className="muscle-week-row-v2 muscle-week-row-v2-clickable"
+                    onClick={() => setChartGroup(g)}
+                    title="Tippen für den vollständigen Verlauf"
                   >
                     <span className="muscle-week-label">{g.label}</span>
-                    <span className="muscle-week-bar">
-                      <span
-                        className={`muscle-week-fill ${g.sets === 0 ? "is-empty" : ""}`}
-                        style={{ width: `${Math.round((g.sets / weeklySetsMax) * 100)}%` }}
-                      />
-                    </span>
+                    <Sparkline values={g.values} />
                     <span className="muscle-week-value">{g.sets}</span>
-                    {isExpanded ? (
-                      <ChevronDown size={14} color="var(--text-dim)" />
-                    ) : (
-                      <ChevronRight size={14} color="var(--text-dim)" />
-                    )}
+                    <LoadChangeBadge change={change} />
+                    <span
+                      className="muscle-week-chevron"
+                      onClick={(e) => { e.stopPropagation(); toggleGroupExpanded(g.id); }}
+                    >
+                      {isExpanded ? (
+                        <ChevronDown size={14} color="var(--text-dim)" />
+                      ) : (
+                        <ChevronRight size={14} color="var(--text-dim)" />
+                      )}
+                    </span>
                   </div>
                   {isExpanded && (
                     <div className="muscle-week-subs">
                       {g.subs.map((sg) => (
-                        <div className="muscle-week-row muscle-week-row-sub" key={sg.id}>
+                        <div className="muscle-week-row-v2 muscle-week-row-v2-sub" key={sg.id}>
                           <span className="muscle-week-label">{sg.label}</span>
-                          <span className="muscle-week-bar">
-                            <span
-                              className={`muscle-week-fill ${sg.sets === 0 ? "is-empty" : ""}`}
-                              style={{ width: `${Math.round((sg.sets / subMax) * 100)}%` }}
-                            />
-                          </span>
+                          <Sparkline values={sg.values} />
                           <span className="muscle-week-value">{sg.sets}</span>
+                          <LoadChangeBadge change={muscleLoadChange(sg.values, setsCompareWeeks, setsHistoryWeeks)} />
                         </div>
                       ))}
                     </div>
@@ -10646,6 +10812,44 @@ function ProgressView({
           onToggleGymIndependent={onToggleGymIndependent}
           onClose={() => setSelectedExerciseId(null)}
         />
+      )}
+
+      {chartGroup && (
+        <Modal title={`${chartGroup.label} – Sätze pro Woche`} onClose={() => setChartGroup(null)} width={420}>
+          <div style={{ height: 220 }}>
+            <ResponsiveContainer width="99%" height="100%" debounce={1}>
+              <LineChart data={chartGroupData} margin={{ top: 6, right: 4, left: 0, bottom: 0 }}>
+                <CartesianGrid strokeDasharray="3 3" stroke={chartColors.grid} vertical={false} />
+                <XAxis dataKey="date" stroke={chartColors.axis} fontSize={11} axisLine={false} tickLine={false} />
+                <YAxis
+                  stroke={chartColors.axis}
+                  fontSize={11}
+                  axisLine={false}
+                  tickLine={false}
+                  width={28}
+                  allowDecimals={false}
+                />
+                <Tooltip
+                  contentStyle={{
+                    background: chartColors.tooltipBg,
+                    border: `1px solid ${chartColors.tooltipBorder}`,
+                    borderRadius: 10,
+                    fontSize: 12,
+                  }}
+                  formatter={(v) => [`${v} Sätze`, ""]}
+                />
+                <Line
+                  type="monotone"
+                  dataKey="sets"
+                  stroke="#c1652e"
+                  strokeWidth={2.5}
+                  dot={{ r: 3, fill: "#c1652e", strokeWidth: 0 }}
+                  activeDot={{ r: 5 }}
+                />
+              </LineChart>
+            </ResponsiveContainer>
+          </div>
+        </Modal>
       )}
     </div>
   );

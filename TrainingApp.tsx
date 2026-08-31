@@ -1866,6 +1866,15 @@ export default function TrainingApp() {
     }
     setBreathingSession(null);
   };
+  // Moving an entry to another day, swapping its linked plan/exercise, or
+  // editing an action's category/text/duration all go through this one
+  // patch-merge - only entries that have not happened yet ever reach it
+  // (the edit button itself is hidden once logId is set).
+  const updateCalendarEntry = async (id, patch) => {
+    await persistCalendarEntries(
+      calendarEntries.map((ce) => (ce.id === id ? { ...ce, ...patch } : ce))
+    );
+  };
   // Calendar deletions go through the same confirmation step as deleting a
   // plan or a folder, so a mis-tap can't silently wipe an entry.
   const deleteCalendarEntry = (id) => {
@@ -3796,6 +3805,7 @@ export default function TrainingApp() {
             onAddAction={addCalendarAction}
             onScheduleWorkout={scheduleCalendarWorkout}
             onDeleteEntry={deleteCalendarEntry}
+            onUpdateEntry={updateCalendarEntry}
             onToggleActionDone={toggleCalendarActionDone}
             onCreateCategory={createCalendarCategory}
             onDeleteCategory={deleteCalendarCategory}
@@ -4591,6 +4601,7 @@ function CalendarView({
   onAddAction,
   onScheduleWorkout,
   onDeleteEntry,
+  onUpdateEntry,
   onToggleActionDone,
   onCreateCategory,
   onDeleteCategory,
@@ -4614,6 +4625,15 @@ function CalendarView({
   const [categoryManagerOpen, setCategoryManagerOpen] = useState(false);
   const [newCategoryName, setNewCategoryName] = useState("");
   const [newCategoryColor, setNewCategoryColor] = useState(CATEGORY_COLORS[0]);
+  // Editing an existing entry: date can move for every type, plan/exercise
+  // can be swapped for workout/breathing, and action entries additionally
+  // get their category/text/duration reopened for editing.
+  const [editingEntry, setEditingEntry] = useState(null);
+  const [editDate, setEditDate] = useState("");
+  const [editActionCategory, setEditActionCategory] = useState(null);
+  const [editActionText, setEditActionText] = useState("");
+  const [editActionDuration, setEditActionDuration] = useState("");
+  const [editSwapQuery, setEditSwapQuery] = useState("");
 
   const todayKey = toDateKey(today);
   const monthMatrix = useMemo(() => getMonthMatrix(viewYear, viewMonth), [viewYear, viewMonth]);
@@ -4707,6 +4727,28 @@ function CalendarView({
 
   const filteredPlansForSchedule = plans.filter((p) =>
     p.name.toLowerCase().includes(workoutQuery.toLowerCase())
+  );
+
+  // Only entries that have not happened yet can be moved or re-linked - a
+  // completed session's own log already fixes the date and what was done,
+  // so editing the calendar marker afterwards would only make the two
+  // disagree, not change any history.
+  const openEditEntry = (entry) => {
+    setEditingEntry(entry);
+    setEditDate(entry.date);
+    setEditSwapQuery("");
+    if (entry.type === "action") {
+      setEditActionCategory(entry.categoryId || null);
+      setEditActionText(entry.text || "");
+      setEditActionDuration(entry.durationMinutes ? String(entry.durationMinutes) : "");
+    }
+  };
+  const closeEditDialog = () => setEditingEntry(null);
+  const filteredPlansForSwap = plans.filter((p) =>
+    p.name.toLowerCase().includes(editSwapQuery.toLowerCase())
+  );
+  const filteredBreathingForSwap = breathingExercises.filter((b) =>
+    b.name.toLowerCase().includes(editSwapQuery.toLowerCase())
   );
 
   const handleCreateCategory = () => {
@@ -4934,15 +4976,22 @@ function CalendarView({
               const plan = planById[entry.planId];
               const log = entry.logId ? logs.find((l) => l.id === entry.logId) : null;
               return (
-                <div key={entry.id} className="cal-detail-item">
+                <div key={entry.id} className={`cal-detail-item ${log ? "cal-detail-done" : ""}`}>
                   <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
                     <span className="ex-name">
                       <Dumbbell size={13} style={{ marginRight: 6, verticalAlign: -2 }} />
                       {plan ? plan.name : log?.planName || "Gelöschter Plan"}
                     </span>
-                    <button className="btn-icon" onClick={() => onDeleteEntry(entry.id)} title="Termin entfernen">
-                      <Trash2 size={13} />
-                    </button>
+                    <div style={{ display: "flex", gap: 4, flexShrink: 0 }}>
+                      {!entry.logId && (
+                        <button className="btn-icon" onClick={() => openEditEntry(entry)} title="Termin bearbeiten">
+                          <PencilLine size={13} />
+                        </button>
+                      )}
+                      <button className="btn-icon" onClick={() => onDeleteEntry(entry.id)} title="Termin entfernen">
+                        <Trash2 size={13} />
+                      </button>
+                    </div>
                   </div>
                   {log ? (
                     <div className="history-exercise-list" style={{ marginTop: 8 }}>
@@ -4991,9 +5040,16 @@ function CalendarView({
                       <Wind size={13} style={{ marginRight: 6, verticalAlign: -2, color: BREATHING_COLOR }} />
                       {br ? br.name : log?.name || "Gelöschte Atemübung"}
                     </span>
-                    <button className="btn-icon" onClick={() => onDeleteEntry(entry.id)} title="Termin entfernen">
-                      <Trash2 size={13} />
-                    </button>
+                    <div style={{ display: "flex", gap: 4, flexShrink: 0 }}>
+                      {!entry.logId && (
+                        <button className="btn-icon" onClick={() => openEditEntry(entry)} title="Termin bearbeiten">
+                          <PencilLine size={13} />
+                        </button>
+                      )}
+                      <button className="btn-icon" onClick={() => onDeleteEntry(entry.id)} title="Termin entfernen">
+                        <Trash2 size={13} />
+                      </button>
+                    </div>
                   </div>
                   {log ? (
                     <div style={{ fontSize: 12.5, color: "var(--text-dim)", marginTop: 6 }}>
@@ -5055,9 +5111,14 @@ function CalendarView({
                       ) : null}
                     </span>
                   </span>
-                  <button className="btn-icon" onClick={() => onDeleteEntry(entry.id)} title="Eintrag löschen">
-                    <Trash2 size={13} />
-                  </button>
+                  <div style={{ display: "flex", gap: 4, flexShrink: 0 }}>
+                    <button className="btn-icon" onClick={() => openEditEntry(entry)} title="Eintrag bearbeiten">
+                      <PencilLine size={13} />
+                    </button>
+                    <button className="btn-icon" onClick={() => onDeleteEntry(entry.id)} title="Eintrag löschen">
+                      <Trash2 size={13} />
+                    </button>
+                  </div>
                 </div>
               </div>
             );
@@ -5185,6 +5246,145 @@ function CalendarView({
             )}
           </Modal>
         )}
+
+        {editingEntry && (
+          <Modal
+            title={
+              editingEntry.type === "action"
+                ? "Eintrag bearbeiten"
+                : editingEntry.type === "workout"
+                ? "Workout-Termin bearbeiten"
+                : "Atemübungs-Termin bearbeiten"
+            }
+            onClose={closeEditDialog}
+            width={420}
+          >
+            {editingEntry.type === "action" ? (
+              <>
+                <label className="field-label">Kategorie</label>
+                <div className="chip-row" style={{ marginTop: 6, marginBottom: 10 }}>
+                  <span
+                    className={`chip chip-sm ${editActionCategory === null ? "active" : ""}`}
+                    onClick={() => setEditActionCategory(null)}
+                  >
+                    Ohne
+                  </span>
+                  {categories.map((c) => (
+                    <span
+                      key={c.id}
+                      className={`chip chip-sm ${editActionCategory === c.id ? "active" : ""}`}
+                      onClick={() => setEditActionCategory(c.id)}
+                      style={editActionCategory === c.id ? { background: c.color, borderColor: c.color, color: "white" } : undefined}
+                    >
+                      {c.name}
+                    </span>
+                  ))}
+                </div>
+                <label className="field-label">Eintrag</label>
+                <input
+                  type="text"
+                  value={editActionText}
+                  onChange={(e) => setEditActionText(e.target.value)}
+                />
+                <label className="field-label" style={{ marginTop: 10 }}>
+                  Dauer in Minuten (optional)
+                </label>
+                <input
+                  type="text"
+                  inputMode="numeric"
+                  value={editActionDuration}
+                  onChange={(e) => setEditActionDuration(e.target.value)}
+                />
+                <label className="field-label" style={{ marginTop: 10 }}>Datum</label>
+                <input type="date" value={editDate} onChange={(e) => setEditDate(e.target.value)} />
+                <button
+                  className="btn btn-primary btn-block btn-sm"
+                  style={{ marginTop: 10 }}
+                  disabled={!editActionText.trim() || !editDate}
+                  onClick={() => {
+                    const trimmed = editActionText.trim();
+                    if (!trimmed || !editDate) return;
+                    onUpdateEntry(editingEntry.id, {
+                      categoryId: editActionCategory,
+                      text: trimmed,
+                      durationMinutes: toNum(editActionDuration) || null,
+                      date: editDate,
+                    });
+                    closeEditDialog();
+                  }}
+                >
+                  <Save size={14} /> Speichern
+                </button>
+              </>
+            ) : (
+              <>
+                <label className="field-label">Datum</label>
+                <div style={{ display: "flex", gap: 8, alignItems: "center", marginTop: 6 }}>
+                  <input
+                    type="date"
+                    value={editDate}
+                    onChange={(e) => setEditDate(e.target.value)}
+                    style={{ flex: 1 }}
+                  />
+                  <button
+                    className="btn btn-primary btn-sm"
+                    disabled={!editDate}
+                    onClick={() => { onUpdateEntry(editingEntry.id, { date: editDate }); closeEditDialog(); }}
+                  >
+                    <Save size={14} /> Übernehmen
+                  </button>
+                </div>
+
+                <div style={{ marginTop: 16, paddingTop: 12, borderTop: "1px solid var(--border)" }}>
+                  <label className="field-label">
+                    {editingEntry.type === "workout" ? "Anderen Plan wählen" : "Andere Atemübung wählen"}
+                  </label>
+                  <div className="search-box" style={{ marginTop: 6, marginBottom: 10 }}>
+                    <Search size={16} color="var(--text-dim)" />
+                    <input
+                      placeholder={editingEntry.type === "workout" ? "Plan suchen…" : "Atemübung suchen…"}
+                      value={editSwapQuery}
+                      onChange={(e) => setEditSwapQuery(e.target.value)}
+                    />
+                  </div>
+                  <div style={{ maxHeight: 220, overflowY: "auto" }}>
+                    {editingEntry.type === "workout" ? (
+                      filteredPlansForSwap.length === 0 ? (
+                        <div className="empty-state" style={{ padding: "10px 0" }}>Keine Pläne gefunden.</div>
+                      ) : (
+                        filteredPlansForSwap.map((p) => (
+                          <div className="ex-row" key={p.id}>
+                            <span className="ex-name">{p.name}</span>
+                            <button
+                              className="btn btn-primary btn-sm"
+                              onClick={() => { onUpdateEntry(editingEntry.id, { planId: p.id }); closeEditDialog(); }}
+                            >
+                              Übernehmen
+                            </button>
+                          </div>
+                        ))
+                      )
+                    ) : filteredBreathingForSwap.length === 0 ? (
+                      <div className="empty-state" style={{ padding: "10px 0" }}>Keine Atemübung gefunden.</div>
+                    ) : (
+                      filteredBreathingForSwap.map((b) => (
+                        <div className="ex-row" key={b.id}>
+                          <span className="ex-name">{b.name}</span>
+                          <button
+                            className="btn btn-primary btn-sm"
+                            onClick={() => { onUpdateEntry(editingEntry.id, { breathingId: b.id }); closeEditDialog(); }}
+                          >
+                            Übernehmen
+                          </button>
+                        </div>
+                      ))
+                    )}
+                  </div>
+                </div>
+              </>
+            )}
+          </Modal>
+        )}
       </div>
     </div>
   );
@@ -5207,6 +5407,12 @@ function CalendarView({
 
 const LONG_PRESS_MS = 500;
 const SHIFT_TRANSITION = "transform 200ms cubic-bezier(0.2, 0, 0, 1)";
+// How close to the top/bottom edge of the scrollable area a drag has to get
+// before it starts auto-scrolling, and how fast that scroll goes at most -
+// without this a list longer than one screen simply can't be reordered from
+// bottom to top (or back), since the target row is off-screen the whole time.
+const AUTO_SCROLL_EDGE = 70;
+const AUTO_SCROLL_MAX_SPEED = 16;
 
 // While a row is being dragged the browser would otherwise select the text
 // under the finger, leaving words and numbers highlighted in blue.
@@ -5231,7 +5437,12 @@ function useDragReorder({ items, getId, onReorder }) {
   const dragStartYRef = useRef(0);
   const pressStartYRef = useRef(0);
   const pendingYRef = useRef(0);
-  const rafRef = useRef(null);
+  // How much the scrollable container has been auto-scrolled since the drag
+  // began (positive = scrolled down). The dragged row's transform and the
+  // target-slot math both need this added back in, because scrolling moves
+  // every row's on-screen position without moving the pointer at all.
+  const autoScrolledRef = useRef(0);
+  const autoScrollLoopRef = useRef(null);
 
   useEffect(() => {
     itemsRef.current = items;
@@ -5279,21 +5490,43 @@ function useDragReorder({ items, getId, onReorder }) {
     });
   };
 
+  // Runs every frame for the whole drag, not just when the pointer moves:
+  // holding the finger still right at the edge must keep scrolling, which a
+  // move-triggered callback alone would never do. Scrolls the container when
+  // the pointer sits in the edge zone, then repaints using the finger's raw
+  // movement plus whatever the auto-scroll has contributed so far.
+  const runAutoScrollFrame = () => {
+    if (draggingIdRef.current === null) return;
+    const container = document.querySelector(".content");
+    if (container) {
+      const rect = container.getBoundingClientRect();
+      const y = pendingYRef.current;
+      let speed = 0;
+      if (y < rect.top + AUTO_SCROLL_EDGE) {
+        speed = -AUTO_SCROLL_MAX_SPEED * Math.min(1, (rect.top + AUTO_SCROLL_EDGE - y) / AUTO_SCROLL_EDGE);
+      } else if (y > rect.bottom - AUTO_SCROLL_EDGE) {
+        speed = AUTO_SCROLL_MAX_SPEED * Math.min(1, (y - (rect.bottom - AUTO_SCROLL_EDGE)) / AUTO_SCROLL_EDGE);
+      }
+      if (speed !== 0) {
+        const before = container.scrollTop;
+        container.scrollTop = before + speed;
+        autoScrolledRef.current += container.scrollTop - before;
+      }
+    }
+    paintDrag(pendingYRef.current - dragStartYRef.current + autoScrolledRef.current);
+    autoScrollLoopRef.current = requestAnimationFrame(runAutoScrollFrame);
+  };
+
   useEffect(() => {
     if (draggingId === null) return undefined;
     const onMove = (e) => {
       if (e.cancelable) e.preventDefault();
       pendingYRef.current = e.touches ? e.touches[0].clientY : e.clientY;
-      if (rafRef.current !== null) return;
-      rafRef.current = requestAnimationFrame(() => {
-        rafRef.current = null;
-        paintDrag(pendingYRef.current - dragStartYRef.current);
-      });
     };
     const onUp = () => {
-      if (rafRef.current !== null) {
-        cancelAnimationFrame(rafRef.current);
-        rafRef.current = null;
+      if (autoScrollLoopRef.current !== null) {
+        cancelAnimationFrame(autoScrollLoopRef.current);
+        autoScrollLoopRef.current = null;
       }
       const from = fromIndexRef.current;
       const target = targetIndexRef.current;
@@ -5364,6 +5597,8 @@ function useDragReorder({ items, getId, onReorder }) {
       fromIndexRef.current = slots.findIndex((s) => s.id === id);
       targetIndexRef.current = fromIndexRef.current;
       dragStartYRef.current = pressStartYRef.current;
+      pendingYRef.current = pressStartYRef.current;
+      autoScrolledRef.current = 0;
       draggingIdRef.current = id;
 
       slots.forEach((slot) => {
@@ -5377,6 +5612,7 @@ function useDragReorder({ items, getId, onReorder }) {
       if (navigator.vibrate) navigator.vibrate(15);
       setDragSelectionBlocked(true);
       setDraggingId(id);
+      autoScrollLoopRef.current = requestAnimationFrame(runAutoScrollFrame);
     }, LONG_PRESS_MS);
   };
   const cancelItemPress = () => {

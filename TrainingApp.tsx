@@ -10275,9 +10275,12 @@ function ProgressView({
   const stats = useMemo(() => calculateTrainingStats(logs, exBy, timeBasedExercises), [logs, exBy, timeBasedExercises]);
 
   // Folders can be marked "ohne Statistik" (e.g. EMOM/Conditioning) so their
-  // sets don't dilute the two hypertrophy-focused cards below. Everything
-  // else - PRs, "Letztes Mal", the per-exercise charts, Verlauf - keeps
-  // seeing every logged set regardless of this flag.
+  // sets don't dilute "Sätze pro Muskelgruppe" - that card is deliberately a
+  // pure hypertrophy-set counter. "Belastung pro Muskelgruppe" answers a
+  // different question (overall load / steady progression), and an EMOM set
+  // is real load regardless of training goal, so it keeps using every log.
+  // PRs, "Letztes Mal", the per-exercise charts and Verlauf are unaffected
+  // either way.
   const excludedFolderIds = useMemo(
     () => new Set(folders.filter((f) => f.statsExcluded).map((f) => f.id)),
     [folders]
@@ -10348,12 +10351,12 @@ function ProgressView({
   // der Formel. 12 Wochen Reichweite genügt für "Schnitt der letzten 8
   // Wochen" als weitesten Vergleich, den die Chip-Reihe unten anbietet.
   const muscleLoadSeries = useMemo(
-    () => getMuscleLoadSeries(hypertrophyLogs, exBy, exerciseSubgroupOverrides, timeBasedExercises, 12),
-    [hypertrophyLogs, exBy, exerciseSubgroupOverrides, timeBasedExercises]
+    () => getMuscleLoadSeries(logs, exBy, exerciseSubgroupOverrides, timeBasedExercises, 12),
+    [logs, exBy, exerciseSubgroupOverrides, timeBasedExercises]
   );
   // Grenze für den Vergleichszeitraum - siehe logsHistoryWeeks. Verhindert,
   // dass Wochen vor dem allerersten Trainingseintrag als "0" mitgezählt werden.
-  const loadHistoryWeeks = useMemo(() => logsHistoryWeeks(hypertrophyLogs), [hypertrophyLogs]);
+  const loadHistoryWeeks = useMemo(() => logsHistoryWeeks(logs), [logs]);
   const [loadCompareWeeks, setLoadCompareWeeks] = useState(1);
   const [expandedLoadGroups, setExpandedLoadGroups] = useState({});
   const toggleLoadGroupExpanded = (id) =>

@@ -3024,6 +3024,7 @@ export default function TrainingApp() {
         .load-signal-plateau { color: var(--text-dim); }
         .sparkline {
           display: block;
+          width: 100%;
           overflow: visible;
         }
         .sparkline polyline {
@@ -10812,17 +10813,31 @@ function Modal({ title, onClose, children, width = 360 }) {
 // few weeks at a glance. Plain SVG rather than recharts: a chart this small
 // doesn't need an interactive library, and it stays legible even with only
 // one or two non-zero weeks in the series.
-function Sparkline({ values, width = 64, height = 24 }) {
+// viewWidth ist eine beliebige interne Einheit, keine Pixelgröße - die
+// viewBox streckt sich per width="100%" auf die tatsächliche Breite der
+// Grid-Spalte (vorher: feste 64px in einer 1fr-Spalte, die auf den meisten
+// Handys 130-150px breit ist - der Rest blieb toter Raum). preserveAspectRatio
+// "none" erlaubt genau dieses Strecken, vectorEffect="non-scaling-stroke"
+// verhindert, dass die Linie dabei unterschiedlich dick wird.
+function Sparkline({ values, height = 24 }) {
   const list = Array.isArray(values) ? values : [];
   const max = Math.max(0, ...list);
+  const viewWidth = 100;
   if (list.length < 2 || max <= 0) {
     return (
-      <svg width={width} height={height} className="sparkline sparkline-empty" aria-hidden="true">
-        <line x1={2} y1={height / 2} x2={width - 2} y2={height / 2} />
+      <svg
+        viewBox={`0 0 ${viewWidth} ${height}`}
+        preserveAspectRatio="none"
+        width="100%"
+        height={height}
+        className="sparkline sparkline-empty"
+        aria-hidden="true"
+      >
+        <line x1={2} y1={height / 2} x2={viewWidth - 2} y2={height / 2} vectorEffect="non-scaling-stroke" />
       </svg>
     );
   }
-  const stepX = (width - 4) / (list.length - 1);
+  const stepX = (viewWidth - 4) / (list.length - 1);
   const points = list
     .map((v, i) => {
       const x = 2 + i * stepX;
@@ -10831,8 +10846,22 @@ function Sparkline({ values, width = 64, height = 24 }) {
     })
     .join(" ");
   return (
-    <svg width={width} height={height} className="sparkline" aria-hidden="true">
-      <polyline points={points} fill="none" strokeWidth={1.75} strokeLinecap="round" strokeLinejoin="round" />
+    <svg
+      viewBox={`0 0 ${viewWidth} ${height}`}
+      preserveAspectRatio="none"
+      width="100%"
+      height={height}
+      className="sparkline"
+      aria-hidden="true"
+    >
+      <polyline
+        points={points}
+        fill="none"
+        strokeWidth={1.75}
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        vectorEffect="non-scaling-stroke"
+      />
     </svg>
   );
 }

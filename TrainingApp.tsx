@@ -7866,6 +7866,19 @@ function PlansView({
             <div className="program-menu-divider" />
             <button
               className="program-menu-item"
+              onClick={() => {
+                setProgramMenuOpen(false);
+                // Reuses the exact same start flow as a real plan (gym
+                // picker included) - just with an empty exercise list.
+                // Exercises get added afterwards via "+ Übung hinzufügen",
+                // already there in the live logging screen.
+                onStart({ id: null, name: "Freies Training", items: [] });
+              }}
+            >
+              <Play size={14} /> Training ohne Plan starten
+            </button>
+            <button
+              className="program-menu-item"
               onClick={() => { setProgramMenuOpen(false); onManageGyms(); }}
             >
               <Dumbbell size={14} /> Gyms verwalten

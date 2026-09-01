@@ -1156,12 +1156,22 @@ function muscleLoadChange(values, compareWeeks, maxLookback = Infinity) {
 const PLATEAU_WEEKS = 3;        // so viele Wochen ohne neuen Höchstwert = Plateau
 const PLATEAU_TOLERANCE = 1.05; // 5% Toleranz, damit normales Schwanken nicht triggert
 const OVERLOAD_LOOKBACK = 4;    // Vergleichs-Schnitt aus den 4 Wochen davor
-const OVERLOAD_THRESHOLD = 1.4; // aktuelle Woche > 40% über diesem Schnitt = Sprung
+// Zwei Stufen, angelehnt an die Acute:Chronic-Workload-Ratio aus der
+// Sportwissenschaft (Gabbett): Ratio ~1,3 gilt dort schon als Punkt, ab dem
+// das Verletzungsrisiko zu steigen beginnt (Ende des "Sweet Spot" 0,8-1,3),
+// ~1,5 als Hochrisikozone. Harter Alarm bei +30% statt +50%, um früher zu
+// warnen - dafür der weiche Hinweis bei +15% als Vorstufe, damit nicht jede
+// Woche im oberen Sweet-Spot-Bereich schon als Alarm auftaucht.
+const OVERLOAD_WATCH_THRESHOLD = 1.15;  // aktuelle Woche > 15% über dem Schnitt = weicher Hinweis
+const OVERLOAD_ALERT_THRESHOLD = 1.3;   // aktuelle Woche > 30% über dem Schnitt = harter Alarm
 
 // Ermittelt aus einer Wochenreihe (alt -> neu, wie von getMuscleLoadSeries /
 // getExerciseLoadSeries geliefert) ein Warnsignal für die aktuelle Woche:
 // - "overload": Belastung gegenüber dem Schnitt der OVERLOAD_LOOKBACK Wochen
-//   davor sprunghaft gestiegen (akutes Risiko, hat deshalb Vorrang).
+//   davor sprunghaft gestiegen (akutes Risiko, hat deshalb Vorrang vor allem
+//   anderen).
+// - "overload-watch": spürbarer, aber (noch) nicht dramatischer Anstieg -
+//   Vorstufe zu "overload", kein Grund zur Sorge, aber im Auge behalten.
 // - "plateau": seit PLATEAU_WEEKS Wochen keine neue Bestleistung mehr.
 // historyWeeks (siehe logsHistoryWeeks) verhindert ein Urteil, wenn es dafür
 // schlicht noch nicht genug Trainingshistorie gibt. Null heißt "kein
@@ -1179,8 +1189,9 @@ function detectLoadSignal(values, historyWeeks = Infinity) {
   if (overloadSlice.length === OVERLOAD_LOOKBACK && historyWeeks >= OVERLOAD_LOOKBACK) {
     const withData = overloadSlice.filter((v) => v > 0).length;
     const baseline = overloadSlice.reduce((sum, v) => sum + (v || 0), 0) / overloadSlice.length;
-    if (withData >= 2 && baseline > 0 && current > baseline * OVERLOAD_THRESHOLD) {
-      return { type: "overload" };
+    if (withData >= 2 && baseline > 0) {
+      if (current > baseline * OVERLOAD_ALERT_THRESHOLD) return { type: "overload" };
+      if (current > baseline * OVERLOAD_WATCH_THRESHOLD) return { type: "overload-watch" };
     }
   }
 
@@ -3009,6 +3020,7 @@ export default function TrainingApp() {
           width: 18px;
         }
         .load-signal-overload { color: var(--danger); }
+        .load-signal-watch { color: var(--brass); }
         .load-signal-plateau { color: var(--text-dim); }
         .sparkline {
           display: block;
@@ -10838,10 +10850,11 @@ function LoadChangeBadge({ change }) {
   return <span className={`load-change ${cls}`}>{sign}{rounded}%</span>;
 }
 
-// Warn-Icon für detectLoadSignal: Plateau (Minus) oder Überlastung
-// (AlertTriangle). Rendert bei fehlendem Signal einen leeren Platzhalter
-// statt null, damit die Grid-Spalte in der Muskelgruppen-/Übungs-Zeile nicht
-// je nach Zustand springt.
+// Warn-Icon für detectLoadSignal: Plateau (Minus), weicher Belastungs-
+// Hinweis oder harter Überlastungs-Alarm (beide AlertTriangle, nur Farbe/
+// Text unterschiedlich). Rendert bei fehlendem Signal einen leeren
+// Platzhalter statt null, damit die Grid-Spalte in der Muskelgruppen-/
+// Übungs-Zeile nicht je nach Zustand springt.
 function LoadSignalBadge({ signal }) {
   if (!signal) return <span className="load-signal load-signal-empty" aria-hidden="true" />;
   if (signal.type === "overload") {
@@ -10849,6 +10862,16 @@ function LoadSignalBadge({ signal }) {
       <span
         className="load-signal load-signal-overload"
         title="Belastung deutlich über dem Schnitt der letzten Wochen – Risiko für Überlastung"
+      >
+        <AlertTriangle size={14} />
+      </span>
+    );
+  }
+  if (signal.type === "overload-watch") {
+    return (
+      <span
+        className="load-signal load-signal-watch"
+        title="Belastung spürbar über dem Schnitt der letzten Wochen – im Auge behalten"
       >
         <AlertTriangle size={14} />
       </span>

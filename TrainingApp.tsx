@@ -28,6 +28,8 @@ import {
   Repeat,
   Sun,
   Moon,
+  Globe,
+  Wind,
 } from "lucide-react";
 import {
   LineChart,
@@ -37,6 +39,7 @@ import {
   CartesianGrid,
   Tooltip,
   Legend,
+  ReferenceLine,
   ResponsiveContainer,
 } from "recharts";
 
@@ -68,6 +71,113 @@ const SWATCH_COLORS = [
 ];
 const FOLDER_COLORS = SWATCH_COLORS;
 const CATEGORY_COLORS = SWATCH_COLORS;
+
+// ---------------------------------------------------------------------------
+// Atemübungen
+//
+// Eine Atemübung ist eine Liste von Phasen, die als Runde mehrfach
+// durchlaufen wird. Bewusst frei zusammenstellbar statt fester
+// Einatmen/Halten/Ausatmen-Vorlage: Box Breathing, 4-7-8, der
+// physiologische Seufzer, CO2-Tabellen und Wim Hof haben strukturell
+// nichts gemeinsam außer "Phasen nacheinander".
+//
+// seconds === null heißt "offene Phase": kein Countdown, die Zeit läuft
+// hoch und weiter geht es erst auf Antippen. Genau das braucht der
+// Atemanhalte-Teil bei Wim Hof, wo die Dauer eben nicht vorher feststeht.
+//
+// direction steuert die Grafik und ist deshalb Pflicht, nicht optional:
+// beim Kreis wächst/schrumpft er, bei der Linie läuft der Punkt nach
+// oben, unten oder waagerecht.
+// ---------------------------------------------------------------------------
+const BREATHING_COLOR = "#6ea8d8"; // Himmelblau, auch im Kalender
+const BREATHING_DIRECTIONS = [
+  { id: "in", label: "Einatmen" },
+  { id: "hold", label: "Halten" },
+  { id: "out", label: "Ausatmen" },
+];
+const BREATHING_DISPLAYS = [
+  { id: "line", label: "Linie" },
+  { id: "circle", label: "Kreis" },
+];
+
+// Fertige Vorlagen, damit man nicht bei jeder bekannten Übung von Null
+// anfängt. Werden beim Anlegen als Startpunkt angeboten und danach ganz
+// normal weiterbearbeitet.
+const BREATHING_TEMPLATES = [
+  {
+    name: "Box Breathing",
+    display: "line",
+    rounds: 6,
+    phases: [
+      { label: "Einatmen", direction: "in", seconds: 4 },
+      { label: "Halten", direction: "hold", seconds: 4 },
+      { label: "Ausatmen", direction: "out", seconds: 4 },
+      { label: "Halten", direction: "hold", seconds: 4 },
+    ],
+  },
+  {
+    name: "4-7-8 Atmung",
+    display: "line",
+    rounds: 4,
+    phases: [
+      { label: "Einatmen", direction: "in", seconds: 4 },
+      { label: "Halten", direction: "hold", seconds: 7 },
+      { label: "Ausatmen", direction: "out", seconds: 8 },
+    ],
+  },
+  {
+    name: "Physiologischer Seufzer",
+    display: "line",
+    rounds: 5,
+    phases: [
+      { label: "Einatmen", direction: "in", seconds: 2 },
+      { label: "Nochmal kurz einatmen", direction: "in", seconds: 1 },
+      { label: "Lang ausatmen", direction: "out", seconds: 6 },
+    ],
+  },
+  {
+    name: "Wim Hof",
+    display: "circle",
+    rounds: 3,
+    phases: [
+      { label: "30 schnelle Atemzüge", direction: "in", seconds: 60 },
+      { label: "Ausatmen & halten", direction: "hold", seconds: null },
+      { label: "Einatmen & halten", direction: "hold", seconds: 15 },
+    ],
+  },
+  {
+    name: "CO2-Schwellentraining",
+    display: "line",
+    rounds: 1,
+    phases: [
+      { label: "Ruhig atmen", direction: "in", seconds: 60 },
+      { label: "Anhalten", direction: "hold", seconds: 30 },
+      { label: "Ruhig atmen", direction: "in", seconds: 60 },
+      { label: "Anhalten", direction: "hold", seconds: 40 },
+      { label: "Ruhig atmen", direction: "in", seconds: 60 },
+      { label: "Anhalten", direction: "hold", seconds: 50 },
+      { label: "Ruhig atmen", direction: "in", seconds: 60 },
+      { label: "Anhalten", direction: "hold", seconds: 60 },
+    ],
+  },
+];
+
+// Eine Übung ohne Phasen liefe sonst als Endlosschleife durch nichts.
+function breathingPhases(exercise) {
+  return Array.isArray(exercise?.phases) ? exercise.phases.filter(Boolean) : [];
+}
+function breathingRounds(exercise) {
+  const n = toNum(exercise?.rounds);
+  return n > 0 ? n : 1;
+}
+// Gesamtdauer in Sekunden - null, sobald eine offene Phase dabei ist, denn
+// dann steht die Dauer vorher schlicht nicht fest.
+function breathingTotalSeconds(exercise) {
+  const phases = breathingPhases(exercise);
+  if (phases.length === 0) return 0;
+  if (phases.some((p) => p.seconds == null)) return null;
+  return phases.reduce((sum, p) => sum + toNum(p.seconds), 0) * breathingRounds(exercise);
+}
 
 // Exercise pickers only render a screenful at a time. Drawing all ~150
 // rows made every tap inside the picker redraw the entire list, which
@@ -373,6 +483,24 @@ function isTimeBasedInLogs(logs, exerciseId, timeBasedExercises) {
   );
 }
 
+// Übungen, die überall gleich sind - Liegestütze, Plank, alles mit Band.
+// Bei ihnen hängt die Leistung nicht am Studio, also darf die Historie auch
+// nicht pro Gym auseinandergerissen werden: eine durchgehende Linie im
+// Diagramm, ein durchgehender Rekord, ein "letztes Mal" über alle Gyms.
+// Die Einstellung wird pro Übung gesetzt und bleibt dauerhaft.
+function isGymIndependent(exerciseId, gymIndependentExercises) {
+  return !!(gymIndependentExercises && gymIndependentExercises[exerciseId]);
+}
+
+// Die eine Stelle, die entscheidet, ob nach Gym getrennt wird. Wer null
+// zurückbekommt, vergleicht über alle Gyms hinweg. Jede Auswertung, die ein
+// gymId weiterreicht, schickt es zuerst hier durch - sonst würde eine
+// vergessene Stelle die Übung weiterhin aufsplitten, während der Rest der
+// App sie längst als überall-gleich behandelt.
+function effectiveGymId(exerciseId, gymId, gymIndependentExercises) {
+  return isGymIndependent(exerciseId, gymIndependentExercises) ? null : gymId;
+}
+
 function getExerciseHistory(logs, exerciseId, excludeSessionId, isTimeBased = false, gymId = null) {
   const all = logs
     .filter((l) => l.id !== excludeSessionId)
@@ -466,6 +594,34 @@ function getExerciseHistory(logs, exerciseId, excludeSessionId, isTimeBased = fa
     best1RM, bestSetVolume, bestSetReps, bestTotalVolume, bestTotalReps, bestTotalDuration,
     comparableSessions,
   };
+}
+
+// Live-Vergleich zum letzten Mal, während der Eingabe - nicht erst wenn ein
+// Satz abgehakt wird. "Volumen" heißt hier je nach Übungsart Gewicht×Wdh.,
+// Sekunden oder reine Wiederholungen - dieselben drei Maße, die der Rest der
+// App für diese Übungsarten schon verwendet.
+// Anders als bei der Muskelgruppen-Belastung gibt es hier kein Geräte-
+// Problem: Es wird immer dieselbe Übung mit sich selbst verglichen, nie
+// Langhantel gegen Kurzhantel - deshalb ist rohes Volumen hier unproblematisch.
+// Vorbelegte Felder entsprechen zu Beginn exakt dem letzten Mal, macht also
+// bewusst 0 % - erst eine tatsächliche Änderung an Gewicht oder Wdh. bewegt
+// die Zahl. null bedeutet "keine Vorgeschichte", nicht 0 %.
+function exerciseVolumeChange(currentSets, lastSets, isTimeBased, usesWeight) {
+  if (!Array.isArray(lastSets) || lastSets.length === 0) return null;
+  const metric = (set) =>
+    isTimeBased
+      ? toNum(set.duration)
+      : usesWeight
+      ? toNum(set.weight) * toNum(set.reps)
+      : toNum(set.reps);
+  const sum = (sets) =>
+    (Array.isArray(sets) ? sets : [])
+      .filter((s) => s && !s.warmup)
+      .reduce((total, s) => total + metric(s), 0);
+  const lastTotal = sum(lastSets);
+  if (lastTotal <= 0) return null;
+  const currentTotal = sum(currentSets);
+  return ((currentTotal - lastTotal) / lastTotal) * 100;
 }
 
 // Liefert die komplette Verlaufsliste einer Übung über alle Trainings hinweg
@@ -715,6 +871,283 @@ function getTimePR(logs, exerciseId) {
   return best;
 }
 
+// ---------------------------------------------------------------------------
+// Belastung pro Muskelgruppe
+//
+// Die Frage dahinter: "Habe ich diese Muskelgruppe mehr oder weniger belastet
+// als in den Wochen davor?" - und zwar so, dass die Antwort stimmt.
+//
+// Warum nicht Kilogramm: Kilogramm-Volumen ist zwischen Übungen NICHT
+// vergleichbar. Wer von der Langhantel auf Kurzhanteln wechselt, bewegt bei
+// gleicher Anstrengung viel weniger Kilogramm - die Kurve würde einen
+// Rückschritt zeigen, den es nie gab.
+//
+// Warum nicht nur Sätze: Sätze lösen das Geräte-Problem, stagnieren aber
+// zwangsläufig. Wer bei gleicher Satzzahl schwerer wird, sieht davon nichts.
+//
+// Deshalb wird JEDER Satz an der eigenen Bestleistung in GENAU DIESER Übung
+// gemessen: "Wie viel von meinem besten Satz war das?" Ein Satz auf
+// Bestniveau zählt 1,0. Ein Kurzhantel-Satz mit 22 kg ist damit genauso viel
+// wert wie ein Langhantel-Satz mit 60 kg, wenn beide gleich nah am jeweiligen
+// persönlichen Bestwert liegen - und mehr Gewicht bei gleicher Satzzahl hebt
+// den Wert trotzdem an.
+//
+// Der Bestwert ist dabei nur eine Umrechnungseinheit: Er wird auf ALLE Wochen
+// gleich angewendet und kürzt sich beim Prozentvergleich einer einzelnen
+// Übung vollständig heraus. Ein neuer Rekord verfälscht die Historie also
+// nicht, er skaliert sie einheitlich um - genau deshalb bleibt der Vergleich
+// über Wochen hinweg ehrlich.
+// ---------------------------------------------------------------------------
+
+const LOAD_WEEK_MS = 7 * 86400000;
+
+// Gemeinsame Vergleichszeiträume für "Sätze pro Muskelgruppe" und die
+// Prozent-Ansicht der Übungs-Charts - an einer Stelle definiert, damit beide
+// immer dieselben Chips zeigen.
+const WEEK_COMPARE_OPTIONS = [
+  [1, "Vorwoche"],
+  [3, "3 Wochen"],
+  [5, "5 Wochen"],
+  [10, "10 Wochen"],
+  [20, "20 Wochen"],
+];
+
+// Womit die "Arbeit" eines Satzes gemessen wird, hängt an der Übungsart.
+// Bei Übungen ohne Gewicht wären Kilogramm immer 0, bei Zeit-Übungen gibt es
+// gar keine Wiederholungen - jede Art braucht ihr eigenes Maß.
+function loadSetWork(set, mode) {
+  if (mode === "time") return toNum(set.duration);
+  if (mode === "reps") return toNum(set.reps);
+  return toNum(set.weight) * toNum(set.reps);
+}
+
+// weekCount = wie viele 7-Tage-Fenster zurück betrachtet werden. Fenster 0 ist
+// immer "die letzten 7 Tage", damit die Zahlen zur bestehenden Karte
+// "Sätze pro Muskelgruppe (7 Tage)" passen.
+function getMuscleLoadSeries(
+  logs,
+  exBy,
+  subgroupOverrides,
+  timeBasedExercises,
+  weekCount = 12,
+  nowTs = Date.now()
+) {
+  const safeLogs = Array.isArray(logs) ? logs : [];
+  const emptyWeeks = () => new Array(weekCount).fill(0);
+
+  // Schritt 1: Pro Übung festlegen, wie "Arbeit" gemessen wird. Ob eine Übung
+  // zeitbasiert ist, entscheidet weiterhin isTimeBasedInLogs - das ist die
+  // eine Stelle im Code, die das beantwortet, und das soll so bleiben. Das
+  // Ergebnis wird gemerkt, weil die Funktion sonst pro Übung erneut alle Logs
+  // durchsucht.
+  const timeCache = {};
+  const hasWeight = {};
+  safeLogs.forEach((l) => {
+    logEntries(l).forEach((e) => {
+      entrySets(e).forEach((s) => {
+        if (!s.done || s.warmup) return;
+        if (toNum(s.weight) > 0) hasWeight[e.exerciseId] = true;
+      });
+    });
+  });
+  const modeOf = (exerciseId) => {
+    if (!(exerciseId in timeCache)) {
+      timeCache[exerciseId] = isTimeBasedInLogs(safeLogs, exerciseId, timeBasedExercises);
+    }
+    if (timeCache[exerciseId]) return "time";
+    return hasWeight[exerciseId] ? "weight" : "reps";
+  };
+
+  // Schritt 2: Der beste Einzelsatz aller Zeiten je Übung - der Maßstab, an
+  // dem später jeder Satz gemessen wird.
+  const best = {};
+  safeLogs.forEach((l) => {
+    logEntries(l).forEach((e) => {
+      const mode = modeOf(e.exerciseId);
+      entrySets(e).forEach((s) => {
+        if (!s.done || s.warmup) return;
+        const work = loadSetWork(s, mode);
+        if (work > (best[e.exerciseId] || 0)) best[e.exerciseId] = work;
+      });
+    });
+  });
+
+  // Schritt 3: Jeden Satz seinem 7-Tage-Fenster und seinen Muskelgruppen
+  // zuordnen.
+  const groupWeeks = {};
+  const subWeeks = {};
+  safeLogs.forEach((l) => {
+    const ts = new Date(l?.date).getTime();
+    if (!Number.isFinite(ts)) return;
+    // Ein Datum minimal in der Zukunft (Zeitzonen, Uhr verstellt) würde einen
+    // negativen Index ergeben und den Eintrag verschlucken - der zählt zur
+    // laufenden Woche.
+    const idx = Math.max(0, Math.floor((nowTs - ts) / LOAD_WEEK_MS));
+    if (idx >= weekCount) return;
+    logEntries(l).forEach((e) => {
+      const ex = exBy[e.exerciseId];
+      if (!ex) return;
+      const reference = best[e.exerciseId] || 0;
+      if (reference <= 0) return; // ohne Bestwert kein Maßstab
+      const mode = modeOf(e.exerciseId);
+      let score = 0;
+      entrySets(e).forEach((s) => {
+        if (!s.done || s.warmup) return;
+        score += loadSetWork(s, mode) / reference;
+      });
+      if (score === 0) return;
+      if (!groupWeeks[ex.group]) groupWeeks[ex.group] = emptyWeeks();
+      groupWeeks[ex.group][idx] += score;
+      // Gleiche Regel wie bei den Sätzen: ohne zugewiesene Untergruppe läuft
+      // die Arbeit unter "Sonstige", bei mehreren zählt sie in jeder davon -
+      // aber nur einmal in der Summe der Hauptgruppe.
+      const subs = getExerciseSubgroups(ex, subgroupOverrides);
+      if (!subWeeks[ex.group]) subWeeks[ex.group] = {};
+      (subs.length > 0 ? subs : ["sonstige"]).forEach((key) => {
+        if (!subWeeks[ex.group][key]) subWeeks[ex.group][key] = emptyWeeks();
+        subWeeks[ex.group][key][idx] += score;
+      });
+    });
+  });
+
+  // Schritt 4: Ausgabe von alt nach neu drehen, damit eine Sparkline die
+  // Werte direkt von links nach rechts zeichnen kann.
+  const toSeries = (weeks) => (weeks ? [...weeks].reverse() : emptyWeeks());
+  return MUSCLE_GROUPS.map((g) => {
+    const values = toSeries(groupWeeks[g.id]);
+    const subDefs = SUBGROUPS[g.id] || [];
+    const subs = subDefs
+      .map((sg) => ({ id: sg.id, label: sg.label, values: toSeries(subWeeks[g.id]?.[sg.id]) }))
+      .concat([{ id: "sonstige", label: "Sonstige", values: toSeries(subWeeks[g.id]?.sonstige) }])
+      .map((sg) => ({ ...sg, current: sg.values[sg.values.length - 1] || 0 }));
+    return { id: g.id, label: g.label, values, current: values[values.length - 1] || 0, subs };
+  });
+}
+
+// Wochenweise Satzzahl pro Muskelgruppe (und Untergruppe) - dieselbe
+// rollierende 7-Tage-Fenster-Bucketing wie getMuscleLoadSeries oben, nur
+// dass hier schlicht abgehakte Arbeitssätze gezählt werden statt relativer
+// Arbeit. weekCount=21, weil der weiteste angebotene Vergleich "vor 20
+// Wochen" ist und dafür 20 Wochen Vorgeschichte plus die aktuelle Woche
+// gebraucht werden.
+function getWeeklySetSeries(logs, exBy, subgroupOverrides, weekCount = 21, nowTs = Date.now()) {
+  const safeLogs = Array.isArray(logs) ? logs : [];
+  const emptyWeeks = () => new Array(weekCount).fill(0);
+  const groupWeeks = {};
+  const subWeeks = {};
+  safeLogs.forEach((l) => {
+    const ts = new Date(l?.date).getTime();
+    if (!Number.isFinite(ts)) return;
+    const idx = Math.max(0, Math.floor((nowTs - ts) / LOAD_WEEK_MS));
+    if (idx >= weekCount) return;
+    logEntries(l).forEach((e) => {
+      const ex = exBy[e.exerciseId];
+      if (!ex) return;
+      const done = entrySets(e).filter((x) => x.done && !x.warmup).length;
+      if (done === 0) return;
+      if (!groupWeeks[ex.group]) groupWeeks[ex.group] = emptyWeeks();
+      groupWeeks[ex.group][idx] += done;
+      const subs = getExerciseSubgroups(ex, subgroupOverrides);
+      if (!subWeeks[ex.group]) subWeeks[ex.group] = {};
+      (subs.length > 0 ? subs : ["sonstige"]).forEach((key) => {
+        if (!subWeeks[ex.group][key]) subWeeks[ex.group][key] = emptyWeeks();
+        subWeeks[ex.group][key][idx] += done;
+      });
+    });
+  });
+  const toSeries = (weeks) => (weeks ? [...weeks].reverse() : emptyWeeks());
+  return MUSCLE_GROUPS.map((g) => {
+    const values = toSeries(groupWeeks[g.id]);
+    const subDefs = SUBGROUPS[g.id] || [];
+    const subs = subDefs
+      .map((sg) => ({ id: sg.id, label: sg.label, values: toSeries(subWeeks[g.id]?.[sg.id]) }))
+      .map((sg) => ({ ...sg, current: sg.values[sg.values.length - 1] || 0 }))
+      .sort((a, b) => b.current - a.current);
+    // "Sonstige" hängt immer unsortiert hinten dran, auch bei 0 - siehe
+    // getMuscleLoadSeries/weeklySetsByGroup für die Begründung.
+    const sonstige = { id: "sonstige", label: "Sonstige", values: toSeries(subWeeks[g.id]?.sonstige) };
+    subs.push({ ...sonstige, current: sonstige.values[sonstige.values.length - 1] || 0 });
+    return { id: g.id, label: g.label, values, current: values[values.length - 1] || 0, subs };
+  }).sort((a, b) => b.current - a.current);
+}
+
+// Wochenweise Anzahl absolvierter Atemübungs-Sitzungen - keine Gruppen wie
+// bei den Muskelgruppen, nur eine einzelne Reihe, dieselbe rollierende
+// 7-Tage-Fenster-Logik wie oben.
+function getBreathingWeeklySeries(breathingLogs, weekCount = 21, nowTs = Date.now()) {
+  const weeks = new Array(weekCount).fill(0);
+  (Array.isArray(breathingLogs) ? breathingLogs : []).forEach((l) => {
+    const ts = new Date(l?.date).getTime();
+    if (!Number.isFinite(ts)) return;
+    const idx = Math.max(0, Math.floor((nowTs - ts) / LOAD_WEEK_MS));
+    if (idx >= weekCount) return;
+    weeks[idx] += 1;
+  });
+  const values = [...weeks].reverse();
+  return { values, current: values[values.length - 1] || 0 };
+}
+
+// Tage in Folge (bis heute zurückgerechnet) mit mindestens einer Sitzung.
+// Ein Tag ohne Sitzung bricht die Serie erst, sobald er tatsächlich vorbei
+// ist - "heute noch nichts gemacht" darf die gestrige Serie nicht sofort
+// auf 0 zurücksetzen, der Tag läuft schließlich noch.
+function breathingStreak(breathingLogs, nowTs = Date.now()) {
+  const days = new Set(
+    (Array.isArray(breathingLogs) ? breathingLogs : [])
+      .map((l) => (Number.isFinite(new Date(l?.date).getTime()) ? toDateKey(new Date(l.date)) : null))
+      .filter(Boolean)
+  );
+  let cursor = new Date(nowTs);
+  if (!days.has(toDateKey(cursor))) cursor = new Date(cursor.getTime() - 86400000);
+  let streak = 0;
+  while (days.has(toDateKey(cursor))) {
+    streak++;
+    cursor = new Date(cursor.getTime() - 86400000);
+  }
+  return streak;
+}
+
+// Wie viele volle Wochen liegen zwischen jetzt und dem allerersten jemals
+// geloggten Training - unabhängig von Muskelgruppe oder Übung. Das ist die
+// Obergrenze dafür, wie weit ein Vergleichszeitraum zurückreichen darf: eine
+// Woche vor dem ersten Trainingseintrag ist keine "0 %-Woche", sie hat
+// schlicht noch nicht existiert (die App wurde noch nicht genutzt). Ohne
+// diese Grenze würde "vs. Schnitt 4 Wochen" bei erst 2 Wochen Historie zwei
+// nicht vorhandene Wochen als Nullen einrechnen und den Schnitt künstlich
+// nach unten ziehen - genau der Fehler, der beim ersten Test auffiel.
+function logsHistoryWeeks(logs, nowTs = Date.now()) {
+  let oldest = Infinity;
+  (Array.isArray(logs) ? logs : []).forEach((l) => {
+    const ts = new Date(l?.date).getTime();
+    if (Number.isFinite(ts) && ts < oldest) oldest = ts;
+  });
+  if (!Number.isFinite(oldest)) return 0;
+  return Math.max(0, Math.floor((nowTs - oldest) / LOAD_WEEK_MS));
+}
+
+// Prozentuale Veränderung der laufenden Woche gegenüber den Wochen davor.
+// compareWeeks = 1 vergleicht mit der Vorwoche, 4 mit dem Schnitt der letzten
+// vier Wochen. Der Mittelwert ist bewusst wählbar: ein einzelner Ausfalltag
+// verzerrt den Vergleich mit genau einer Woche stark, über vier Wochen kaum.
+// maxLookback (siehe logsHistoryWeeks) kappt den Vergleichszeitraum auf das,
+// was an echter Historie überhaupt existiert - sonst würden Wochen vor dem
+// ersten Trainingseintrag als "0" mitgezählt.
+// Rückgabe null bedeutet "nicht berechenbar" (keine Vorgeschichte oder vorher
+// gar nichts trainiert) - das ist etwas anderes als 0 % und muss in der
+// Anzeige auch anders aussehen.
+function muscleLoadChange(values, compareWeeks, maxLookback = Infinity) {
+  if (!Array.isArray(values) || values.length < 2) return null;
+  const usableWeeks = Math.min(compareWeeks, maxLookback);
+  if (usableWeeks <= 0) return null;
+  const current = values[values.length - 1] || 0;
+  const from = Math.max(0, values.length - 1 - usableWeeks);
+  const reference = values.slice(from, values.length - 1);
+  if (reference.length === 0) return null;
+  const avg = reference.reduce((sum, v) => sum + (v || 0), 0) / reference.length;
+  if (avg <= 0) return null;
+  return ((current - avg) / avg) * 100;
+}
+
 const EQUIPMENT_OPTIONS = ["Langhantel", "Kurzhanteln", "Kabelzug", "Maschine", "Kettlebell", "Gewichtsscheibe", "Körpergewicht", "Band", "Sonstiges"];
 
 function getExerciseMeta(exercise) {
@@ -795,6 +1228,9 @@ const BACKUP_KEYS = [
   "exercise-notes",
   "exercise-name-overrides",
   "exercise-time-based",
+  "exercise-gym-independent",
+  "breathing-exercises",
+  "breathing-logs",
   "exercise-subgroup-overrides",
   "exercise-equipment-overrides",
   "training-programs",
@@ -957,6 +1393,15 @@ export default function TrainingApp() {
   const [exerciseSubgroupOverrides, setExerciseSubgroupOverrides] = useState({});
   const [exerciseEquipmentOverrides, setExerciseEquipmentOverrides] = useState({});
   const [timeBasedExercises, setTimeBasedExercises] = useState({});
+  const [gymIndependentExercises, setGymIndependentExercises] = useState({});
+  const [breathingExercises, setBreathingExercises] = useState([]);
+  const [breathingLogs, setBreathingLogs] = useState([]);
+  const [breathingManagerOpen, setBreathingManagerOpen] = useState(false);
+  // null = Liste, sonst die gerade bearbeitete Übung (ohne id = neu).
+  const [breathingEditing, setBreathingEditing] = useState(null);
+  // Die laufende Atem-Sitzung. Liegt wie der Pausentimer in der Root-
+  // Komponente, damit ein Tabwechsel sie nicht abräumt.
+  const [breathingSession, setBreathingSession] = useState(null);
 
   const [building, setBuilding] = useState(false); // plan builder open
   const [editingPlan, setEditingPlan] = useState(null);
@@ -1001,7 +1446,7 @@ export default function TrainingApp() {
 
   useEffect(() => {
     (async () => {
-      const [p, l, c, f, en, no, tb, active, prog, activeProg, sg, ce, cc, eq, th, gy, activeGy, restEnd] = await Promise.all([
+      const [p, l, c, f, en, no, tb, gi, active, prog, activeProg, sg, ce, cc, eq, th, gy, activeGy, restEnd, brEx, brLogs] = await Promise.all([
         loadJSON("training-plans", []),
         loadJSON("workout-logs", []),
         loadJSON("custom-exercises", []),
@@ -1009,6 +1454,7 @@ export default function TrainingApp() {
         loadJSON("exercise-notes", {}),
         loadJSON("exercise-name-overrides", {}),
         loadJSON("exercise-time-based", {}),
+        loadJSON("exercise-gym-independent", {}),
         loadJSON("active-workout", null),
         loadJSON("training-programs", []),
         loadJSON("active-program-id", null),
@@ -1020,6 +1466,8 @@ export default function TrainingApp() {
         loadJSON("gyms", []),
         loadJSON("active-gym-id", null),
         loadJSON("rest-timer", 0),
+        loadJSON("breathing-exercises", []),
+        loadJSON("breathing-logs", []),
       ]);
       // Migration: users who already had folders before "programs" existed
       // get one default program that all their existing folders are
@@ -1047,6 +1495,9 @@ export default function TrainingApp() {
       setExerciseNameOverrides(no);
       setExerciseSubgroupOverrides(sg);
       setTimeBasedExercises(tb);
+      setGymIndependentExercises(gi);
+      setBreathingExercises(Array.isArray(brEx) ? brEx : []);
+      setBreathingLogs(Array.isArray(brLogs) ? brLogs : []);
       setSession(active || null);
       // A rest that already expired while the app was closed is not restored -
       // it would show a dead "0:00" bar with nothing to count down to.
@@ -1180,6 +1631,18 @@ export default function TrainingApp() {
     setTimeBasedExercises(next);
     await saveJSON("exercise-time-based", next);
   };
+  const persistGymIndependentExercises = async (next) => {
+    setGymIndependentExercises(next);
+    await saveJSON("exercise-gym-independent", next);
+  };
+  const persistBreathingExercises = async (next) => {
+    setBreathingExercises(next);
+    await saveJSON("breathing-exercises", next);
+  };
+  const persistBreathingLogs = async (next) => {
+    setBreathingLogs(next);
+    await saveJSON("breathing-logs", next);
+  };
 
   const createSessionFromPlan = (plan, gymId = null) => ({
     id: uid(),
@@ -1192,8 +1655,12 @@ export default function TrainingApp() {
       // Start from what was actually achieved last time rather than the
       // numbers stored in the plan - the plan holds the starting point, the
       // last workout holds the current state. With a gym selected the search
-      // prefers that gym (weights differ between gyms).
-      const history = getExerciseHistory(logs, it.exerciseId, null, !!it.useTime, gymId);
+      // prefers that gym (weights differ between gyms) - unless the exercise
+      // is marked as being the same everywhere.
+      const history = getExerciseHistory(
+        logs, it.exerciseId, null, !!it.useTime,
+        effectiveGymId(it.exerciseId, gymId, gymIndependentExercises)
+      );
       const lastWorking = history?.lastSets?.find((set) => !set.warmup);
       const targetReps =
         lastWorking && toNum(lastWorking.reps) > 0 ? toNum(lastWorking.reps) : it.reps || 10;
@@ -1326,21 +1793,126 @@ export default function TrainingApp() {
   const handleToggleTimeBased = async (exerciseId, enabled) => {
     await persistTimeBasedExercises({ ...timeBasedExercises, [exerciseId]: enabled });
   };
+  const handleToggleGymIndependent = async (exerciseId, enabled) => {
+    await persistGymIndependentExercises({ ...gymIndependentExercises, [exerciseId]: enabled });
+  };
   const handleAddCustomExercise = async (exercise) => {
     await persistCustomExercises([...customExercises, exercise]);
   };
 
-  const addCalendarAction = async (date, categoryId, text) => {
+  // Activities are training too, just a kind the workout logger cannot hold:
+  // a walk to work, breathing drills, tendon rehab. They get the two things
+  // that make an entry a diary record instead of a note - an optional
+  // duration and a "done" mark - without the detour through exercises and
+  // sets. durationMinutes/doneAt stay absent on older entries, which read
+  // as "no duration" and "not done" without any migration.
+  const addCalendarAction = async (date, categoryId, text, durationMinutes) => {
     await persistCalendarEntries([
       ...calendarEntries,
-      { id: uid(), date, type: "action", categoryId, text },
+      {
+        id: uid(),
+        date,
+        type: "action",
+        categoryId,
+        text,
+        durationMinutes: durationMinutes || null,
+        doneAt: null,
+      },
     ]);
+  };
+  // One tap marks an activity as done or undone. The timestamp is kept
+  // rather than a plain boolean so a later "what did I do when" view has
+  // something to work with.
+  const toggleCalendarActionDone = async (id) => {
+    await persistCalendarEntries(
+      calendarEntries.map((ce) =>
+        ce.id === id ? { ...ce, doneAt: ce.doneAt ? null : new Date().toISOString() } : ce
+      )
+    );
   };
   const scheduleCalendarWorkout = async (date, planId) => {
     await persistCalendarEntries([
       ...calendarEntries,
       { id: uid(), date, type: "workout", planId, logId: null },
     ]);
+  };
+  // Atemübungen im Kalender funktionieren genau wie Workouts: geplant mit
+  // logId null, nach dem Abschluss zeigt logId auf die absolvierte Sitzung.
+  const scheduleCalendarBreathing = async (date, breathingId) => {
+    await persistCalendarEntries([
+      ...calendarEntries,
+      { id: uid(), date, type: "breathing", breathingId, logId: null },
+    ]);
+  };
+
+  const saveBreathingExercise = async (exercise) => {
+    const exists = breathingExercises.some((b) => b.id === exercise.id);
+    await persistBreathingExercises(
+      exists
+        ? breathingExercises.map((b) => (b.id === exercise.id ? exercise : b))
+        : [...breathingExercises, exercise]
+    );
+  };
+  const deleteBreathingExercise = (id) => {
+    const ex = breathingExercises.find((b) => b.id === id);
+    askConfirm(
+      `Atemübung „${ex?.name || ""}“ löschen? Bereits absolvierte Sitzungen bleiben im Verlauf erhalten.`,
+      async () => {
+        await persistBreathingExercises(breathingExercises.filter((b) => b.id !== id));
+      }
+    );
+  };
+  const startBreathingSession = (exercise, calendarEntryId = null) => {
+    if (breathingPhases(exercise).length === 0) {
+      showToast("Diese Atemübung hat noch keine Phasen.");
+      return;
+    }
+    setBreathingManagerOpen(false);
+    setBreathingSession({ exercise, calendarEntryId, startedAt: Date.now() });
+  };
+  // Abschluss einer Atem-Sitzung: Protokoll schreiben und - wie beim
+  // Training - einen offenen Kalendereintrag von heute automatisch abhaken,
+  // egal ob die Übung über den Kalender oder direkt gestartet wurde. Ohne
+  // das stünde dieselbe Sitzung zweimal im Tag.
+  const finishBreathingSession = async ({ exercise, calendarEntryId, startedAt, completedRounds, maxHoldSeconds }) => {
+    const log = {
+      id: uid(),
+      breathingId: exercise.id,
+      name: exercise.name,
+      date: new Date().toISOString(),
+      rounds: completedRounds,
+      plannedRounds: breathingRounds(exercise),
+      durationSeconds: Math.max(0, Math.round((Date.now() - startedAt) / 1000)),
+      // null statt 0, wenn die Übung gar keine offene Phase hatte - "nicht
+      // gemessen" ist etwas anderes als "0 Sekunden gehalten".
+      maxHoldSeconds: maxHoldSeconds > 0 ? Math.round(maxHoldSeconds) : null,
+    };
+    await persistBreathingLogs([...breathingLogs, log]);
+    const dayKey = toDateKey(new Date(log.date));
+    const match =
+      calendarEntries.find((ce) => ce.id === calendarEntryId) ||
+      calendarEntries.find(
+        (ce) =>
+          ce.type === "breathing" &&
+          !ce.logId &&
+          ce.date === dayKey &&
+          ce.breathingId === exercise.id
+      );
+    if (match) {
+      await persistCalendarEntries(
+        calendarEntries.map((ce) => (ce.id === match.id ? { ...ce, logId: log.id } : ce))
+      );
+    }
+    setBreathingSession(null);
+  };
+  // Moving an entry to another day, swapping its linked plan/exercise, or
+  // editing an action's category/text/duration all go through this one
+  // patch-merge - only entries that have not happened yet ever reach it
+  // (the edit button itself is hidden once logId is set).
+  const updateCalendarEntry = async (id, patch) => {
+    await persistCalendarEntries(
+      calendarEntries.map((ce) => (ce.id === id ? { ...ce, ...patch } : ce))
+    );
   };
   // Calendar deletions go through the same confirmation step as deleting a
   // plan or a folder, so a mis-tap can't silently wipe an entry.
@@ -1349,6 +1921,8 @@ export default function TrainingApp() {
     const label =
       entry?.type === "workout"
         ? `Diesen Workout-Termin wirklich aus dem Kalender entfernen?`
+        : entry?.type === "breathing"
+        ? `Diese Atemübung wirklich aus dem Kalender entfernen?`
         : `Eintrag „${entry?.text || ""}“ wirklich löschen?`;
     askConfirm(label, async () => {
       await persistCalendarEntries(calendarEntries.filter((ce) => ce.id !== id));
@@ -1890,7 +2464,10 @@ export default function TrainingApp() {
            subgroup labels wrapped onto two lines and ran into the name. */
         .ex-row .ex-name {
           flex: 1 1 auto;
-          min-width: 0;
+          /* A floor, not 0: with two subgroup tags plus an equipment tag,
+             none of which ever shrink, the name used to be squeezed down to
+             a single letter before it had a chance to ellipsize. */
+          min-width: 64px;
           overflow: hidden;
           text-overflow: ellipsis;
           white-space: nowrap;
@@ -2073,6 +2650,14 @@ export default function TrainingApp() {
           width: 100% !important;
           height: 100% !important;
         }
+        /* Aus demselben Grund wie bei recharts: die 32px-Sperre oben ist für
+           Icons gedacht und würde auch selbstgezeichnete SVGs auf
+           Briefmarkengröße stauchen. Beide brauchen ihre echte Größe. */
+        .sparkline,
+        .breathing-line {
+          max-width: none;
+          max-height: none;
+        }
 
         .set-row {
           display: grid;
@@ -2088,11 +2673,18 @@ export default function TrainingApp() {
         }
         .entry-card {
           transition: box-shadow 160ms ease;
-          will-change: transform;
         }
+        /* will-change only while actually dragging, not on every card all
+           the time: it forces a new stacking context, which was trapping
+           each exercise's "..." dropdown menu inside its own card - any
+           part of the menu extending past the card's bottom edge got
+           painted over by the next exercise card instead of floating above
+           it, since sibling stacking contexts always paint in DOM order
+           regardless of z-index inside them. */
         .entry-card.is-dragging {
           position: relative;
           z-index: 20;
+          will-change: transform;
           box-shadow: 0 12px 30px rgba(0,0,0,calc(var(--shadow-strength) * 2.6));
           cursor: grabbing;
         }
@@ -2223,19 +2815,21 @@ export default function TrainingApp() {
           margin-bottom: 8px;
           padding: 0 2px;
         }
+        .folder-header .tag {
+          flex-shrink: 0;
+          white-space: nowrap;
+        }
         .folder-header-title {
           font-family: 'Oswald', sans-serif;
           font-weight: 600;
           font-size: 15px;
           letter-spacing: 0.3px;
           text-transform: uppercase;
-        }
-        .muscle-week-row {
-          display: grid;
-          grid-template-columns: 88px 1fr 28px;
-          align-items: center;
-          gap: 8px;
-          margin-bottom: 7px;
+          flex: 1 1 auto;
+          min-width: 0;
+          overflow: hidden;
+          text-overflow: ellipsis;
+          white-space: nowrap;
         }
         .muscle-week-label {
           font-size: 12.5px;
@@ -2244,49 +2838,85 @@ export default function TrainingApp() {
           overflow: hidden;
           text-overflow: ellipsis;
         }
-        .muscle-week-bar {
-          height: 8px;
-          border-radius: 4px;
-          background: var(--surface-alt);
-          overflow: hidden;
-        }
-        .muscle-week-fill {
-          display: block;
-          height: 100%;
-          border-radius: 4px;
-          background: var(--accent);
-          transition: width 0.3s ease;
-        }
-        /* A group with zero sets is the interesting case - it should read as
-           a gap, not disappear into the background. */
-        .muscle-week-fill.is-empty {
-          background: transparent;
-        }
         .muscle-week-value {
           font-family: 'Oswald', sans-serif;
           font-size: 13px;
           text-align: right;
           color: var(--text);
         }
-        .muscle-week-row-clickable {
-          grid-template-columns: 88px 1fr 28px 14px;
-          cursor: pointer;
-        }
         .muscle-week-subs {
           margin: -1px 0 10px 14px;
           padding-left: 10px;
           border-left: 1px solid var(--border);
         }
-        .muscle-week-row-sub {
-          margin-bottom: 6px;
+        /* Sparkline + Badge instead of the old proportional bar - label,
+           trend, current count, % change, expand-chevron. */
+        .muscle-week-row-v2 {
+          display: grid;
+          grid-template-columns: 76px 1fr 30px 46px 14px;
+          align-items: center;
+          gap: 8px;
+          margin-bottom: 9px;
         }
-        .muscle-week-row-sub .muscle-week-label {
+        .muscle-week-row-v2-clickable {
+          cursor: pointer;
+        }
+        .muscle-week-row-v2-sub {
+          grid-template-columns: 76px 1fr 30px 46px;
+          margin-bottom: 7px;
+        }
+        .muscle-week-row-v2-sub .muscle-week-label {
           font-size: 12px;
         }
-        .muscle-week-row-sub .muscle-week-value {
+        .muscle-week-row-v2-sub .muscle-week-value {
           font-size: 12px;
           color: var(--text-dim);
         }
+        .muscle-week-chevron {
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          padding: 6px;
+          margin: -6px;
+        }
+        .muscle-load-row {
+          display: grid;
+          grid-template-columns: 80px 1fr 46px 14px;
+          align-items: center;
+          gap: 8px;
+          margin-bottom: 9px;
+        }
+        .muscle-load-row-clickable {
+          cursor: pointer;
+        }
+        .muscle-load-row-sub {
+          grid-template-columns: 80px 1fr 46px;
+          margin-bottom: 7px;
+        }
+        .muscle-load-row-sub .muscle-week-label {
+          font-size: 12px;
+        }
+        .sparkline {
+          display: block;
+          overflow: visible;
+        }
+        .sparkline polyline {
+          stroke: var(--accent);
+        }
+        .sparkline-empty line {
+          stroke: var(--border);
+          stroke-width: 1.5;
+          stroke-dasharray: 2 2;
+        }
+        .load-change {
+          font-family: 'Oswald', sans-serif;
+          font-size: 12.5px;
+          text-align: right;
+          white-space: nowrap;
+        }
+        .load-change-up { color: var(--success); }
+        .load-change-down { color: var(--danger); }
+        .load-change-neutral { color: var(--text-dim); }
         .plan-last-done {
           display: inline-block;
           margin-top: 2px;
@@ -2634,11 +3264,14 @@ export default function TrainingApp() {
           /* The row lifts off the list while dragging; keeping the shadow
              and background on a transition avoids a hard visual pop. */
           transition: box-shadow 160ms ease, background 160ms ease;
-          will-change: transform;
         }
+        /* will-change moved here (see .entry-card.is-dragging for why): it
+           creates a stacking context, which otherwise traps this row's
+           "..." dropdown menu and lets the next row paint over it. */
         .plan-item-row.is-dragging {
           position: relative;
           z-index: 20;
+          will-change: transform;
           box-shadow: 0 12px 30px rgba(0,0,0,calc(var(--shadow-strength) * 2.6));
           background: var(--surface-alt);
           border-radius: 10px;
@@ -2853,6 +3486,21 @@ export default function TrainingApp() {
           justify-content: center;
           box-shadow: 0 0 0 2px var(--surface);
         }
+        /* Live-Vorschau des Volumen-Vergleichs zum letzten Mal - neben dem
+           Übungsnamen, damit sie beim Eintragen im Blick bleibt. */
+        .volume-change-badge {
+          margin-left: 4px;
+          flex-shrink: 0;
+          font-family: 'Oswald', sans-serif;
+          font-size: 12px;
+          font-weight: 600;
+          padding: 2px 7px;
+          border-radius: 999px;
+          background: var(--surface-alt);
+        }
+        .volume-change-up { color: var(--success); }
+        .volume-change-down { color: var(--danger); }
+        .volume-change-neutral { color: var(--text-dim); }
 
         .auto-run-bar {
           background: var(--surface);
@@ -2990,6 +3638,14 @@ export default function TrainingApp() {
           display: flex;
           flex-direction: column;
           gap: 2px;
+          /* Grid columns default to shrinking no further than their content's
+             own width. A long, unbroken entry like "Arbeitsweg" would then
+             force this column past its 1fr share, pushing the whole week -
+             and with it Sunday, the last column - past the screen edge and
+             behind the app shell's overflow:hidden. min-width: 0 lets the
+             column actually shrink to its fair share, so the chip's own
+             ellipsis (not the missing screen space) is what truncates text. */
+          min-width: 0;
         }
         .cal-day.is-outside {
           opacity: 0.35;
@@ -3039,15 +3695,19 @@ export default function TrainingApp() {
           vertical-align: -1px;
           margin-right: 2px;
         }
-        /* Planned is the same colour, just muted - done vs. still to come
-           is then visible without looking for the tick. */
+        /* One colour for every workout entry, planned or done - the tick
+           versus play icon is what carries the status, same language as
+           the activity chips. */
         .cal-entry-workout {
           background: color-mix(in srgb, var(--accent) 35%, transparent);
           color: var(--text);
         }
-        .cal-entry-workout.is-done {
-          background: var(--success);
-          color: #fff;
+        /* Atemübungen im Himmelblau - gleiche Logik wie bei den Workouts:
+           eine Farbe für geplant wie erledigt, den Unterschied macht das
+           Symbol (▷ bzw. ✓). */
+        .cal-entry-breathing {
+          background: color-mix(in srgb, ${BREATHING_COLOR} 42%, transparent);
+          color: var(--text);
         }
         .cal-entry-more {
           font-size: 8.5px;
@@ -3065,6 +3725,117 @@ export default function TrainingApp() {
           border: 1px solid var(--border);
           border-radius: 10px;
           padding: 10px 12px;
+        }
+        /* Anything already done gets a green left edge, so a day reads as
+           "what happened" versus "what is still planned" without having to
+           compare the individual rows. The class was used before this rule
+           existed and simply did nothing. */
+        .cal-detail-done {
+          border-left: 3px solid var(--success);
+        }
+
+        /* --- Atemübung: geführte Sitzung ---------------------------------
+           Vollbild statt Popup: während der Übung soll nichts anderes im
+           Blick sein, und die Grafik braucht die ganze Fläche. */
+        .breathing-overlay {
+          position: absolute;
+          inset: 0;
+          z-index: 60;
+          background: var(--bg);
+          display: flex;
+          flex-direction: column;
+          padding: calc(env(safe-area-inset-top) + 14px) 18px 24px;
+        }
+        .breathing-head {
+          display: flex;
+          justify-content: space-between;
+          align-items: flex-start;
+          gap: 10px;
+        }
+        .breathing-title {
+          font-family: 'Oswald', sans-serif;
+          font-size: 18px;
+          color: var(--text);
+        }
+        .breathing-round {
+          font-size: 12.5px;
+          color: var(--text-dim);
+          margin-top: 2px;
+        }
+        .breathing-stage {
+          flex: 1;
+          min-height: 0;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          padding: 18px 0;
+        }
+        .breathing-circle-wrap {
+          position: relative;
+          width: min(62vw, 240px);
+          height: min(62vw, 240px);
+          display: flex;
+          align-items: center;
+          justify-content: center;
+        }
+        .breathing-circle {
+          position: absolute;
+          inset: 0;
+          border-radius: 50%;
+          background: color-mix(in srgb, ${BREATHING_COLOR} 55%, transparent);
+          /* Kein CSS-Übergang: die Größe kommt aus dem gemessenen
+             Phasenfortschritt und wird pro Bild neu gesetzt. Ein zusätzlicher
+             transition würde der Atmung hinterherlaufen statt ihr zu folgen. */
+        }
+        .breathing-circle-ring {
+          position: absolute;
+          inset: 0;
+          border-radius: 50%;
+          border: 1.5px dashed color-mix(in srgb, ${BREATHING_COLOR} 45%, transparent);
+        }
+        .breathing-line-wrap {
+          position: relative;
+          width: 100%;
+          height: min(46vh, 260px);
+        }
+        .breathing-line {
+          width: 100%;
+          height: 100%;
+          display: block;
+        }
+        .breathing-line polyline {
+          stroke: color-mix(in srgb, ${BREATHING_COLOR} 45%, transparent);
+        }
+        .breathing-dot {
+          position: absolute;
+          width: 16px;
+          height: 16px;
+          margin: -8px 0 0 -8px;
+          border-radius: 50%;
+          background: ${BREATHING_COLOR};
+          box-shadow: 0 0 0 5px color-mix(in srgb, ${BREATHING_COLOR} 22%, transparent);
+        }
+        .breathing-phase {
+          text-align: center;
+          font-family: 'Oswald', sans-serif;
+          font-size: 22px;
+          color: var(--text);
+        }
+        .breathing-time {
+          text-align: center;
+          font-family: 'JetBrains Mono', monospace;
+          font-size: 40px;
+          color: ${BREATHING_COLOR};
+          margin: 2px 0 18px;
+        }
+        .breathing-controls {
+          flex-shrink: 0;
+        }
+        .breathing-phase-row {
+          background: var(--surface-alt);
+          border: 1px solid var(--border);
+          border-radius: 10px;
+          padding: 10px;
         }
       `}</style>
 
@@ -3086,9 +3857,15 @@ export default function TrainingApp() {
             onAddAction={addCalendarAction}
             onScheduleWorkout={scheduleCalendarWorkout}
             onDeleteEntry={deleteCalendarEntry}
+            onUpdateEntry={updateCalendarEntry}
+            onToggleActionDone={toggleCalendarActionDone}
             onCreateCategory={createCalendarCategory}
             onDeleteCategory={deleteCalendarCategory}
             onStartScheduledWorkout={startScheduledWorkout}
+            breathingExercises={breathingExercises}
+            breathingLogs={breathingLogs}
+            onScheduleBreathing={scheduleCalendarBreathing}
+            onStartScheduledBreathing={startBreathingSession}
           />
         ) : tab === "exercises" ? (
           <ExercisesView
@@ -3107,7 +3884,9 @@ export default function TrainingApp() {
             onUpdateExerciseNote={handleUpdateExerciseNote}
             onRenameExercise={handleRenameExercise}
             timeBasedExercises={timeBasedExercises}
+            gymIndependentExercises={gymIndependentExercises}
             onToggleTimeBased={handleToggleTimeBased}
+            onToggleGymIndependent={handleToggleGymIndependent}
             onRequestConfirm={askConfirm}
           />
         ) : tab === "plans" ? (
@@ -3127,9 +3906,11 @@ export default function TrainingApp() {
               onSetExerciseEquipment={handleSetExerciseEquipment}
               onAddCustom={handleAddCustomExercise}
               timeBasedExercises={timeBasedExercises}
+              gymIndependentExercises={gymIndependentExercises}
               onUpdateExerciseNote={handleUpdateExerciseNote}
               onRenameExercise={handleRenameExercise}
               onToggleTimeBased={handleToggleTimeBased}
+              onToggleGymIndependent={handleToggleGymIndependent}
               onCancel={() => { setBuilding(false); setEditingPlan(null); }}
               onSave={async (plan) => {
                 const next = editingPlan
@@ -3147,6 +3928,7 @@ export default function TrainingApp() {
             <PlansView
             logs={logs}
             onManageGyms={() => setGymManagerOpen(true)}
+            onManageBreathing={() => { setBreathingEditing(null); setBreathingManagerOpen(true); }}
             onReorderFolders={persistFolders}
             onOpenBackup={() => setBackupOpen(true)}
               plans={allPlans}
@@ -3213,6 +3995,11 @@ export default function TrainingApp() {
                   plans.map((p) => (p.id === planId ? { ...p, folderId } : p))
                 );
               }}
+              onToggleFolderStatsExcluded={async (id) => {
+                await persistFolders(
+                  folders.map((f) => (f.id === id ? { ...f, statsExcluded: !f.statsExcluded } : f))
+                );
+              }}
               onStart={(plan) => requestStart(plan)}
             />
           )
@@ -3229,9 +4016,11 @@ export default function TrainingApp() {
             exerciseEquipmentOverrides={exerciseEquipmentOverrides}
             onSetExerciseEquipment={handleSetExerciseEquipment}
             timeBasedExercises={timeBasedExercises}
+            gymIndependentExercises={gymIndependentExercises}
             onUpdateExerciseNote={handleUpdateExerciseNote}
             onRenameExercise={handleRenameExercise}
             onToggleTimeBased={handleToggleTimeBased}
+            onToggleGymIndependent={handleToggleGymIndependent}
             onStartFromPlan={(plan) => requestStart(plan)}
             onUpdateSession={updateSession}
             onRequestConfirm={askConfirm}
@@ -3296,7 +4085,8 @@ export default function TrainingApp() {
                     isTimeBasedInLogs(logs, entry.exerciseId, timeBasedExercises) ||
                     !!entry.targetUseTime;
                   const best = getExerciseHistory(
-                    logs, entry.exerciseId, cleaned.id, isTimeBased, cleaned.gymId
+                    logs, entry.exerciseId, cleaned.id, isTimeBased,
+                    effectiveGymId(entry.exerciseId, cleaned.gymId, gymIndependentExercises)
                   );
                   let bestOfEntry = null;
                   entry.sets.forEach((set) => {
@@ -3408,6 +4198,8 @@ export default function TrainingApp() {
             onResumeLog={resumeLog}
             gyms={gyms}
             logs={logs}
+            plans={allPlans}
+            folders={folders}
             exBy={allExBy}
             exercises={allExercises}
             theme={theme}
@@ -3417,9 +4209,13 @@ export default function TrainingApp() {
             exerciseEquipmentOverrides={exerciseEquipmentOverrides}
             onSetExerciseEquipment={handleSetExerciseEquipment}
             timeBasedExercises={timeBasedExercises}
+            gymIndependentExercises={gymIndependentExercises}
             onUpdateExerciseNote={handleUpdateExerciseNote}
             onRenameExercise={handleRenameExercise}
             onToggleTimeBased={handleToggleTimeBased}
+            onToggleGymIndependent={handleToggleGymIndependent}
+            breathingExercises={breathingExercises}
+            breathingLogs={breathingLogs}
           />
         )}
         </div>
@@ -3546,6 +4342,94 @@ export default function TrainingApp() {
             </div>
           )}
         </Modal>
+      )}
+
+      {breathingManagerOpen && (
+        <Modal
+          title={breathingEditing ? (breathingEditing.id ? "Atemübung bearbeiten" : "Neue Atemübung") : "Atemübungen"}
+          width={420}
+          onClose={() => { setBreathingManagerOpen(false); setBreathingEditing(null); }}
+        >
+          {breathingEditing ? (
+            <BreathingEditor
+              // Auch eine Vorlage muss den Editor vorbefüllen. Nur die id
+              // fehlt ihr - daran hängt lediglich, ob gespeichert oder neu
+              // angelegt wird, nicht ob Felder übernommen werden.
+              initial={breathingEditing}
+              onCancel={() => setBreathingEditing(null)}
+              onSave={async (ex) => {
+                await saveBreathingExercise(ex);
+                setBreathingEditing(null);
+              }}
+            />
+          ) : (
+            <>
+              {breathingExercises.length === 0 && (
+                <div className="empty-state" style={{ padding: "14px 0" }}>
+                  Noch keine Atemübung angelegt. Nimm unten eine Vorlage oder baue dir eine eigene.
+                </div>
+              )}
+              <div className="modal-list">
+                {breathingExercises.map((b) => {
+                  const total = breathingTotalSeconds(b);
+                  return (
+                    <div className="modal-option" key={b.id}>
+                      <span style={{ minWidth: 0 }}>
+                        <span style={{ display: "block" }}>{b.name}</span>
+                        <span style={{ fontSize: 12, color: "var(--text-dim)" }}>
+                          {breathingPhases(b).length} Phasen · {breathingRounds(b)} Runden
+                          {total == null ? " · offene Dauer" : ` · ca. ${Math.round(total / 60)} Min.`}
+                        </span>
+                      </span>
+                      <span style={{ display: "flex", gap: 4, flexShrink: 0 }}>
+                        <button
+                          className="btn btn-primary btn-sm"
+                          onClick={() => startBreathingSession(b)}
+                          title="Starten"
+                        >
+                          <Play size={13} />
+                        </button>
+                        <button className="btn-icon" title="Bearbeiten" onClick={() => setBreathingEditing(b)}>
+                          <Pencil size={14} />
+                        </button>
+                        <button className="btn-icon" title="Löschen" onClick={() => deleteBreathingExercise(b.id)}>
+                          <Trash2 size={14} />
+                        </button>
+                      </span>
+                    </div>
+                  );
+                })}
+              </div>
+              <button
+                className="btn btn-primary btn-block btn-sm"
+                style={{ marginTop: 12 }}
+                onClick={() => setBreathingEditing({ phases: [] })}
+              >
+                <Plus size={14} /> Eigene Atemübung
+              </button>
+              <label className="field-label" style={{ marginTop: 14 }}>Vorlagen</label>
+              <div className="chip-row">
+                {BREATHING_TEMPLATES.map((t) => (
+                  <span
+                    key={t.name}
+                    className="chip chip-sm"
+                    onClick={() => setBreathingEditing({ ...t, phases: t.phases.map((p) => ({ ...p })) })}
+                  >
+                    <Plus size={11} /> {t.name}
+                  </span>
+                ))}
+              </div>
+            </>
+          )}
+        </Modal>
+      )}
+
+      {breathingSession && (
+        <BreathingSessionView
+          session={breathingSession}
+          onFinish={finishBreathingSession}
+          onCancel={() => setBreathingSession(null)}
+        />
       )}
 
       {gymManagerOpen && (
@@ -3771,10 +4655,16 @@ function CalendarView({
   onAddAction,
   onScheduleWorkout,
   onDeleteEntry,
+  onUpdateEntry,
+  onToggleActionDone,
   onCreateCategory,
   onDeleteCategory,
   onStartScheduledWorkout,
   onOpenLog,
+  breathingExercises = [],
+  breathingLogs = [],
+  onScheduleBreathing,
+  onStartScheduledBreathing,
 }) {
   const today = new Date();
   const [viewYear, setViewYear] = useState(today.getFullYear());
@@ -3784,10 +4674,20 @@ function CalendarView({
   const [addMode, setAddMode] = useState("action");
   const [newActionText, setNewActionText] = useState("");
   const [newActionCategory, setNewActionCategory] = useState(null);
+  const [newActionDuration, setNewActionDuration] = useState("");
   const [workoutQuery, setWorkoutQuery] = useState("");
   const [categoryManagerOpen, setCategoryManagerOpen] = useState(false);
   const [newCategoryName, setNewCategoryName] = useState("");
   const [newCategoryColor, setNewCategoryColor] = useState(CATEGORY_COLORS[0]);
+  // Editing an existing entry: date can move for every type, plan/exercise
+  // can be swapped for workout/breathing, and action entries additionally
+  // get their category/text/duration reopened for editing.
+  const [editingEntry, setEditingEntry] = useState(null);
+  const [editDate, setEditDate] = useState("");
+  const [editActionCategory, setEditActionCategory] = useState(null);
+  const [editActionText, setEditActionText] = useState("");
+  const [editActionDuration, setEditActionDuration] = useState("");
+  const [editSwapQuery, setEditSwapQuery] = useState("");
 
   const todayKey = toDateKey(today);
   const monthMatrix = useMemo(() => getMonthMatrix(viewYear, viewMonth), [viewYear, viewMonth]);
@@ -3797,7 +4697,8 @@ function CalendarView({
     entries.forEach((e) => {
       // A planned workout that never happened simply disappears once the day
       // is over - keeping it around would only ever be a reproach.
-      const verpasst = e.type === "workout" && !e.logId && e.date < todayKey;
+      const verpasst =
+        (e.type === "workout" || e.type === "breathing") && !e.logId && e.date < todayKey;
       if (verpasst) return;
       (map[e.date] = map[e.date] || []).push(e);
     });
@@ -3820,6 +4721,19 @@ function CalendarView({
     [categories]
   );
   const planById = useMemo(() => Object.fromEntries(plans.map((p) => [p.id, p])), [plans]);
+  // A completed session keeps its own snapshot of the plan's name (taken at
+  // the time it was done), so a calendar entry for an already-finished
+  // workout can still show the right name even after the plan itself was
+  // deleted from the folder structure afterwards.
+  const logById = useMemo(() => Object.fromEntries((logs || []).map((l) => [l.id, l])), [logs]);
+  const breathingById = useMemo(
+    () => Object.fromEntries(breathingExercises.map((b) => [b.id, b])),
+    [breathingExercises]
+  );
+  const breathingLogById = useMemo(
+    () => Object.fromEntries(breathingLogs.map((l) => [l.id, l])),
+    [breathingLogs]
+  );
 
   const goPrevMonth = () => {
     const d = new Date(viewYear, viewMonth - 1, 1);
@@ -3852,13 +4766,43 @@ function CalendarView({
   const handleAddAction = () => {
     const trimmed = newActionText.trim();
     if (!trimmed) return;
-    onAddAction(selectedDate, newActionCategory, trimmed);
-    setNewActionText("");
+    onAddAction(selectedDate, newActionCategory, trimmed, toNum(newActionDuration));
+    closeAddDialog();
+  };
+  // Closing without saving has to clear the draft as well, otherwise the
+  // abandoned text and duration greet you again the next time the dialog
+  // opens.
+  const closeAddDialog = () => {
     setAddOpen(false);
+    setNewActionText("");
+    setNewActionDuration("");
+    setWorkoutQuery("");
   };
 
   const filteredPlansForSchedule = plans.filter((p) =>
     p.name.toLowerCase().includes(workoutQuery.toLowerCase())
+  );
+
+  // Only entries that have not happened yet can be moved or re-linked - a
+  // completed session's own log already fixes the date and what was done,
+  // so editing the calendar marker afterwards would only make the two
+  // disagree, not change any history.
+  const openEditEntry = (entry) => {
+    setEditingEntry(entry);
+    setEditDate(entry.date);
+    setEditSwapQuery("");
+    if (entry.type === "action") {
+      setEditActionCategory(entry.categoryId || null);
+      setEditActionText(entry.text || "");
+      setEditActionDuration(entry.durationMinutes ? String(entry.durationMinutes) : "");
+    }
+  };
+  const closeEditDialog = () => setEditingEntry(null);
+  const filteredPlansForSwap = plans.filter((p) =>
+    p.name.toLowerCase().includes(editSwapQuery.toLowerCase())
+  );
+  const filteredBreathingForSwap = breathingExercises.filter((b) =>
+    b.name.toLowerCase().includes(editSwapQuery.toLowerCase())
   );
 
   const handleCreateCategory = () => {
@@ -3980,7 +4924,7 @@ function CalendarView({
                           return (
                             <span
                               key={entry.id}
-                              className="cal-entry-chip cal-entry-workout is-done"
+                              className="cal-entry-chip cal-entry-workout"
                             >
                               <Check size={9} />
                               {entry.log.planName || "Training"}
@@ -3989,23 +4933,37 @@ function CalendarView({
                         }
                         if (entry.type === "workout") {
                           const plan = planById[entry.planId];
+                          const doneName = entry.logId ? logById[entry.logId]?.planName : null;
                           return (
                             <span
                               key={entry.id}
-                              className={`cal-entry-chip cal-entry-workout ${entry.logId ? "is-done" : ""}`}
+                              className="cal-entry-chip cal-entry-workout"
                             >
                               {entry.logId ? <Check size={9} /> : <Play size={9} />}
-                              {plan ? plan.name : "Gelöschter Plan"}
+                              {plan ? plan.name : doneName || "Gelöschter Plan"}
+                            </span>
+                          );
+                        }
+                        if (entry.type === "breathing") {
+                          const br = breathingById[entry.breathingId];
+                          const doneName = entry.logId ? breathingLogById[entry.logId]?.name : null;
+                          return (
+                            <span key={entry.id} className="cal-entry-chip cal-entry-breathing">
+                              {entry.logId ? <Check size={9} /> : <Play size={9} />}
+                              {br ? br.name : doneName || "Gelöschte Atemübung"}
                             </span>
                           );
                         }
                         const cat = categoryById[entry.categoryId];
+                        // Same visual language as workouts: a tick means it
+                        // happened, no tick means it is still ahead.
                         return (
                           <span
                             key={entry.id}
                             className="cal-entry-chip"
                             style={cat ? { background: cat.color, color: readableTextOn(cat.color) } : undefined}
                           >
+                            {entry.doneAt && <Check size={9} />}
                             {entry.text}
                           </span>
                         );
@@ -4072,15 +5030,22 @@ function CalendarView({
               const plan = planById[entry.planId];
               const log = entry.logId ? logs.find((l) => l.id === entry.logId) : null;
               return (
-                <div key={entry.id} className="cal-detail-item">
+                <div key={entry.id} className={`cal-detail-item ${log ? "cal-detail-done" : ""}`}>
                   <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
                     <span className="ex-name">
                       <Dumbbell size={13} style={{ marginRight: 6, verticalAlign: -2 }} />
-                      {plan ? plan.name : "Gelöschter Plan"}
+                      {plan ? plan.name : log?.planName || "Gelöschter Plan"}
                     </span>
-                    <button className="btn-icon" onClick={() => onDeleteEntry(entry.id)} title="Termin entfernen">
-                      <Trash2 size={13} />
-                    </button>
+                    <div style={{ display: "flex", gap: 4, flexShrink: 0 }}>
+                      {!entry.logId && (
+                        <button className="btn-icon" onClick={() => openEditEntry(entry)} title="Termin bearbeiten">
+                          <PencilLine size={13} />
+                        </button>
+                      )}
+                      <button className="btn-icon" onClick={() => onDeleteEntry(entry.id)} title="Termin entfernen">
+                        <Trash2 size={13} />
+                      </button>
+                    </div>
                   </div>
                   {log ? (
                     <div className="history-exercise-list" style={{ marginTop: 8 }}>
@@ -4119,17 +5084,95 @@ function CalendarView({
                 </div>
               );
             }
+            if (entry.type === "breathing") {
+              const br = breathingById[entry.breathingId];
+              const log = entry.logId ? breathingLogById[entry.logId] : null;
+              return (
+                <div key={entry.id} className={`cal-detail-item ${log ? "cal-detail-done" : ""}`}>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                    <span className="ex-name">
+                      <Wind size={13} style={{ marginRight: 6, verticalAlign: -2, color: BREATHING_COLOR }} />
+                      {br ? br.name : log?.name || "Gelöschte Atemübung"}
+                    </span>
+                    <div style={{ display: "flex", gap: 4, flexShrink: 0 }}>
+                      {!entry.logId && (
+                        <button className="btn-icon" onClick={() => openEditEntry(entry)} title="Termin bearbeiten">
+                          <PencilLine size={13} />
+                        </button>
+                      )}
+                      <button className="btn-icon" onClick={() => onDeleteEntry(entry.id)} title="Termin entfernen">
+                        <Trash2 size={13} />
+                      </button>
+                    </div>
+                  </div>
+                  {log ? (
+                    <div style={{ fontSize: 12.5, color: "var(--text-dim)", marginTop: 6 }}>
+                      {log.rounds} von {log.plannedRounds} Runden
+                      {log.durationSeconds
+                        ? ` · ${Math.max(1, Math.round(log.durationSeconds / 60))} Min.`
+                        : ""}
+                    </div>
+                  ) : br ? (
+                    <button
+                      className="btn btn-primary btn-block btn-sm"
+                      style={{ marginTop: 10 }}
+                      onClick={() => onStartScheduledBreathing?.(br, entry.id)}
+                    >
+                      <Play size={14} /> Atemübung starten
+                    </button>
+                  ) : (
+                    <p style={{ fontSize: 12.5, color: "var(--text-dim)", marginTop: 6 }}>
+                      Diese Atemübung wurde gelöscht.
+                    </p>
+                  )}
+                </div>
+              );
+            }
             const cat = categoryById[entry.categoryId];
+            const isDone = !!entry.doneAt;
             return (
-              <div key={entry.id} className="cal-detail-item">
+              <div key={entry.id} className={`cal-detail-item ${isDone ? "cal-detail-done" : ""}`}>
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
                   <span style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0 }}>
+                    {/* One tap is the whole logging flow for these - no
+                        exercise picker, no sets, just done or not done. */}
+                    <span
+                      className={`set-check ${isDone ? "checked" : ""}`}
+                      role="checkbox"
+                      aria-checked={isDone}
+                      title={isDone ? "Als offen markieren" : "Als erledigt markieren"}
+                      onClick={() => onToggleActionDone?.(entry.id)}
+                    >
+                      {isDone && <Check size={13} color="var(--bg)" />}
+                    </span>
                     <span className="folder-dot" style={{ background: cat ? cat.color : "var(--text-dim)", flexShrink: 0 }} />
-                    <span style={{ overflow: "hidden", textOverflow: "ellipsis" }}>{entry.text}</span>
+                    <span style={{ minWidth: 0 }}>
+                      <span
+                        style={{
+                          display: "block",
+                          overflow: "hidden",
+                          textOverflow: "ellipsis",
+                          opacity: isDone ? 0.65 : 1,
+                        }}
+                      >
+                        {entry.text}
+                      </span>
+                      {entry.durationMinutes ? (
+                        <span style={{ fontSize: 12.5, color: "var(--text-dim)" }}>
+                          <Clock size={11} style={{ marginRight: 4, verticalAlign: -1 }} />
+                          {entry.durationMinutes} Min.
+                        </span>
+                      ) : null}
+                    </span>
                   </span>
-                  <button className="btn-icon" onClick={() => onDeleteEntry(entry.id)} title="Eintrag löschen">
-                    <Trash2 size={13} />
-                  </button>
+                  <div style={{ display: "flex", gap: 4, flexShrink: 0 }}>
+                    <button className="btn-icon" onClick={() => openEditEntry(entry)} title="Eintrag bearbeiten">
+                      <PencilLine size={13} />
+                    </button>
+                    <button className="btn-icon" onClick={() => onDeleteEntry(entry.id)} title="Eintrag löschen">
+                      <Trash2 size={13} />
+                    </button>
+                  </div>
                 </div>
               </div>
             );
@@ -4137,7 +5180,7 @@ function CalendarView({
         </div>
 
         {addOpen && (
-          <Modal title="Eintrag hinzufügen" onClose={() => setAddOpen(false)} width={420}>
+          <Modal title="Eintrag hinzufügen" onClose={closeAddDialog} width={420}>
             <div className="sub-tab-row" style={{ marginBottom: 10 }}>
               <button
                 className={`sub-tab ${addMode === "action" ? "active" : ""}`}
@@ -4150,6 +5193,12 @@ function CalendarView({
                 onClick={() => setAddMode("workout")}
               >
                 <Dumbbell size={13} /> Workout
+              </button>
+              <button
+                className={`sub-tab ${addMode === "breathing" ? "active" : ""}`}
+                onClick={() => setAddMode("breathing")}
+              >
+                <Wind size={13} /> Atem
               </button>
             </div>
 
@@ -4177,9 +5226,19 @@ function CalendarView({
                 <label className="field-label">Eintrag</label>
                 <input
                   type="text"
-                  placeholder="z. B. Physio-Termin, Ruhetag, Waage…"
+                  placeholder="z. B. Arbeitsweg, Atemübung, Sehnenreha…"
                   value={newActionText}
                   onChange={(e) => setNewActionText(e.target.value)}
+                />
+                <label className="field-label" style={{ marginTop: 10 }}>
+                  Dauer in Minuten (optional)
+                </label>
+                <input
+                  type="text"
+                  inputMode="numeric"
+                  placeholder="z. B. 15"
+                  value={newActionDuration}
+                  onChange={(e) => setNewActionDuration(e.target.value)}
                 />
                 <button
                   className="btn btn-primary btn-block btn-sm"
@@ -4190,6 +5249,26 @@ function CalendarView({
                   <Save size={14} /> Speichern
                 </button>
               </>
+            ) : addMode === "breathing" ? (
+              <div style={{ maxHeight: 260, overflowY: "auto" }}>
+                {breathingExercises.length === 0 ? (
+                  <div className="empty-state" style={{ padding: "10px 0" }}>
+                    Noch keine Atemübung angelegt. Lege sie im Programm-Menü unter „Atemübungen“ an.
+                  </div>
+                ) : (
+                  breathingExercises.map((b) => (
+                    <div className="ex-row" key={b.id}>
+                      <span className="ex-name">{b.name}</span>
+                      <button
+                        className="btn btn-primary btn-sm"
+                        onClick={() => { onScheduleBreathing?.(selectedDate, b.id); closeAddDialog(); }}
+                      >
+                        Eintragen
+                      </button>
+                    </div>
+                  ))
+                )}
+              </div>
             ) : (
               <>
                 <div className="search-box" style={{ marginBottom: 10 }}>
@@ -4209,13 +5288,152 @@ function CalendarView({
                         <span className="ex-name">{p.name}</span>
                         <button
                           className="btn btn-primary btn-sm"
-                          onClick={() => { onScheduleWorkout(selectedDate, p.id); setAddOpen(false); }}
+                          onClick={() => { onScheduleWorkout(selectedDate, p.id); closeAddDialog(); }}
                         >
                           Eintragen
                         </button>
                       </div>
                     ))
                   )}
+                </div>
+              </>
+            )}
+          </Modal>
+        )}
+
+        {editingEntry && (
+          <Modal
+            title={
+              editingEntry.type === "action"
+                ? "Eintrag bearbeiten"
+                : editingEntry.type === "workout"
+                ? "Workout-Termin bearbeiten"
+                : "Atemübungs-Termin bearbeiten"
+            }
+            onClose={closeEditDialog}
+            width={420}
+          >
+            {editingEntry.type === "action" ? (
+              <>
+                <label className="field-label">Kategorie</label>
+                <div className="chip-row" style={{ marginTop: 6, marginBottom: 10 }}>
+                  <span
+                    className={`chip chip-sm ${editActionCategory === null ? "active" : ""}`}
+                    onClick={() => setEditActionCategory(null)}
+                  >
+                    Ohne
+                  </span>
+                  {categories.map((c) => (
+                    <span
+                      key={c.id}
+                      className={`chip chip-sm ${editActionCategory === c.id ? "active" : ""}`}
+                      onClick={() => setEditActionCategory(c.id)}
+                      style={editActionCategory === c.id ? { background: c.color, borderColor: c.color, color: "white" } : undefined}
+                    >
+                      {c.name}
+                    </span>
+                  ))}
+                </div>
+                <label className="field-label">Eintrag</label>
+                <input
+                  type="text"
+                  value={editActionText}
+                  onChange={(e) => setEditActionText(e.target.value)}
+                />
+                <label className="field-label" style={{ marginTop: 10 }}>
+                  Dauer in Minuten (optional)
+                </label>
+                <input
+                  type="text"
+                  inputMode="numeric"
+                  value={editActionDuration}
+                  onChange={(e) => setEditActionDuration(e.target.value)}
+                />
+                <label className="field-label" style={{ marginTop: 10 }}>Datum</label>
+                <input type="date" value={editDate} onChange={(e) => setEditDate(e.target.value)} />
+                <button
+                  className="btn btn-primary btn-block btn-sm"
+                  style={{ marginTop: 10 }}
+                  disabled={!editActionText.trim() || !editDate}
+                  onClick={() => {
+                    const trimmed = editActionText.trim();
+                    if (!trimmed || !editDate) return;
+                    onUpdateEntry(editingEntry.id, {
+                      categoryId: editActionCategory,
+                      text: trimmed,
+                      durationMinutes: toNum(editActionDuration) || null,
+                      date: editDate,
+                    });
+                    closeEditDialog();
+                  }}
+                >
+                  <Save size={14} /> Speichern
+                </button>
+              </>
+            ) : (
+              <>
+                <label className="field-label">Datum</label>
+                <div style={{ display: "flex", gap: 8, alignItems: "center", marginTop: 6 }}>
+                  <input
+                    type="date"
+                    value={editDate}
+                    onChange={(e) => setEditDate(e.target.value)}
+                    style={{ flex: 1 }}
+                  />
+                  <button
+                    className="btn btn-primary btn-sm"
+                    disabled={!editDate}
+                    onClick={() => { onUpdateEntry(editingEntry.id, { date: editDate }); closeEditDialog(); }}
+                  >
+                    <Save size={14} /> Übernehmen
+                  </button>
+                </div>
+
+                <div style={{ marginTop: 16, paddingTop: 12, borderTop: "1px solid var(--border)" }}>
+                  <label className="field-label">
+                    {editingEntry.type === "workout" ? "Anderen Plan wählen" : "Andere Atemübung wählen"}
+                  </label>
+                  <div className="search-box" style={{ marginTop: 6, marginBottom: 10 }}>
+                    <Search size={16} color="var(--text-dim)" />
+                    <input
+                      placeholder={editingEntry.type === "workout" ? "Plan suchen…" : "Atemübung suchen…"}
+                      value={editSwapQuery}
+                      onChange={(e) => setEditSwapQuery(e.target.value)}
+                    />
+                  </div>
+                  <div style={{ maxHeight: 220, overflowY: "auto" }}>
+                    {editingEntry.type === "workout" ? (
+                      filteredPlansForSwap.length === 0 ? (
+                        <div className="empty-state" style={{ padding: "10px 0" }}>Keine Pläne gefunden.</div>
+                      ) : (
+                        filteredPlansForSwap.map((p) => (
+                          <div className="ex-row" key={p.id}>
+                            <span className="ex-name">{p.name}</span>
+                            <button
+                              className="btn btn-primary btn-sm"
+                              onClick={() => { onUpdateEntry(editingEntry.id, { planId: p.id }); closeEditDialog(); }}
+                            >
+                              Übernehmen
+                            </button>
+                          </div>
+                        ))
+                      )
+                    ) : filteredBreathingForSwap.length === 0 ? (
+                      <div className="empty-state" style={{ padding: "10px 0" }}>Keine Atemübung gefunden.</div>
+                    ) : (
+                      filteredBreathingForSwap.map((b) => (
+                        <div className="ex-row" key={b.id}>
+                          <span className="ex-name">{b.name}</span>
+                          <button
+                            className="btn btn-primary btn-sm"
+                            onClick={() => { onUpdateEntry(editingEntry.id, { breathingId: b.id }); closeEditDialog(); }}
+                          >
+                            Übernehmen
+                          </button>
+                        </div>
+                      ))
+                    )}
+                  </div>
                 </div>
               </>
             )}
@@ -4243,6 +5461,12 @@ function CalendarView({
 
 const LONG_PRESS_MS = 500;
 const SHIFT_TRANSITION = "transform 200ms cubic-bezier(0.2, 0, 0, 1)";
+// How close to the top/bottom edge of the scrollable area a drag has to get
+// before it starts auto-scrolling, and how fast that scroll goes at most -
+// without this a list longer than one screen simply can't be reordered from
+// bottom to top (or back), since the target row is off-screen the whole time.
+const AUTO_SCROLL_EDGE = 70;
+const AUTO_SCROLL_MAX_SPEED = 16;
 
 // While a row is being dragged the browser would otherwise select the text
 // under the finger, leaving words and numbers highlighted in blue.
@@ -4267,7 +5491,12 @@ function useDragReorder({ items, getId, onReorder }) {
   const dragStartYRef = useRef(0);
   const pressStartYRef = useRef(0);
   const pendingYRef = useRef(0);
-  const rafRef = useRef(null);
+  // How much the scrollable container has been auto-scrolled since the drag
+  // began (positive = scrolled down). The dragged row's transform and the
+  // target-slot math both need this added back in, because scrolling moves
+  // every row's on-screen position without moving the pointer at all.
+  const autoScrolledRef = useRef(0);
+  const autoScrollLoopRef = useRef(null);
 
   useEffect(() => {
     itemsRef.current = items;
@@ -4315,21 +5544,43 @@ function useDragReorder({ items, getId, onReorder }) {
     });
   };
 
+  // Runs every frame for the whole drag, not just when the pointer moves:
+  // holding the finger still right at the edge must keep scrolling, which a
+  // move-triggered callback alone would never do. Scrolls the container when
+  // the pointer sits in the edge zone, then repaints using the finger's raw
+  // movement plus whatever the auto-scroll has contributed so far.
+  const runAutoScrollFrame = () => {
+    if (draggingIdRef.current === null) return;
+    const container = document.querySelector(".content");
+    if (container) {
+      const rect = container.getBoundingClientRect();
+      const y = pendingYRef.current;
+      let speed = 0;
+      if (y < rect.top + AUTO_SCROLL_EDGE) {
+        speed = -AUTO_SCROLL_MAX_SPEED * Math.min(1, (rect.top + AUTO_SCROLL_EDGE - y) / AUTO_SCROLL_EDGE);
+      } else if (y > rect.bottom - AUTO_SCROLL_EDGE) {
+        speed = AUTO_SCROLL_MAX_SPEED * Math.min(1, (y - (rect.bottom - AUTO_SCROLL_EDGE)) / AUTO_SCROLL_EDGE);
+      }
+      if (speed !== 0) {
+        const before = container.scrollTop;
+        container.scrollTop = before + speed;
+        autoScrolledRef.current += container.scrollTop - before;
+      }
+    }
+    paintDrag(pendingYRef.current - dragStartYRef.current + autoScrolledRef.current);
+    autoScrollLoopRef.current = requestAnimationFrame(runAutoScrollFrame);
+  };
+
   useEffect(() => {
     if (draggingId === null) return undefined;
     const onMove = (e) => {
       if (e.cancelable) e.preventDefault();
       pendingYRef.current = e.touches ? e.touches[0].clientY : e.clientY;
-      if (rafRef.current !== null) return;
-      rafRef.current = requestAnimationFrame(() => {
-        rafRef.current = null;
-        paintDrag(pendingYRef.current - dragStartYRef.current);
-      });
     };
     const onUp = () => {
-      if (rafRef.current !== null) {
-        cancelAnimationFrame(rafRef.current);
-        rafRef.current = null;
+      if (autoScrollLoopRef.current !== null) {
+        cancelAnimationFrame(autoScrollLoopRef.current);
+        autoScrollLoopRef.current = null;
       }
       const from = fromIndexRef.current;
       const target = targetIndexRef.current;
@@ -4400,6 +5651,8 @@ function useDragReorder({ items, getId, onReorder }) {
       fromIndexRef.current = slots.findIndex((s) => s.id === id);
       targetIndexRef.current = fromIndexRef.current;
       dragStartYRef.current = pressStartYRef.current;
+      pendingYRef.current = pressStartYRef.current;
+      autoScrolledRef.current = 0;
       draggingIdRef.current = id;
 
       slots.forEach((slot) => {
@@ -4413,6 +5666,7 @@ function useDragReorder({ items, getId, onReorder }) {
       if (navigator.vibrate) navigator.vibrate(15);
       setDragSelectionBlocked(true);
       setDraggingId(id);
+      autoScrollLoopRef.current = requestAnimationFrame(runAutoScrollFrame);
     }, LONG_PRESS_MS);
   };
   const cancelItemPress = () => {
@@ -4726,7 +5980,9 @@ function ExercisesView({
   onUpdateExerciseNote,
   onRenameExercise,
   timeBasedExercises,
+  gymIndependentExercises,
   onToggleTimeBased,
+  onToggleGymIndependent,
   onRequestConfirm,
   gyms = [],
 }) {
@@ -4850,9 +6106,22 @@ function ExercisesView({
               onClick={() => setSelectedExerciseId(e.id)}
             >
               <span className="ex-name">{e.name}</span>
-              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                <MuscleTag exercise={e} subgroupOverrides={exerciseSubgroupOverrides} />
-                <span className="tag tag-equipment">{getExerciseEquipment(e, exerciseEquipmentOverrides)}</span>
+              <div style={{ display: "flex", alignItems: "center", gap: 8, flexShrink: 0 }}>
+                {/* Tags wrap onto a second line instead of squeezing the name
+                    down to nothing when an exercise has two subgroups. */}
+                <div
+                  style={{
+                    display: "flex",
+                    flexWrap: "wrap",
+                    alignItems: "center",
+                    justifyContent: "flex-end",
+                    gap: 6,
+                    maxWidth: "48vw",
+                  }}
+                >
+                  <MuscleTag exercise={e} subgroupOverrides={exerciseSubgroupOverrides} />
+                  <span className="tag tag-equipment">{getExerciseEquipment(e, exerciseEquipmentOverrides)}</span>
+                </div>
                 {e.custom && (
                   <button
                     className="btn-icon"
@@ -4885,9 +6154,11 @@ function ExercisesView({
           exerciseEquipmentOverrides={exerciseEquipmentOverrides}
           onSetExerciseEquipment={onSetExerciseEquipment}
           timeBasedExercises={timeBasedExercises}
+          gymIndependentExercises={gymIndependentExercises}
           onUpdateExerciseNote={onUpdateExerciseNote}
           onRenameExercise={onRenameExercise}
           onToggleTimeBased={onToggleTimeBased}
+          onToggleGymIndependent={onToggleGymIndependent}
           onClose={() => setSelectedExerciseId(null)}
         />
       )}
@@ -4910,9 +6181,11 @@ function ExerciseDetailSheet({
   exerciseEquipmentOverrides,
   onSetExerciseEquipment,
   timeBasedExercises,
+  gymIndependentExercises,
   onUpdateExerciseNote,
   onRenameExercise,
   onToggleTimeBased,
+  onToggleGymIndependent,
   onClose,
   gyms = [],
 }) {
@@ -4965,6 +6238,7 @@ function ExerciseDetailSheet({
     [logs, exercise.id]
   );
   const isTimeBasedExercise = isTimeBasedInLogs(logs, exercise.id, timeBasedExercises);
+  const isGymIndependentExercise = isGymIndependent(exercise.id, gymIndependentExercises);
   const bestStats = useMemo(
     () => (isTimeBasedExercise ? null : getExerciseBestStats(logs, exercise.id)),
     [logs, exercise.id, isTimeBasedExercise]
@@ -5108,6 +6382,7 @@ function ExerciseDetailSheet({
                   exerciseId={exercise.id}
                   isTimeBased={isTimeBasedExercise}
                   gyms={gyms}
+                  gymIndependent={isGymIndependentExercise}
                 />
               )}
             </>
@@ -5164,6 +6439,17 @@ function ExerciseDetailSheet({
               title="Zeitangabe für diese Übung aktivieren (z. B. Plank, Sprints)"
             >
               <Clock size={11} /> Zeitbasiert
+            </button>
+
+            {/* Liegestütze, Plank, Bandübungen: die Leistung hängt nicht am
+                Studio. Ohne diesen Schalter würde die Historie beim Wechsel
+                des Gyms in getrennte Linien zerfallen. */}
+            <button
+              className={`chip chip-sm ${isGymIndependentExercise ? "active" : ""}`}
+              onClick={() => onToggleGymIndependent(exercise.id, !isGymIndependentExercise)}
+              title="Diese Übung ist in jedem Gym gleich (z. B. Liegestütze, Plank, Bandübungen) – Verlauf, Rekorde und „letztes Mal“ werden dann nicht nach Gym getrennt"
+            >
+              <Globe size={11} /> Überall gleich
             </button>
 
             {availableSubgroups.length > 0 && (
@@ -5274,9 +6560,11 @@ function PlanBuilder({
   onSetExerciseEquipment,
   onAddCustom,
   timeBasedExercises,
+  gymIndependentExercises,
   onUpdateExerciseNote,
   onRenameExercise,
   onToggleTimeBased,
+  onToggleGymIndependent,
   onCancel,
   onSave,
   onCreateFolder,
@@ -5467,7 +6755,10 @@ function PlanBuilder({
     // build a plan around an exercise you already train, those numbers are
     // the useful starting point.
     const wasTimed = isTimeBasedInLogs(logs, exerciseId, timeBasedExercises);
-    const history = getExerciseHistory(logs, exerciseId, null, wasTimed, activeGymId);
+    const history = getExerciseHistory(
+      logs, exerciseId, null, wasTimed,
+      effectiveGymId(exerciseId, activeGymId, gymIndependentExercises)
+    );
     const working = (history?.lastSets || []).filter((set) => !set.warmup);
     const last = working[0];
     const warmCount = (history?.lastSets || []).filter((set) => set.warmup).length;
@@ -6278,9 +7569,11 @@ function PlanBuilder({
           exerciseEquipmentOverrides={exerciseEquipmentOverrides}
           onSetExerciseEquipment={onSetExerciseEquipment}
           timeBasedExercises={timeBasedExercises}
+          gymIndependentExercises={gymIndependentExercises}
           onUpdateExerciseNote={onUpdateExerciseNote}
           onRenameExercise={onRenameExercise}
           onToggleTimeBased={onToggleTimeBased}
+          onToggleGymIndependent={onToggleGymIndependent}
           onClose={() => setSelectedExerciseId(null)}
         />
       )}
@@ -6396,8 +7689,10 @@ function PlansView({
   onStart,
   onCreateFolder,
   onDeleteFolder,
+  onToggleFolderStatsExcluded = () => {},
   onMovePlan,
   onManageGyms = () => {},
+  onManageBreathing = () => {},
   onOpenBackup = () => {},
   onReorderFolders = () => {},
   logs = [],
@@ -6414,6 +7709,17 @@ function PlansView({
   const [newProgramName, setNewProgramName] = useState("");
   const [renamingProgram, setRenamingProgram] = useState(false);
   const [renameProgramName, setRenameProgramName] = useState("");
+  const [folderMenuId, setFolderMenuId] = useState(null);
+  const [folderMenuUp, setFolderMenuUp] = useState(false);
+  const folderMenuRef = useMenuFlip(folderMenuId, setFolderMenuUp);
+  useEffect(() => {
+    if (!folderMenuId) return;
+    const closeOnOutsideClick = (e) => {
+      if (!e.target.closest?.(".item-menu-wrap")) setFolderMenuId(null);
+    };
+    document.addEventListener("click", closeOnOutsideClick);
+    return () => document.removeEventListener("click", closeOnOutsideClick);
+  }, [folderMenuId]);
   const toggleFolderCollapsed = (id) =>
     setCollapsedFolders((prev) => {
       const next = { ...prev, [id]: !prev[id] };
@@ -6560,9 +7866,28 @@ function PlansView({
             <div className="program-menu-divider" />
             <button
               className="program-menu-item"
+              onClick={() => {
+                setProgramMenuOpen(false);
+                // Reuses the exact same start flow as a real plan (gym
+                // picker included) - just with an empty exercise list.
+                // Exercises get added afterwards via "+ Übung hinzufügen",
+                // already there in the live logging screen.
+                onStart({ id: null, name: "Freies Training", items: [] });
+              }}
+            >
+              <Play size={14} /> Training ohne Plan starten
+            </button>
+            <button
+              className="program-menu-item"
               onClick={() => { setProgramMenuOpen(false); onManageGyms(); }}
             >
               <Dumbbell size={14} /> Gyms verwalten
+            </button>
+            <button
+              className="program-menu-item"
+              onClick={() => { setProgramMenuOpen(false); onManageBreathing(); }}
+            >
+              <Wind size={14} /> Atemübungen
             </button>
             <button
               className="program-menu-item"
@@ -6764,14 +8089,52 @@ function PlansView({
               />
               <span className="folder-dot" style={{ background: f.color }} />
               <span className="folder-header-title">{f.name}</span>
+              {f.statsExcluded && (
+                <span className="tag" title="Sätze aus diesem Ordner zählen nicht in „Sätze pro Muskelgruppe“ und „Belastung pro Muskelgruppe“">
+                  ohne Statistik
+                </span>
+              )}
               <span className="tag" style={{ marginLeft: "auto" }}>{folderPlans.length}</span>
-              <button
-                className="btn-icon"
-                onClick={(e) => { e.stopPropagation(); onDeleteFolder(f.id); }}
-                title="Ordner löschen"
+              <div
+                className={`item-menu-wrap ${folderMenuUp && folderMenuId === f.id ? "drop-up" : ""}`}
+                onClick={(e) => e.stopPropagation()}
               >
-                <Trash2 size={13} />
-              </button>
+                <button
+                  className="btn-icon"
+                  onClick={(e) => {
+                    const opening = folderMenuId !== f.id;
+                    setFolderMenuUp(opening ? shouldDropUp(e.target) : false);
+                    setFolderMenuId(opening ? f.id : null);
+                  }}
+                  title="Weitere Optionen"
+                >
+                  <MoreVertical size={14} />
+                </button>
+                {folderMenuId === f.id && (
+                  <div
+                    ref={folderMenuRef}
+                    className="program-menu"
+                    style={{ top: "calc(100% + 4px)", right: 0, left: "auto" }}
+                  >
+                    <button
+                      className="program-menu-item"
+                      onClick={() => { onToggleFolderStatsExcluded(f.id); setFolderMenuId(null); }}
+                    >
+                      <TrendingUp size={14} />
+                      {f.statsExcluded
+                        ? "Wieder für Muskelgruppen-Statistik zählen"
+                        : "Nicht für Muskelgruppen-Statistik zählen"}
+                    </button>
+                    <div className="program-menu-divider" />
+                    <button
+                      className="program-menu-item danger"
+                      onClick={() => { setFolderMenuId(null); onDeleteFolder(f.id); }}
+                    >
+                      <Trash2 size={14} /> Ordner löschen
+                    </button>
+                  </div>
+                )}
+              </div>
             </div>
             {!collapsed && (
               folderPlans.length === 0 ? (
@@ -6876,9 +8239,11 @@ function LogView({
   exerciseEquipmentOverrides,
   onSetExerciseEquipment,
   timeBasedExercises,
+  gymIndependentExercises,
   onUpdateExerciseNote,
   onRenameExercise,
   onToggleTimeBased,
+  onToggleGymIndependent,
   onStartFromPlan,
   onUpdateSession,
   onFinish,
@@ -6996,6 +8361,26 @@ function LogView({
     return () => document.removeEventListener("click", closeOnOutsideClick);
   }, [openEntryMenu]);
 
+  // The inline rest-time picker used to have no way to close at all - picking
+  // a preset closes it directly (see setEntryRestDuration below), and this
+  // is the safety net for tapping away without picking anything.
+  useEffect(() => {
+    const anyOpen = Object.values(openRestPicker).some(Boolean);
+    if (!anyOpen) return;
+    // mousedown, not click: the trigger button (the "Pausenzeit" menu item)
+    // lives outside .rest-picker-inline, since that row doesn't exist until
+    // after this same click opens it. Listening for "click" meant the still-
+    // bubbling click that opened the picker also reached this listener and
+    // closed it again immediately. "mousedown" fires and finishes before
+    // "click" does, so a listener added in reaction to a click can never
+    // catch that same click's mousedown - only a genuinely later one.
+    const closeOnOutsideClick = (e) => {
+      if (!e.target.closest?.(".rest-picker-inline")) setOpenRestPicker({});
+    };
+    document.addEventListener("mousedown", closeOnOutsideClick);
+    return () => document.removeEventListener("mousedown", closeOnOutsideClick);
+  }, [openRestPicker]);
+
   useEffect(() => {
     if (!settingsMenuOpen) return;
     const closeOnOutsideClick = (e) => {
@@ -7011,22 +8396,41 @@ function LogView({
       return;
     }
     const tick = () => {
+      // Cheap no-op once the clock is already running - tried on every tick
+      // so a bell that is still due gets the earliest possible chance to
+      // fire once the phone comes back from a screen-off suspension,
+      // instead of waiting until the countdown itself reaches zero.
+      resumeAudioIfSuspended();
       const left = Math.max(0, Math.round((restEndsAt - Date.now()) / 1000));
       setRestLeft(left);
       if (left === 0 && !restBeepedRef.current) {
         restBeepedRef.current = true;
-        // The tone itself was already scheduled on the audio clock when the
-        // rest started, so nothing is played here - firing a second one would
-        // double the beep. Only if that scheduling failed (sound was off at
-        // the time, or no audio context existed yet) does the timer play it.
-        if (soundOn && !restBeepScheduledRef.current) {
-          playBeep({ frequency: 1320, duration: 0.35 });
-        }
+        const wasScheduled = restBeepScheduledRef.current;
         restBeepScheduledRef.current = false;
-        // Backup signal for a muted phone or a device that silenced the
-        // audio context in the background. Vibration needs JS to be running,
-        // so it only lands with the app in the foreground - which is exactly
-        // the case the scheduled tone handles worst.
+        if (soundOn) {
+          if (!wasScheduled) {
+            // Nothing was ever put on the clock (sound was off, or no
+            // audio context existed yet) - play it directly.
+            playBell();
+          } else {
+            // Scheduling succeeded at the time, but that only proves the
+            // call did not throw - not that the bell actually rang. It
+            // normally finishes right about now; if iOS suspended the
+            // clock while the screen was off, it is still sitting there
+            // unplayed. Give it a brief moment to complete on its own,
+            // then treat a bell still pending as stuck and play a fresh
+            // one instead of trusting a stale "scheduling worked" flag.
+            setTimeout(() => {
+              if (hasPendingRestBeep()) {
+                cancelRestBeep();
+                playBell();
+              }
+            }, 500);
+          }
+        }
+        // Backup signal for a muted phone. Vibration needs JS to be
+        // running, so it only lands with the app in the foreground - which
+        // is exactly the case the scheduled tone handles worst.
         if (navigator.vibrate) {
           try { navigator.vibrate([120, 80, 120]); } catch (_) {}
         }
@@ -7209,7 +8613,7 @@ function LogView({
       }
 
       if (autoRun.phase === "rest") {
-        playBeep({ frequency: 1320, duration: 0.35 });
+        playBell();
         const next = findNextSet(autoRun.exerciseId, autoRun.setIdx);
         if (next) startAutoAt(next.exerciseId, next.setIdx);
         else { stopAuto(); playBeep({ frequency: 660, duration: 0.4 }); }
@@ -7682,7 +9086,7 @@ function LogView({
                   onClick={() => {
                     const next = !soundOn;
                     setSoundOn(next);
-                    if (next) { unlockAudio(); playBeep({ frequency: 1320, duration: 0.2 }); }
+                    if (next) playBell();
                   }}
                 >
                   <span style={{ display: "flex", alignItems: "center", gap: 8 }}>
@@ -7722,7 +9126,10 @@ function LogView({
             : isTimeBasedInLogs(logs, entry.exerciseId, timeBasedExercises) || !!entry.targetUseTime;
         // Comparing against the same gym only - a record set on a machine
         // that runs lighter elsewhere is not a record here.
-        const history = getExerciseHistory(logs, entry.exerciseId, session.id, isTimeBased, session.gymId);
+        const history = getExerciseHistory(
+          logs, entry.exerciseId, session.id, isTimeBased,
+          effectiveGymId(entry.exerciseId, session.gymId, gymIndependentExercises)
+        );
         // Only the single best set of this workout carries the trophy: when
         // you work up 60/70/80 all three would beat the old best, and three
         // trophies in a row say less than one on the set that counts.
@@ -7738,6 +9145,8 @@ function LogView({
           if (score > bestScore) { bestScore = score; setPrIndex = i; setPrList = prs; }
         });
         const exercisePrs = describeExercisePRs(entry.sets, history, isTimeBased, hasWeightHere);
+        const volumeChange = exerciseVolumeChange(entry.sets, history.lastSets, isTimeBased, usesWeight);
+        const volumeChangeRounded = volumeChange === null ? null : Math.round(volumeChange);
         const ssInfo = supersetGroupInfo[entry.exerciseId] || { groupSize: 1, isFirst: true, isLast: true };
         const isSuperset = ssInfo.groupSize > 1;
         return (
@@ -7785,6 +9194,21 @@ function LogView({
                     }}
                   >
                     <Trophy size={12} />
+                  </span>
+                )}
+                {volumeChange !== null && (
+                  <span
+                    className={`volume-change-badge ${
+                      volumeChangeRounded > 0
+                        ? "volume-change-up"
+                        : volumeChangeRounded < 0
+                        ? "volume-change-down"
+                        : "volume-change-neutral"
+                    }`}
+                    title="Volumen dieser Übung im Vergleich zum letzten Mal – live, während du einträgst"
+                  >
+                    {volumeChangeRounded > 0 ? "+" : ""}
+                    {volumeChangeRounded}%
                   </span>
                 )}
               </div>
@@ -7954,18 +9378,27 @@ function LogView({
             )}
 
             {openRestPicker[entry.exerciseId] && (
-              <div className="chip-row" style={{ marginTop: 4, marginBottom: 8 }}>
+              <div className="chip-row rest-picker-inline" style={{ marginTop: 4, marginBottom: 8 }}>
                 {REST_PRESETS.map((sec) => (
                   <span
                     key={sec}
                     className={`chip ${(entry.restSeconds ?? restDuration) === sec ? "active" : ""}`}
-                    onClick={() => setEntryRestDuration(entry.exerciseId, sec)}
+                    onClick={() => {
+                      setEntryRestDuration(entry.exerciseId, sec);
+                      setOpenRestPicker((s) => ({ ...s, [entry.exerciseId]: false }));
+                    }}
                   >
                     {sec === 0 ? "Aus" : `${sec}s`}
                   </span>
                 ))}
                 {entry.restSeconds != null ? (
-                  <span className="chip" onClick={() => setEntryRestDuration(entry.exerciseId, null)}>
+                  <span
+                    className="chip"
+                    onClick={() => {
+                      setEntryRestDuration(entry.exerciseId, null);
+                      setOpenRestPicker((s) => ({ ...s, [entry.exerciseId]: false }));
+                    }}
+                  >
                     Standard nutzen
                   </span>
                 ) : null}
@@ -8331,9 +9764,11 @@ function LogView({
           exerciseEquipmentOverrides={exerciseEquipmentOverrides}
           onSetExerciseEquipment={onSetExerciseEquipment}
           timeBasedExercises={timeBasedExercises}
+          gymIndependentExercises={gymIndependentExercises}
           onUpdateExerciseNote={onUpdateExerciseNote}
           onRenameExercise={onRenameExercise}
           onToggleTimeBased={onToggleTimeBased}
+          onToggleGymIndependent={onToggleGymIndependent}
           onClose={() => setSelectedExerciseId(null)}
         />
       )}
@@ -8368,17 +9803,54 @@ function useChartColors(theme) {
   }, [theme]);
 }
 
-function ExerciseCharts({ logs, exerciseId, isTimeBased, theme, gyms = [] }) {
+// Punkt-zu-Punkt-Vergleich für die Übungs-Charts: für jeden Datenpunkt wird
+// der Wert von ungefähr compareWeeks Wochen zuvor gesucht (±toleranceDays
+// Tage, gegen zufällige Ausreißer/Trainingslücken am exakten Stichtag) und
+// die prozentuale Veränderung daraus berechnet. Bewusst kein Wochen-
+// Mittelwert wie bei den Muskelgruppen-Karten: eine einzelne Übung wird oft
+// unregelmäßig trainiert, ein Mittelwert über leere Wochen würde das genau
+// wie dort verwässern. keys erlaubt mehrere Datenreihen auf einmal (z. B.
+// eine pro Gym, wenn nach Gym aufgesplittet wird) - jede wird nur gegen
+// ihre eigene Historie verglichen.
+function buildPercentSeries(data, keys, compareWeeks, toleranceDays = 3) {
+  const targetOffsetMs = compareWeeks * LOAD_WEEK_MS;
+  const toleranceMs = toleranceDays * 86400000;
+  return data.map((pt, i) => {
+    const out = { date: pt.date, ts: pt.ts };
+    keys.forEach((key) => {
+      const val = pt[key];
+      if (!(val > 0)) { out[key] = null; return; }
+      const targetTs = pt.ts - targetOffsetMs;
+      let best = null;
+      let bestDiff = Infinity;
+      for (let j = 0; j < i; j++) {
+        const cVal = data[j][key];
+        if (!(cVal > 0)) continue;
+        const diff = Math.abs(data[j].ts - targetTs);
+        if (diff <= toleranceMs && diff < bestDiff) {
+          bestDiff = diff;
+          best = cVal;
+        }
+      }
+      out[key] = best == null ? null : ((val - best) / best) * 100;
+    });
+    return out;
+  });
+}
+
+function ExerciseCharts({ logs, exerciseId, isTimeBased, theme, gyms = [], gymIndependent = false }) {
   const chartColors = useChartColors(theme);
 
   const selectedIsTimeBased = isTimeBased;
   const selected = exerciseId;
   // Weights are not comparable between gyms, so as soon as an exercise has
   // been trained in more than one, each gym gets its own line instead of a
-  // single line that jumps up and down for no real reason.
+  // single line that jumps up and down for no real reason. Exercises marked
+  // as being the same everywhere (bodyweight, bands) are the exception -
+  // there the split would tear one continuous progression into fragments.
   const relevantLogs = logs.filter((l) => logEntries(l).some((e) => e.exerciseId === selected));
   const gymKeys = [...new Set(relevantLogs.map((l) => l.gymId || "none"))];
-  const splitByGym = gymKeys.length > 1;
+  const splitByGym = gymKeys.length > 1 && !gymIndependent;
   const gymLabel = (key) =>
     key === "none" ? "Ohne Gym" : gyms.find((g) => g.id === key)?.name || "Unbekanntes Gym";
 
@@ -8437,36 +9909,6 @@ function ExerciseCharts({ logs, exerciseId, isTimeBased, theme, gyms = [] }) {
     })
     .sort((a, b) => a.ts - b.ts);
 
-  const renderLines = (key, fallbackColor) =>
-    splitByGym
-      ? gymKeys.map((g, i) => {
-          const color = GYM_LINE_COLORS[i % GYM_LINE_COLORS.length];
-          return (
-            <Line
-              key={g}
-              type="monotone"
-              dataKey={`${key}_${g}`}
-              name={gymLabel(g)}
-              stroke={color}
-              strokeWidth={2.5}
-              dot={{ r: 3, fill: color, strokeWidth: 0 }}
-              activeDot={{ r: 5 }}
-              connectNulls
-            />
-          );
-        })
-      : (
-        <Line
-          type="monotone"
-          dataKey={key}
-          stroke={fallbackColor}
-          strokeWidth={2.5}
-          dot={{ r: 3, fill: fallbackColor, strokeWidth: 0 }}
-          activeDot={{ r: 5 }}
-        />
-      );
-  const gymLegend = splitByGym ? <Legend wrapperStyle={{ fontSize: 11 }} /> : null;
-
   if (!selected) return null;
 
   // Which charts make sense depends on how the exercise is trained. Bodyweight
@@ -8498,30 +9940,139 @@ function ExerciseCharts({ logs, exerciseId, isTimeBased, theme, gyms = [] }) {
   ) : (
     <>
       {cards.map((c) => (
-        <div className="card chart-card" key={c.key}>
-          <span className="plan-title">{c.title}</span>
-          <div style={{ height: 190, marginTop: 14 }}>
-            <ResponsiveContainer width="99%" height="100%" debounce={1}>
-              <LineChart data={chartData} margin={{ top: 6, right: 4, left: 0, bottom: 0 }}>
-                <CartesianGrid strokeDasharray="3 3" stroke={chartColors.grid} vertical={false} />
-                <XAxis dataKey="date" stroke={chartColors.axis} fontSize={11} axisLine={false} tickLine={false} />
-                <YAxis stroke={chartColors.axis} fontSize={11} axisLine={false} tickLine={false} width={40} />
-                <Tooltip
-                  contentStyle={{
-                    background: chartColors.tooltipBg,
-                    border: `1px solid ${chartColors.tooltipBorder}`,
-                    borderRadius: 10,
-                    fontSize: 12,
-                  }}
-                />
-                {renderLines(c.key, c.color)}
-                {gymLegend}
-              </LineChart>
-            </ResponsiveContainer>
-          </div>
-        </div>
+        <ExerciseStatCard
+          key={c.key}
+          title={c.title}
+          dataKey={c.key}
+          color={c.color}
+          chartData={chartData}
+          splitByGym={splitByGym}
+          gymKeys={gymKeys}
+          gymLabel={gymLabel}
+          chartColors={chartColors}
+        />
       ))}
     </>
+  );
+}
+
+// Eine einzelne Übungs-Statistik-Karte mit zwei Reitern: "Absolut" (wie
+// bisher) und "Verlauf in %" - dieselbe Karte, nur mit einer anderen
+// Datenreihe (siehe buildPercentSeries), damit man nicht zwischen zwei
+// getrennten Karten hin- und herspringen muss.
+function ExerciseStatCard({ title, dataKey, color, chartData, splitByGym, gymKeys, gymLabel, chartColors }) {
+  const [mode, setMode] = useState("absolute");
+  const [compareWeeks, setCompareWeeks] = useState(1);
+  const percentKeys = useMemo(
+    () => (splitByGym ? gymKeys.map((g) => `${dataKey}_${g}`) : [dataKey]),
+    [splitByGym, gymKeys, dataKey]
+  );
+  const percentData = useMemo(
+    () => buildPercentSeries(chartData, percentKeys, compareWeeks),
+    [chartData, percentKeys, compareWeeks]
+  );
+  const hasPercentValues = percentData.some((pt) => percentKeys.some((k) => pt[k] != null));
+  const activeData = mode === "percent" ? percentData : chartData;
+
+  const renderLines = () =>
+    splitByGym
+      ? gymKeys.map((g, i) => {
+          const lineColor = GYM_LINE_COLORS[i % GYM_LINE_COLORS.length];
+          return (
+            <Line
+              key={g}
+              type="monotone"
+              dataKey={`${dataKey}_${g}`}
+              name={gymLabel(g)}
+              stroke={lineColor}
+              strokeWidth={2.5}
+              dot={{ r: 3, fill: lineColor, strokeWidth: 0 }}
+              activeDot={{ r: 5 }}
+              connectNulls={mode === "absolute"}
+            />
+          );
+        })
+      : (
+        <Line
+          type="monotone"
+          dataKey={dataKey}
+          stroke={color}
+          strokeWidth={2.5}
+          dot={{ r: 3, fill: color, strokeWidth: 0 }}
+          activeDot={{ r: 5 }}
+        />
+      );
+  const gymLegend = splitByGym ? <Legend wrapperStyle={{ fontSize: 11 }} /> : null;
+  const compareLabel = WEEK_COMPARE_OPTIONS.find(([w]) => w === compareWeeks)?.[1] || `${compareWeeks} Wochen`;
+
+  return (
+    <div className="card chart-card">
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8 }}>
+        <span className="plan-title">{title}</span>
+        <div className="chip-row" style={{ margin: 0, padding: 0, overflow: "visible" }}>
+          <span
+            className={`chip chip-sm ${mode === "absolute" ? "active" : ""}`}
+            onClick={() => setMode("absolute")}
+          >
+            Absolut
+          </span>
+          <span
+            className={`chip chip-sm ${mode === "percent" ? "active" : ""}`}
+            onClick={() => setMode("percent")}
+          >
+            Verlauf in %
+          </span>
+        </div>
+      </div>
+      {mode === "percent" && (
+        <div className="chip-row" style={{ marginTop: 10, marginBottom: 0 }}>
+          {WEEK_COMPARE_OPTIONS.map(([weeks, label]) => (
+            <span
+              key={weeks}
+              className={`chip chip-sm ${compareWeeks === weeks ? "active" : ""}`}
+              onClick={() => setCompareWeeks(weeks)}
+            >
+              {label}
+            </span>
+          ))}
+        </div>
+      )}
+      {mode === "percent" && !hasPercentValues ? (
+        <div className="empty-state" style={{ padding: "14px 0" }}>
+          Noch kein Vergleichswert für „{compareLabel}" – dafür fehlt ein Training von vor
+          diesem Zeitraum (±3 Tage Toleranz).
+        </div>
+      ) : (
+        <div style={{ height: 190, marginTop: 14 }}>
+          <ResponsiveContainer width="99%" height="100%" debounce={1}>
+            <LineChart data={activeData} margin={{ top: 6, right: 4, left: 0, bottom: 0 }}>
+              <CartesianGrid strokeDasharray="3 3" stroke={chartColors.grid} vertical={false} />
+              <XAxis dataKey="date" stroke={chartColors.axis} fontSize={11} axisLine={false} tickLine={false} />
+              <YAxis
+                stroke={chartColors.axis}
+                fontSize={11}
+                axisLine={false}
+                tickLine={false}
+                width={mode === "percent" ? 44 : 40}
+                tickFormatter={mode === "percent" ? (v) => `${Math.round(v)}%` : undefined}
+              />
+              <Tooltip
+                contentStyle={{
+                  background: chartColors.tooltipBg,
+                  border: `1px solid ${chartColors.tooltipBorder}`,
+                  borderRadius: 10,
+                  fontSize: 12,
+                }}
+                formatter={mode === "percent" ? (v) => [`${v == null ? "–" : Math.round(v)}%`, ""] : undefined}
+              />
+              {mode === "percent" && <ReferenceLine y={0} stroke={chartColors.axis} strokeDasharray="3 3" />}
+              {renderLines()}
+              {gymLegend}
+            </LineChart>
+          </ResponsiveContainer>
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -8575,7 +10126,6 @@ function useMenuFlip(isOpen, setDropUp) {
 // triggered at an exact moment. iOS only allows sound after a user gesture,
 // so the context is created when the user taps "Start".
 let sharedAudioCtx = null;
-// A fraction of a second of silence, inlined so no file has to be shipped.
 function unlockAudio() {
   try {
     // "transient" means: a short signal tone. Music from another app is
@@ -8585,7 +10135,9 @@ function unlockAudio() {
     // channel permanently and pushed other apps out of the way.
     if (navigator.audioSession) navigator.audioSession.type = "transient";
 
-    if (!sharedAudioCtx) {
+    // A context iOS has fully closed (not just suspended) is unusable and
+    // has to be replaced, not reused - it would silently no-op forever.
+    if (!sharedAudioCtx || sharedAudioCtx.state === "closed") {
       const Ctx = window.AudioContext || window.webkitAudioContext;
       if (!Ctx) return null;
       sharedAudioCtx = new Ctx();
@@ -8601,52 +10153,107 @@ function releaseAudio() {
   // Nothing to release: no channel is held open any more.
 }
 
-// The rest-end tone is placed on the audio clock the moment the rest starts,
+// If iOS suspended the audio clock while the screen was off, nothing on it
+// fires until something resumes it again - and nothing did that on its own.
+// Calling this whenever the app becomes visible (or on the running rest
+// timer's own tick) gives a stuck rest tone a chance to still catch up the
+// moment the phone is looked at again, instead of staying silent forever.
+function resumeAudioIfSuspended() {
+  if (sharedAudioCtx && sharedAudioCtx.state === "suspended") {
+    try { sharedAudioCtx.resume(); } catch (_) {}
+  }
+}
+
+// A struck-bell timbre - like a boxing round bell - built from several
+// inharmonic sine partials instead of one pure tone. A single oscillator
+// only ever sounds like a synthesizer beep; a real struck bell/gong has
+// several overtones that are NOT whole-number multiples of the fundamental
+// (unlike a plucked string) and each rings out at its own speed - higher
+// partials fade fastest, which is exactly what gives struck metal its
+// characteristic shimmer-then-hum. Ratios and decay times are chosen by
+// ear for that "boxing bell", not physically modelled from a real bell.
+const BELL_PARTIALS = [
+  { ratio: 1,    gain: 1,    decay: 1.5 },
+  { ratio: 2.01, gain: 0.55, decay: 1.15 },
+  { ratio: 2.76, gain: 0.35, decay: 0.85 },
+  { ratio: 4.07, gain: 0.22, decay: 0.6 },
+  { ratio: 5.4,  gain: 0.14, decay: 0.42 },
+  { ratio: 6.8,  gain: 0.08, decay: 0.3 },
+];
+const BELL_FUNDAMENTAL = 430;
+
+// Schedules every partial at the given audio-clock time and reports back
+// once the longest-ringing one finishes, so callers can tell a completed
+// bell from one still open on the clock (or stuck in a suspended context).
+function scheduleBell(ctx, atTime, volume, onComplete) {
+  const oscillators = [];
+  const gains = [];
+  let longest = null;
+  BELL_PARTIALS.forEach((p) => {
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.type = "sine";
+    osc.frequency.value = BELL_FUNDAMENTAL * p.ratio;
+    const peak = Math.max(0.0001, volume * p.gain);
+    // A bell is struck, not faded in - a fast linear rise into an
+    // exponential decay is what makes the attack read as a hit.
+    gain.gain.setValueAtTime(0.0001, atTime);
+    gain.gain.linearRampToValueAtTime(peak, atTime + 0.006);
+    gain.gain.exponentialRampToValueAtTime(0.0001, atTime + p.decay);
+    osc.connect(gain).connect(ctx.destination);
+    const stopAt = atTime + p.decay + 0.05;
+    osc.start(atTime);
+    osc.stop(stopAt);
+    oscillators.push(osc);
+    gains.push(gain);
+    if (!longest || stopAt > longest.stopAt) longest = { osc, stopAt };
+  });
+  longest.osc.onended = () => onComplete?.();
+  return { oscillators, gains };
+}
+
+function playBell(volume = 0.6) {
+  const ctx = unlockAudio();
+  if (!ctx) return;
+  try {
+    scheduleBell(ctx, ctx.currentTime, volume, () => {});
+  } catch (_) { /* sound is optional, never break the workout over it */ }
+}
+
+// The rest-end bell is placed on the audio clock the moment the rest starts,
 // not fired by a timer when it ends. setInterval is throttled to a standstill
 // as soon as the screen goes off or the app moves to the background, so a
 // timer-driven tone never arrived. The Web Audio clock keeps its own time, so
-// an oscillator started with a delay still sounds. iOS can still suspend the
-// context after a long spell in the background - the vibration in the
-// countdown covers that case.
+// a tone started with a delay still sounds once the clock is running. If iOS
+// suspended the clock for the whole rest, resumeAudioIfSuspended() plus the
+// completion check in the rest-timer effect are what catch that instead of
+// silently trusting that scheduling succeeding earlier means it played.
 let pendingRestBeep = null;
 
-function scheduleRestBeep(delaySeconds, { frequency = 1320, duration = 0.35, volume = 0.6 } = {}) {
+function scheduleRestBeep(delaySeconds, volume = 0.6) {
   const ctx = sharedAudioCtx;
   if (!ctx || ctx.state === "closed") return false;
   try {
     if (ctx.state === "suspended") ctx.resume();
-    const osc = ctx.createOscillator();
-    const gain = ctx.createGain();
-    osc.frequency.value = frequency;
-    osc.type = "sine";
     const at = ctx.currentTime + Math.max(0, delaySeconds);
-    gain.gain.setValueAtTime(0, at);
-    gain.gain.linearRampToValueAtTime(volume, at + 0.01);
-    gain.gain.linearRampToValueAtTime(0, at + duration);
-    osc.connect(gain).connect(ctx.destination);
-    osc.start(at);
-    osc.stop(at + duration + 0.02);
-    // Once it has sounded it is no longer pending - otherwise a remounted
-    // view would believe a tone is still on the clock and stay silent.
-    osc.onended = () => {
-      if (pendingRestBeep && pendingRestBeep.osc === osc) pendingRestBeep = null;
-    };
-    pendingRestBeep = { osc, gain };
+    const handle = scheduleBell(ctx, at, volume, () => {
+      if (pendingRestBeep === handle) pendingRestBeep = null;
+    });
+    pendingRestBeep = handle;
     return true;
   } catch (_) {
     return false;
   }
 }
 
-// Skipping or extending a rest has to take the already-scheduled tone back
+// Skipping or extending a rest has to take the already-scheduled bell back
 // off the clock, otherwise it would sound at the original moment anyway.
 function cancelRestBeep() {
   if (!pendingRestBeep) return;
-  const { osc, gain } = pendingRestBeep;
+  const { oscillators, gains } = pendingRestBeep;
   pendingRestBeep = null;
-  try { osc.stop(); } catch (_) {}
-  try { osc.disconnect(); } catch (_) {}
-  try { gain.disconnect(); } catch (_) {}
+  oscillators.forEach((osc) => { try { osc.stop(); } catch (_) {} try { osc.disconnect(); } catch (_) {} });
+  gains.forEach((gain) => { try { gain.disconnect(); } catch (_) {} });
 }
 
 function hasPendingRestBeep() {
@@ -8671,6 +10278,367 @@ function playBeep({ frequency = 880, duration = 0.18, volume = 0.6 } = {}) {
     osc.start(now);
     osc.stop(now + duration + 0.02);
   } catch (_) { /* sound is optional, never break the workout over it */ }
+}
+
+// ---------------------------------------------------------------------------
+// Atemübung: geführte Sitzung
+// ---------------------------------------------------------------------------
+
+// Baut den Linienverlauf einer kompletten Runde: pro Phase ein Streckenstück,
+// dessen Breite der Dauer entspricht und dessen Höhe die Atemrichtung
+// abbildet - hoch beim Einatmen, runter beim Ausatmen, waagerecht beim
+// Halten. Bei Box Breathing (4 gleich lange Phasen) ergibt das genau die
+// namensgebende Kastenform.
+//
+// Die Höhe wird am Ende auf 0..1 normiert statt fest zugeordnet: eine Übung
+// wie der physiologische Seufzer atmet zweimal hintereinander ein und nur
+// einmal aus, da würde eine feste Skala oben aus dem Bild laufen.
+const BREATHING_OPEN_WIDTH = 8; // Breite einer offenen Phase (Dauer unbekannt)
+
+// Füllstand der Lunge nach jeder Phase: 0 = leer, 1 = voll. levels[0] ist der
+// Start (leer), levels[i+1] der Stand nach Phase i.
+//
+// Aufeinanderfolgende Phasen gleicher Richtung teilen sich den Weg, statt
+// jede für sich eine feste Stufe zu gehen. Der physiologische Seufzer atmet
+// zweimal hintereinander ein und einmal lang aus - würde jede Phase pauschal
+// eine Stufe zählen, käme das Ausatmen nur auf halbe Höhe zurück statt die
+// Lunge zu leeren, und die Linie liefe von Runde zu Runde weg.
+function breathingLevels(phases) {
+  const levels = [0];
+  let i = 0;
+  while (i < phases.length) {
+    const dir = phases[i].direction;
+    if (dir !== "in" && dir !== "out") {
+      levels.push(levels[levels.length - 1]); // Halten: Stand bleibt
+      i += 1;
+      continue;
+    }
+    let run = 0;
+    while (i + run < phases.length && phases[i + run].direction === dir) run += 1;
+    const start = levels[levels.length - 1];
+    const target = dir === "in" ? 1 : 0;
+    for (let j = 1; j <= run; j++) levels.push(start + (target - start) * (j / run));
+    i += run;
+  }
+  return levels;
+}
+
+function buildBreathingPath(phases) {
+  if (!phases.length) return [{ x: 0, y: 0 }, { x: 1, y: 0 }];
+  const widths = phases.map((p) =>
+    p.seconds == null ? BREATHING_OPEN_WIDTH : Math.max(0.5, toNum(p.seconds))
+  );
+  const total = widths.reduce((a, b) => a + b, 0) || 1;
+  const levels = breathingLevels(phases);
+  let x = 0;
+  const points = [{ x: 0, y: levels[0] }];
+  widths.forEach((w, i) => {
+    x += w / total;
+    points.push({ x, y: levels[i + 1] });
+  });
+  return points;
+}
+
+function BreathingSessionView({ session, onFinish, onCancel }) {
+  const { exercise } = session;
+  const phases = breathingPhases(exercise);
+  const totalRounds = breathingRounds(exercise);
+  const isCircle = exercise.display === "circle";
+
+  const [round, setRound] = useState(1);
+  const [phaseIndex, setPhaseIndex] = useState(0);
+  const [phaseStart, setPhaseStart] = useState(() => Date.now());
+  const [paused, setPaused] = useState(false);
+  const [pausedAt, setPausedAt] = useState(0);
+  const [now, setNow] = useState(() => Date.now());
+
+  const phase = phases[phaseIndex] || null;
+  const isOpen = phase ? phase.seconds == null : false;
+  const phaseSeconds = phase && !isOpen ? Math.max(0.1, toNum(phase.seconds)) : 0;
+  const elapsed = Math.max(0, ((paused ? pausedAt : now) - phaseStart) / 1000);
+  const progress = isOpen ? 0 : Math.min(1, elapsed / phaseSeconds);
+
+  // Offene Phasen (z.B. eine Wim-Hof-Retention) haben keine vorgegebene
+  // Dauer - wie lange sie tatsächlich gedauert haben, bevor "Weiter" getippt
+  // wurde, ist selbst die interessante Kennzahl. Der längste Wert der ganzen
+  // Sitzung wandert ins Protokoll ("maximale Atemanhaltedauer").
+  const maxOpenSecondsRef = useRef(0);
+
+  // Eine Referenz auf den aktuellen Zustand, damit die Animationsschleife
+  // nicht bei jedem Frame neu aufgebaut werden muss.
+  const advanceRef = useRef(null);
+  const goNext = () => {
+    if (isOpen) maxOpenSecondsRef.current = Math.max(maxOpenSecondsRef.current, elapsed);
+    const nextIndex = phaseIndex + 1;
+    if (nextIndex < phases.length) {
+      setPhaseIndex(nextIndex);
+      setPhaseStart(Date.now());
+      return;
+    }
+    if (round < totalRounds) {
+      setRound(round + 1);
+      setPhaseIndex(0);
+      setPhaseStart(Date.now());
+      return;
+    }
+    onFinish({ ...session, completedRounds: totalRounds, maxHoldSeconds: maxOpenSecondsRef.current });
+  };
+  advanceRef.current = goNext;
+
+  useEffect(() => {
+    if (paused) return;
+    let raf = null;
+    const loop = () => {
+      setNow(Date.now());
+      raf = requestAnimationFrame(loop);
+    };
+    raf = requestAnimationFrame(loop);
+    return () => { if (raf) cancelAnimationFrame(raf); };
+  }, [paused]);
+
+  // Der Phasenwechsel hängt am gemessenen Fortschritt, nicht an einem
+  // eigenen Timer: so bleibt die Anzeige und der Wechsel garantiert
+  // synchron, auch wenn ein Frame mal ausfällt.
+  useEffect(() => {
+    if (paused || isOpen || !phase) return;
+    if (elapsed >= phaseSeconds) advanceRef.current?.();
+  }, [now, paused, isOpen, phase, elapsed, phaseSeconds]);
+
+  const togglePause = () => {
+    if (paused) {
+      // Die im Pausenzustand vergangene Zeit darf nicht als Phasenfortschritt
+      // zählen, deshalb wandert der Startzeitpunkt mit.
+      setPhaseStart(Date.now() - (pausedAt - phaseStart));
+      setPaused(false);
+    } else {
+      setPausedAt(Date.now());
+      setPaused(true);
+    }
+  };
+
+  const path = useMemo(() => buildBreathingPath(phases), [phases]);
+  const levels = useMemo(() => breathingLevels(phases), [phases]);
+  if (!phase) return null;
+
+  const polyline = path.map((p) => `${(p.x * 100).toFixed(2)},${((1 - p.y) * 100).toFixed(2)}`).join(" ");
+  const from = path[phaseIndex] || path[0];
+  const to = path[phaseIndex + 1] || from;
+  const dotX = from.x + (to.x - from.x) * (isOpen ? 1 : progress);
+  const dotY = from.y + (to.y - from.y) * (isOpen ? 1 : progress);
+
+  // Der Kreis folgt demselben Füllstand wie die Linie - beide Darstellungen
+  // zeigen dieselbe Übung, nur anders gezeichnet.
+  const startLevel = levels[phaseIndex] ?? 0;
+  const endLevel = levels[phaseIndex + 1] ?? startLevel;
+  const level = startLevel + (endLevel - startLevel) * (isOpen ? 1 : progress);
+  const circleScale = 0.35 + 0.65 * level;
+
+  const remaining = isOpen ? elapsed : Math.max(0, phaseSeconds - elapsed);
+  const timeLabel = isOpen
+    ? `${Math.floor(remaining / 60)}:${String(Math.floor(remaining % 60)).padStart(2, "0")}`
+    : String(Math.ceil(remaining));
+
+  return (
+    <div className="breathing-overlay">
+      <div className="breathing-head">
+        <div style={{ minWidth: 0 }}>
+          <div className="breathing-title">{exercise.name}</div>
+          <div className="breathing-round">Runde {round} von {totalRounds}</div>
+        </div>
+        <button className="btn-icon" onClick={onCancel} title="Beenden">
+          <X size={18} />
+        </button>
+      </div>
+
+      <div className="breathing-stage">
+        {isCircle ? (
+          <div className="breathing-circle-wrap">
+            <span
+              className="breathing-circle"
+              style={{ transform: `scale(${circleScale.toFixed(3)})` }}
+            />
+            <span className="breathing-circle-ring" />
+          </div>
+        ) : (
+          // Der Punkt liegt als eigenes Element über der Grafik statt als
+          // SVG-Kreis darin: die Linie wird in die Breite gezogen
+          // (preserveAspectRatio "none"), ein Kreis im selben Koordinaten-
+          // system würde genauso mitgezogen und als Ei erscheinen.
+          <div className="breathing-line-wrap">
+            <svg className="breathing-line" viewBox="0 0 100 100" preserveAspectRatio="none">
+              <polyline points={polyline} fill="none" strokeWidth="1.5" vectorEffect="non-scaling-stroke" />
+            </svg>
+            <span
+              className="breathing-dot"
+              style={{ left: `${(dotX * 100).toFixed(2)}%`, top: `${((1 - dotY) * 100).toFixed(2)}%` }}
+            />
+          </div>
+        )}
+      </div>
+
+      <div className="breathing-phase">{phase.label || BREATHING_DIRECTIONS.find((d) => d.id === phase.direction)?.label}</div>
+      <div className="breathing-time">{timeLabel}</div>
+
+      <div className="breathing-controls">
+        {isOpen ? (
+          <button className="btn btn-primary btn-block" onClick={() => advanceRef.current?.()}>
+            Weiter <ChevronRight size={16} />
+          </button>
+        ) : (
+          <button className="btn btn-ghost btn-block" onClick={togglePause}>
+            {paused ? <><Play size={15} /> Fortsetzen</> : <><Timer size={15} /> Pause</>}
+          </button>
+        )}
+        <button
+          className="btn btn-ghost btn-sm btn-block"
+          style={{ marginTop: 8 }}
+          onClick={() => {
+            // Wird mitten in einer offenen Phase abgebrochen, zählt der bis
+            // dahin gehaltene Atem noch mit - das war schließlich der
+            // tatsächliche Versuch, auch wenn er nie per "Weiter" bestätigt wurde.
+            const finalMax = isOpen ? Math.max(maxOpenSecondsRef.current, elapsed) : maxOpenSecondsRef.current;
+            onFinish({ ...session, completedRounds: round - 1, maxHoldSeconds: finalMax });
+          }}
+        >
+          <Check size={14} /> Vorzeitig beenden & speichern
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// Editor für eine Atemübung: Phasen frei zusammenstellbar, jede mit Name,
+// Richtung und Dauer - oder "offen", wenn die Dauer nicht vorher feststeht.
+function BreathingEditor({ initial, onSave, onCancel }) {
+  const [name, setName] = useState(initial?.name || "");
+  const [rounds, setRounds] = useState(String(initial?.rounds ?? 4));
+  const [display, setDisplay] = useState(initial?.display || "line");
+  const [phases, setPhases] = useState(
+    initial?.phases?.length
+      ? initial.phases.map((p) => ({ ...p, seconds: p.seconds == null ? "" : String(p.seconds) }))
+      : [{ label: "Einatmen", direction: "in", seconds: "4" }]
+  );
+
+  const updatePhase = (idx, patch) =>
+    setPhases(phases.map((p, i) => (i === idx ? { ...p, ...patch } : p)));
+  const addPhase = () =>
+    setPhases([...phases, { label: "", direction: "hold", seconds: "4" }]);
+  const removePhase = (idx) => setPhases(phases.filter((_, i) => i !== idx));
+  const movePhase = (idx, delta) => {
+    const target = idx + delta;
+    if (target < 0 || target >= phases.length) return;
+    const next = [...phases];
+    [next[idx], next[target]] = [next[target], next[idx]];
+    setPhases(next);
+  };
+
+  const canSave = name.trim() && phases.length > 0;
+  const save = () => {
+    if (!canSave) return;
+    onSave({
+      id: initial?.id || uid(),
+      name: name.trim(),
+      display,
+      rounds: Math.max(1, toNum(rounds) || 1),
+      phases: phases.map((p) => ({
+        label: p.label.trim() || BREATHING_DIRECTIONS.find((d) => d.id === p.direction)?.label || "Phase",
+        direction: p.direction,
+        // Leeres Feld heißt bewusst "offen" - das ist die Wim-Hof-Phase,
+        // bei der man selbst weitertippt statt einem Countdown zu folgen.
+        seconds: String(p.seconds).trim() === "" ? null : Math.max(1, toNum(p.seconds) || 1),
+      })),
+    });
+  };
+
+  return (
+    <>
+      <label className="field-label">Name</label>
+      <input type="text" placeholder="z. B. Box Breathing" value={name} onChange={(e) => setName(e.target.value)} />
+
+      <label className="field-label" style={{ marginTop: 12 }}>Darstellung</label>
+      <div className="chip-row" style={{ marginTop: 4, marginBottom: 4 }}>
+        {BREATHING_DISPLAYS.map((d) => (
+          <span
+            key={d.id}
+            className={`chip chip-sm ${display === d.id ? "active" : ""}`}
+            onClick={() => setDisplay(d.id)}
+          >
+            {d.label}
+          </span>
+        ))}
+      </div>
+
+      <label className="field-label" style={{ marginTop: 8 }}>Phasen</label>
+      <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+        {phases.map((p, idx) => (
+          <div className="breathing-phase-row" key={idx}>
+            <div style={{ display: "flex", gap: 6, alignItems: "center", marginBottom: 6 }}>
+              <span className="set-num" style={{ minWidth: 16 }}>{idx + 1}</span>
+              <input
+                type="text"
+                placeholder="Bezeichnung (optional)"
+                value={p.label}
+                onChange={(e) => updatePhase(idx, { label: e.target.value })}
+                style={{ flex: 1 }}
+              />
+              <button className="btn-icon" title="Nach oben" onClick={() => movePhase(idx, -1)}>
+                <ChevronRight size={14} style={{ transform: "rotate(-90deg)" }} />
+              </button>
+              <button className="btn-icon" title="Nach unten" onClick={() => movePhase(idx, 1)}>
+                <ChevronRight size={14} style={{ transform: "rotate(90deg)" }} />
+              </button>
+              <button className="btn-icon" title="Phase entfernen" onClick={() => removePhase(idx)}>
+                <Trash2 size={14} />
+              </button>
+            </div>
+            <div className="chip-row" style={{ marginBottom: 6 }}>
+              {BREATHING_DIRECTIONS.map((d) => (
+                <span
+                  key={d.id}
+                  className={`chip chip-sm ${p.direction === d.id ? "active" : ""}`}
+                  onClick={() => updatePhase(idx, { direction: d.id })}
+                >
+                  {d.label}
+                </span>
+              ))}
+            </div>
+            <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+              <input
+                type="text"
+                inputMode="numeric"
+                placeholder="Sekunden"
+                value={p.seconds}
+                onChange={(e) => updatePhase(idx, { seconds: e.target.value })}
+                style={{ flex: 1 }}
+              />
+              <span
+                className={`chip chip-sm ${String(p.seconds).trim() === "" ? "active" : ""}`}
+                onClick={() => updatePhase(idx, { seconds: String(p.seconds).trim() === "" ? "4" : "" })}
+                title="Offene Phase: kein Countdown, du tippst selbst auf Weiter"
+              >
+                Offen
+              </span>
+            </div>
+          </div>
+        ))}
+      </div>
+      <button className="btn btn-ghost btn-sm btn-block" style={{ marginTop: 8 }} onClick={addPhase}>
+        <Plus size={14} /> Phase hinzufügen
+      </button>
+
+      <label className="field-label" style={{ marginTop: 12 }}>Runden</label>
+      <input type="text" inputMode="numeric" value={rounds} onChange={(e) => setRounds(e.target.value)} />
+
+      <div style={{ display: "flex", gap: 8, marginTop: 14 }}>
+        <button className="btn btn-ghost btn-block" onClick={onCancel}>
+          <X size={14} /> Abbrechen
+        </button>
+        <button className="btn btn-primary btn-block" disabled={!canSave} onClick={save}>
+          <Save size={14} /> Speichern
+        </button>
+      </div>
+    </>
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -8714,12 +10682,56 @@ function Modal({ title, onClose, children, width = 360 }) {
   );
 }
 
+// A tiny inline trend line - no axes, no tooltip, just the shape of the last
+// few weeks at a glance. Plain SVG rather than recharts: a chart this small
+// doesn't need an interactive library, and it stays legible even with only
+// one or two non-zero weeks in the series.
+function Sparkline({ values, width = 64, height = 24 }) {
+  const list = Array.isArray(values) ? values : [];
+  const max = Math.max(0, ...list);
+  if (list.length < 2 || max <= 0) {
+    return (
+      <svg width={width} height={height} className="sparkline sparkline-empty" aria-hidden="true">
+        <line x1={2} y1={height / 2} x2={width - 2} y2={height / 2} />
+      </svg>
+    );
+  }
+  const stepX = (width - 4) / (list.length - 1);
+  const points = list
+    .map((v, i) => {
+      const x = 2 + i * stepX;
+      const y = height - 2 - (Math.max(0, v) / max) * (height - 4);
+      return `${x.toFixed(1)},${y.toFixed(1)}`;
+    })
+    .join(" ");
+  return (
+    <svg width={width} height={height} className="sparkline" aria-hidden="true">
+      <polyline points={points} fill="none" strokeWidth={1.75} strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
+// change is a percentage (can be negative), or null when there is no
+// history yet to compare against - that is not the same as 0 % and reads
+// as a dash instead of a misleading "unchanged".
+function LoadChangeBadge({ change }) {
+  if (change === null) {
+    return <span className="load-change load-change-neutral">–</span>;
+  }
+  const rounded = Math.round(change);
+  const cls = rounded > 0 ? "load-change-up" : rounded < 0 ? "load-change-down" : "load-change-neutral";
+  const sign = rounded > 0 ? "+" : "";
+  return <span className={`load-change ${cls}`}>{sign}{rounded}%</span>;
+}
+
 // ---------------------------------------------------------------------------
 // Progress view
 // ---------------------------------------------------------------------------
 
 function ProgressView({
   logs,
+  plans = [],
+  folders = [],
   exBy,
   exercises,
   theme,
@@ -8729,13 +10741,17 @@ function ProgressView({
   exerciseEquipmentOverrides,
   onSetExerciseEquipment,
   timeBasedExercises,
+  gymIndependentExercises,
   onUpdateExerciseNote,
   onRenameExercise,
   onToggleTimeBased,
+  onToggleGymIndependent,
   gyms = [],
   onResumeLog,
   focusLogId,
   onFocusHandled,
+  breathingExercises = [],
+  breathingLogs = [],
 }) {
   const [progressTab, setProgressTab] = useState(focusLogId ? "history" : "stats");
   useEffect(() => {
@@ -8784,74 +10800,121 @@ function ProgressView({
       >
         <Calendar size={14} /> Verlauf
       </button>
+      <button
+        className={`sub-tab ${progressTab === "breathing" ? "active" : ""}`}
+        onClick={() => setProgressTab("breathing")}
+      >
+        <Wind size={14} /> Atem
+      </button>
     </div>
   );
 
   const stats = useMemo(() => calculateTrainingStats(logs, exBy, timeBasedExercises), [logs, exBy, timeBasedExercises]);
 
+  // Folders can be marked "ohne Statistik" (e.g. EMOM/Conditioning) so their
+  // sets don't dilute "Sätze pro Muskelgruppe" - that card is deliberately a
+  // pure hypertrophy-set counter. "Belastung pro Muskelgruppe" answers a
+  // different question (overall load / steady progression), and an EMOM set
+  // is real load regardless of training goal, so it keeps using every log.
+  // PRs, "Letztes Mal", the per-exercise charts and Verlauf are unaffected
+  // either way.
+  const excludedFolderIds = useMemo(
+    () => new Set(folders.filter((f) => f.statsExcluded).map((f) => f.id)),
+    [folders]
+  );
+  const excludedPlanIds = useMemo(
+    () => new Set(plans.filter((p) => p.folderId && excludedFolderIds.has(p.folderId)).map((p) => p.id)),
+    [plans, excludedFolderIds]
+  );
+  const hypertrophyLogs = useMemo(
+    () => (excludedPlanIds.size === 0 ? logs : logs.filter((l) => !l.planId || !excludedPlanIds.has(l.planId))),
+    [logs, excludedPlanIds]
+  );
+
   // Weekly set count per muscle group - the number that actually steers
   // hypertrophy training, and the one gap that showed up when looking at
-  // what the app already knows but never displays.
-  const weeklySetsByGroup = useMemo(() => {
-    const since = Date.now() - 7 * 86400000;
-    const counts = {};
-    // Subgroup counts nested per main group, so expanding "Beine" doesn't
-    // need a second pass over the logs - both levels come out of one walk.
-    const subCounts = {};
-    logs.forEach((l) => {
-      if (new Date(l.date).getTime() < since) return;
-      logEntries(l).forEach((e) => {
-        const ex = exBy[e.exerciseId];
-        if (!ex) return;
-        const done = entrySets(e).filter((x) => x.done && !x.warmup).length;
-        if (done === 0) return;
-        counts[ex.group] = (counts[ex.group] || 0) + done;
-        const subs = getExerciseSubgroups(ex, exerciseSubgroupOverrides);
-        if (!subCounts[ex.group]) subCounts[ex.group] = {};
-        // An exercise with no assigned subgroup, or more than one, still
-        // has to be accounted for somewhere so the breakdown's total keeps
-        // matching the group's total: unassigned work goes to "Sonstige",
-        // and an exercise tagged with several subgroups counts under each -
-        // it genuinely trained all of them, splitting the sets arbitrarily
-        // between them would just be inventing a number.
-        const keys = subs.length > 0 ? subs : ["sonstige"];
-        keys.forEach((key) => {
-          subCounts[ex.group][key] = (subCounts[ex.group][key] || 0) + done;
-        });
-      });
-    });
-    return MUSCLE_GROUPS
-      .map((g) => {
-        const subDefs = SUBGROUPS[g.id] || [];
-        const subs = subDefs
-          .map((sg) => ({ id: sg.id, label: sg.label, sets: subCounts[g.id]?.[sg.id] || 0 }))
-          .sort((a, b) => b.sets - a.sets);
-        // "Sonstige" always shows, even at zero - otherwise sets that were
-        // just never tagged with a subgroup would silently vanish from the
-        // breakdown instead of reading as "not categorised yet".
-        subs.push({ id: "sonstige", label: "Sonstige", sets: subCounts[g.id]?.sonstige || 0 });
-        return { id: g.id, label: g.label, sets: counts[g.id] || 0, subs };
-      })
-      .sort((a, b) => b.sets - a.sets);
-  }, [logs, exBy, exerciseSubgroupOverrides]);
-  const weeklySetsMax = Math.max(1, ...weeklySetsByGroup.map((g) => g.sets));
+  // what the app already knows but never displays. weekCount=21 so the
+  // "vor 20 Wochen" comparison chip below always has enough history.
+  const weeklySetSeries = useMemo(
+    () => getWeeklySetSeries(hypertrophyLogs, exBy, exerciseSubgroupOverrides, 21),
+    [hypertrophyLogs, exBy, exerciseSubgroupOverrides]
+  );
+  // Same shape as the old single-window version (g.sets/sg.sets) so the
+  // existing render code keeps working, plus .values for sparkline/badge/
+  // full chart.
+  const weeklySetsByGroup = useMemo(
+    () => weeklySetSeries.map((g) => ({
+      id: g.id,
+      label: g.label,
+      sets: g.current,
+      values: g.values,
+      subs: g.subs.map((sg) => ({ id: sg.id, label: sg.label, sets: sg.current, values: sg.values })),
+    })),
+    [weeklySetSeries]
+  );
   const weeklySetsTotal = weeklySetsByGroup.reduce((sum, g) => sum + g.sets, 0);
+  // Grenze für den Vergleichszeitraum, wie bei der Belastungs-Historie -
+  // verhindert, dass Wochen vor dem ersten (nicht ausgeschlossenen)
+  // Trainingseintrag als "0" in den Schnitt einfließen.
+  const setsHistoryWeeks = useMemo(() => logsHistoryWeeks(hypertrophyLogs), [hypertrophyLogs]);
+  const [setsCompareWeeks, setSetsCompareWeeks] = useState(1);
   // Collapsed by default - opening a group is a deliberate look at detail,
   // not something that should greet you on every visit to the tab.
   const [expandedGroups, setExpandedGroups] = useState({});
   const toggleGroupExpanded = (id) =>
     setExpandedGroups((s) => ({ ...s, [id]: !s[id] }));
+  // Tapping a muscle group opens a full chart (axes + tooltip) of its
+  // weekly set history - the sparkline next to it is deliberately minimal.
+  const [chartGroup, setChartGroup] = useState(null);
+  const chartColors = useChartColors(theme);
+  const chartGroupData = useMemo(() => {
+    if (!chartGroup) return [];
+    const weekCount = chartGroup.values.length;
+    return chartGroup.values.map((v, i) => {
+      const weeksAgo = weekCount - 1 - i;
+      const ts = Date.now() - weeksAgo * LOAD_WEEK_MS;
+      return { date: fmtDate(new Date(ts).toISOString()), sets: v };
+    });
+  }, [chartGroup]);
 
+  // Belastung pro Muskelgruppe - siehe getMuscleLoadSeries für die Herleitung
+  // der Formel. 12 Wochen Reichweite genügt für "Schnitt der letzten 8
+  // Wochen" als weitesten Vergleich, den die Chip-Reihe unten anbietet.
+  const muscleLoadSeries = useMemo(
+    () => getMuscleLoadSeries(logs, exBy, exerciseSubgroupOverrides, timeBasedExercises, 12),
+    [logs, exBy, exerciseSubgroupOverrides, timeBasedExercises]
+  );
+  // Grenze für den Vergleichszeitraum - siehe logsHistoryWeeks. Verhindert,
+  // dass Wochen vor dem allerersten Trainingseintrag als "0" mitgezählt werden.
+  const loadHistoryWeeks = useMemo(() => logsHistoryWeeks(logs), [logs]);
+  const [loadCompareWeeks, setLoadCompareWeeks] = useState(1);
+  const [expandedLoadGroups, setExpandedLoadGroups] = useState({});
+  const toggleLoadGroupExpanded = (id) =>
+    setExpandedLoadGroups((s) => ({ ...s, [id]: !s[id] }));
 
-  // Must come after every hook above: bailing out earlier meant this
-  // component ran fewer hooks whenever the history was empty, which React
-  // rejects outright. That happened the moment a workout was resumed - the
-  // log leaves the history for the duration and briefly leaves it empty.
-  if (logs.length === 0) {
+  // Both of these (like the empty-state bail below) must come after every
+  // hook above - React rejects a component that calls a different number
+  // of hooks between renders, which an earlier return would cause the
+  // moment progressTab actually changes.
+  if (progressTab === "breathing") {
     return (
-      <div className="empty-state">
-        <TrendingUp size={26} />
-        <p>Noch keine Trainingsdaten. Logge dein erstes Training, um Fortschritt zu sehen.</p>
+      <div>
+        {subTabs}
+        <BreathingProgressView breathingExercises={breathingExercises} breathingLogs={breathingLogs} />
+      </div>
+    );
+  }
+  if (logs.length === 0) {
+    // Die Reiterleiste bleibt sichtbar, auch ohne Trainingsdaten - sonst
+    // käme jemand, der ausschließlich Atemübungen protokolliert, nie an
+    // deren Statistik heran.
+    return (
+      <div>
+        {subTabs}
+        <div className="empty-state">
+          <TrendingUp size={26} />
+          <p>Noch keine Trainingsdaten. Logge dein erstes Training, um Fortschritt zu sehen.</p>
+        </div>
       </div>
     );
   }
@@ -8874,9 +10937,11 @@ function ProgressView({
           exerciseEquipmentOverrides={exerciseEquipmentOverrides}
           onSetExerciseEquipment={onSetExerciseEquipment}
           timeBasedExercises={timeBasedExercises}
+          gymIndependentExercises={gymIndependentExercises}
           onUpdateExerciseNote={onUpdateExerciseNote}
           onRenameExercise={onRenameExercise}
           onToggleTimeBased={onToggleTimeBased}
+          onToggleGymIndependent={onToggleGymIndependent}
         />
       </div>
     );
@@ -8917,29 +10982,107 @@ function ProgressView({
 
       <div className="card">
         <span className="plan-title">Sätze pro Muskelgruppe (7 Tage)</span>
+        <div className="chip-row" style={{ marginTop: 10, marginBottom: 4 }}>
+          {WEEK_COMPARE_OPTIONS.map(([weeks, label]) => (
+            <span
+              key={weeks}
+              className={`chip chip-sm ${setsCompareWeeks === weeks ? "active" : ""}`}
+              onClick={() => setSetsCompareWeeks(weeks)}
+            >
+              {label}
+            </span>
+          ))}
+        </div>
         {weeklySetsTotal === 0 ? (
           <div className="empty-state" style={{ padding: "14px 0" }}>
             Noch keine abgehakten Sätze in dieser Woche.
           </div>
         ) : (
-          <div style={{ marginTop: 12 }}>
+          <div style={{ marginTop: 8 }}>
             {weeklySetsByGroup.map((g) => {
               const isExpanded = !!expandedGroups[g.id];
-              const subMax = Math.max(1, ...g.subs.map((sg) => sg.sets));
+              const change = muscleLoadChange(g.values, setsCompareWeeks, setsHistoryWeeks);
               return (
                 <div key={g.id}>
                   <div
-                    className="muscle-week-row muscle-week-row-clickable"
-                    onClick={() => toggleGroupExpanded(g.id)}
+                    className="muscle-week-row-v2 muscle-week-row-v2-clickable"
+                    onClick={() => setChartGroup(g)}
+                    title="Tippen für den vollständigen Verlauf"
                   >
                     <span className="muscle-week-label">{g.label}</span>
-                    <span className="muscle-week-bar">
-                      <span
-                        className={`muscle-week-fill ${g.sets === 0 ? "is-empty" : ""}`}
-                        style={{ width: `${Math.round((g.sets / weeklySetsMax) * 100)}%` }}
-                      />
-                    </span>
+                    <Sparkline values={g.values} />
                     <span className="muscle-week-value">{g.sets}</span>
+                    <LoadChangeBadge change={change} />
+                    <span
+                      className="muscle-week-chevron"
+                      onClick={(e) => { e.stopPropagation(); toggleGroupExpanded(g.id); }}
+                    >
+                      {isExpanded ? (
+                        <ChevronDown size={14} color="var(--text-dim)" />
+                      ) : (
+                        <ChevronRight size={14} color="var(--text-dim)" />
+                      )}
+                    </span>
+                  </div>
+                  {isExpanded && (
+                    <div className="muscle-week-subs">
+                      {g.subs.map((sg) => (
+                        <div className="muscle-week-row-v2 muscle-week-row-v2-sub" key={sg.id}>
+                          <span className="muscle-week-label">{sg.label}</span>
+                          <Sparkline values={sg.values} />
+                          <span className="muscle-week-value">{sg.sets}</span>
+                          <LoadChangeBadge change={muscleLoadChange(sg.values, setsCompareWeeks, setsHistoryWeeks)} />
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+
+      <div className="card">
+        <span className="plan-title">Belastung pro Muskelgruppe</span>
+        <div className="chip-row" style={{ marginTop: 10, marginBottom: 4 }}>
+          <span
+            className={`chip chip-sm ${loadCompareWeeks === 1 ? "active" : ""}`}
+            onClick={() => setLoadCompareWeeks(1)}
+          >
+            vs. Vorwoche
+          </span>
+          <span
+            className={`chip chip-sm ${loadCompareWeeks === 4 ? "active" : ""}`}
+            onClick={() => setLoadCompareWeeks(4)}
+          >
+            vs. Schnitt 4 Wochen
+          </span>
+          <span
+            className={`chip chip-sm ${loadCompareWeeks === 8 ? "active" : ""}`}
+            onClick={() => setLoadCompareWeeks(8)}
+          >
+            vs. Schnitt 8 Wochen
+          </span>
+        </div>
+        {muscleLoadSeries.every((g) => g.current === 0) ? (
+          <div className="empty-state" style={{ padding: "14px 0" }}>
+            Noch keine Trainingsdaten für diese Auswertung.
+          </div>
+        ) : (
+          <div style={{ marginTop: 8 }}>
+            {muscleLoadSeries.map((g) => {
+              const isExpanded = !!expandedLoadGroups[g.id];
+              const change = muscleLoadChange(g.values, loadCompareWeeks, loadHistoryWeeks);
+              return (
+                <div key={g.id}>
+                  <div
+                    className="muscle-load-row muscle-load-row-clickable"
+                    onClick={() => toggleLoadGroupExpanded(g.id)}
+                  >
+                    <span className="muscle-week-label">{g.label}</span>
+                    <Sparkline values={g.values} />
+                    <LoadChangeBadge change={change} />
                     {isExpanded ? (
                       <ChevronDown size={14} color="var(--text-dim)" />
                     ) : (
@@ -8949,15 +11092,10 @@ function ProgressView({
                   {isExpanded && (
                     <div className="muscle-week-subs">
                       {g.subs.map((sg) => (
-                        <div className="muscle-week-row muscle-week-row-sub" key={sg.id}>
+                        <div className="muscle-load-row muscle-load-row-sub" key={sg.id}>
                           <span className="muscle-week-label">{sg.label}</span>
-                          <span className="muscle-week-bar">
-                            <span
-                              className={`muscle-week-fill ${sg.sets === 0 ? "is-empty" : ""}`}
-                              style={{ width: `${Math.round((sg.sets / subMax) * 100)}%` }}
-                            />
-                          </span>
-                          <span className="muscle-week-value">{sg.sets}</span>
+                          <Sparkline values={sg.values} />
+                          <LoadChangeBadge change={muscleLoadChange(sg.values, loadCompareWeeks, loadHistoryWeeks)} />
                         </div>
                       ))}
                     </div>
@@ -9029,6 +11167,7 @@ function ProgressView({
             isTimeBased={selectedIsTimeBased}
             theme={theme}
             gyms={gyms}
+            gymIndependent={isGymIndependent(selected, gymIndependentExercises)}
           />
         </>
       )}
@@ -9046,12 +11185,174 @@ function ProgressView({
           exerciseEquipmentOverrides={exerciseEquipmentOverrides}
           onSetExerciseEquipment={onSetExerciseEquipment}
           timeBasedExercises={timeBasedExercises}
+          gymIndependentExercises={gymIndependentExercises}
           onUpdateExerciseNote={onUpdateExerciseNote}
           onRenameExercise={onRenameExercise}
           onToggleTimeBased={onToggleTimeBased}
+          onToggleGymIndependent={onToggleGymIndependent}
           onClose={() => setSelectedExerciseId(null)}
         />
       )}
+
+      {chartGroup && (
+        <Modal title={`${chartGroup.label} – Sätze pro Woche`} onClose={() => setChartGroup(null)} width={420}>
+          <div style={{ height: 220 }}>
+            <ResponsiveContainer width="99%" height="100%" debounce={1}>
+              <LineChart data={chartGroupData} margin={{ top: 6, right: 4, left: 0, bottom: 0 }}>
+                <CartesianGrid strokeDasharray="3 3" stroke={chartColors.grid} vertical={false} />
+                <XAxis dataKey="date" stroke={chartColors.axis} fontSize={11} axisLine={false} tickLine={false} />
+                <YAxis
+                  stroke={chartColors.axis}
+                  fontSize={11}
+                  axisLine={false}
+                  tickLine={false}
+                  width={28}
+                  allowDecimals={false}
+                />
+                <Tooltip
+                  contentStyle={{
+                    background: chartColors.tooltipBg,
+                    border: `1px solid ${chartColors.tooltipBorder}`,
+                    borderRadius: 10,
+                    fontSize: 12,
+                  }}
+                  formatter={(v) => [`${v} Sätze`, ""]}
+                />
+                <Line
+                  type="monotone"
+                  dataKey="sets"
+                  stroke="#c1652e"
+                  strokeWidth={2.5}
+                  dot={{ r: 3, fill: "#c1652e", strokeWidth: 0 }}
+                  activeDot={{ r: 5 }}
+                />
+              </LineChart>
+            </ResponsiveContainer>
+          </div>
+        </Modal>
+      )}
+    </div>
+  );
+}
+
+// Fortschritt für Atemübungen - bewusst schlank gehalten (siehe Absprache):
+// Häufigkeit, Gesamtzeit, Konsistenz, Verteilung auf die einzelnen Übungen
+// und die längste gehaltene Atemanhaltedauer. Eine Statistik- und
+// Fortschrittsseite für einzelne Atemübungen kommt erst später dazu.
+function BreathingProgressView({ breathingExercises = [], breathingLogs = [] }) {
+  const weeklySeries = useMemo(() => getBreathingWeeklySeries(breathingLogs, 21), [breathingLogs]);
+  const historyWeeks = useMemo(() => logsHistoryWeeks(breathingLogs), [breathingLogs]);
+  const [compareWeeks, setCompareWeeks] = useState(1);
+  const change = muscleLoadChange(weeklySeries.values, compareWeeks, historyWeeks);
+  const streak = useMemo(() => breathingStreak(breathingLogs), [breathingLogs]);
+  const totalMinutesAll = useMemo(
+    () => Math.round(breathingLogs.reduce((sum, l) => sum + (l.durationSeconds || 0), 0) / 60),
+    [breathingLogs]
+  );
+  const totalMinutesWeek = useMemo(() => {
+    const since = Date.now() - 7 * 86400000;
+    return Math.round(
+      breathingLogs
+        .filter((l) => new Date(l.date).getTime() >= since)
+        .reduce((sum, l) => sum + (l.durationSeconds || 0), 0) / 60
+    );
+  }, [breathingLogs]);
+  const maxHold = useMemo(
+    () => breathingLogs.reduce((max, l) => (l.maxHoldSeconds > max ? l.maxHoldSeconds : max), 0),
+    [breathingLogs]
+  );
+  const breathingById = useMemo(
+    () => Object.fromEntries(breathingExercises.map((b) => [b.id, b])),
+    [breathingExercises]
+  );
+  // Nach Name gruppiert statt nur nach id, weil eine gelöschte Übung sonst
+  // unter mehreren Einträgen mit demselben (dann unbekannten) Namen verteilt
+  // würde, sobald mehrere ihrer Sitzungen zusammengezählt werden sollen.
+  const perExercise = useMemo(() => {
+    const counts = {};
+    breathingLogs.forEach((l) => {
+      const label = breathingById[l.breathingId]?.name || l.name || "Unbekannte Übung";
+      if (!counts[label]) counts[label] = { label, count: 0 };
+      counts[label].count += 1;
+    });
+    return Object.values(counts).sort((a, b) => b.count - a.count);
+  }, [breathingLogs, breathingById]);
+
+  if (breathingLogs.length === 0) {
+    return (
+      <div className="empty-state">
+        <Wind size={26} />
+        <p>Noch keine Atemübungs-Sitzungen. Starte deine erste über das Programm-Menü oder den Kalender.</p>
+      </div>
+    );
+  }
+
+  const fmtHold = (s) => {
+    const m = Math.floor(s / 60);
+    const sec = Math.round(s % 60);
+    return m > 0 ? `${m}:${String(sec).padStart(2, "0")} Min.` : `${sec} Sek.`;
+  };
+
+  return (
+    <div>
+      <div className="stats-grid stats-grid-secondary">
+        <div className="stat-item">
+          <span className="stat-value">{streak}</span>
+          <span className="stat-label">Tage Serie</span>
+        </div>
+        <div className="stat-item">
+          <span className="stat-value">{totalMinutesWeek}</span>
+          <span className="stat-label">Min. diese Woche</span>
+        </div>
+        <div className="stat-item">
+          <span className="stat-value">{totalMinutesAll}</span>
+          <span className="stat-label">Min. gesamt</span>
+        </div>
+      </div>
+
+      {maxHold > 0 && (
+        <div className="stat-hero">
+          <span className="stat-hero-label">Längste Atemanhaltedauer</span>
+          <span className="stat-hero-value">{fmtHold(maxHold)}</span>
+        </div>
+      )}
+
+      <div className="card">
+        <span className="plan-title">Sitzungen pro Woche</span>
+        <div className="chip-row" style={{ marginTop: 10, marginBottom: 4 }}>
+          {WEEK_COMPARE_OPTIONS.map(([weeks, label]) => (
+            <span
+              key={weeks}
+              className={`chip chip-sm ${compareWeeks === weeks ? "active" : ""}`}
+              onClick={() => setCompareWeeks(weeks)}
+            >
+              {label}
+            </span>
+          ))}
+        </div>
+        <div style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 10 }}>
+          <span className="muscle-week-label" style={{ minWidth: 66 }}>Sitzungen</span>
+          <span style={{ flex: 1 }}>
+            <Sparkline values={weeklySeries.values} />
+          </span>
+          <LoadChangeBadge change={change} />
+        </div>
+      </div>
+
+      <div className="card">
+        <span className="plan-title">Pro Übung</span>
+        <div style={{ marginTop: 10 }}>
+          {perExercise.map((ex) => (
+            <div
+              key={ex.label}
+              style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "7px 0" }}
+            >
+              <span className="muscle-week-label" style={{ whiteSpace: "normal" }}>{ex.label}</span>
+              <span className="muscle-week-value">{ex.count}×</span>
+            </div>
+          ))}
+        </div>
+      </div>
     </div>
   );
 }
@@ -9070,9 +11371,11 @@ function HistoryView({
   exerciseEquipmentOverrides,
   onSetExerciseEquipment,
   timeBasedExercises,
+  gymIndependentExercises,
   onUpdateExerciseNote,
   onRenameExercise,
   onToggleTimeBased,
+  onToggleGymIndependent,
   gyms = [],
   onResumeLog,
   focusLogId,
@@ -9220,9 +11523,11 @@ function HistoryView({
           exerciseEquipmentOverrides={exerciseEquipmentOverrides}
           onSetExerciseEquipment={onSetExerciseEquipment}
           timeBasedExercises={timeBasedExercises}
+          gymIndependentExercises={gymIndependentExercises}
           onUpdateExerciseNote={onUpdateExerciseNote}
           onRenameExercise={onRenameExercise}
           onToggleTimeBased={onToggleTimeBased}
+          onToggleGymIndependent={onToggleGymIndependent}
           onClose={() => setSelectedExerciseId(null)}
         />
       )}

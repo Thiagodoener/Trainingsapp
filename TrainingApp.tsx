@@ -30,6 +30,8 @@ import {
   Moon,
   Globe,
   Wind,
+  AlertTriangle,
+  Minus,
 } from "lucide-react";
 import {
   LineChart,
@@ -1146,6 +1148,104 @@ function muscleLoadChange(values, compareWeeks, maxLookback = Infinity) {
   const avg = reference.reduce((sum, v) => sum + (v || 0), 0) / reference.length;
   if (avg <= 0) return null;
   return ((current - avg) / avg) * 100;
+}
+
+// Schwellen für die Plateau-/Überlastungs-Erkennung in detectLoadSignal.
+// Fest codiert statt einstellbar - ein sinnvoller erster Standard ist
+// wichtiger als Konfigurierbarkeit, kann bei Bedarf später ein Setting werden.
+const PLATEAU_WEEKS = 3;        // so viele Wochen ohne neuen Höchstwert = Plateau
+const PLATEAU_TOLERANCE = 1.05; // 5% Toleranz, damit normales Schwanken nicht triggert
+const OVERLOAD_LOOKBACK = 4;    // Vergleichs-Schnitt aus den 4 Wochen davor
+const OVERLOAD_THRESHOLD = 1.4; // aktuelle Woche > 40% über diesem Schnitt = Sprung
+
+// Ermittelt aus einer Wochenreihe (alt -> neu, wie von getMuscleLoadSeries /
+// getExerciseLoadSeries geliefert) ein Warnsignal für die aktuelle Woche:
+// - "overload": Belastung gegenüber dem Schnitt der OVERLOAD_LOOKBACK Wochen
+//   davor sprunghaft gestiegen (akutes Risiko, hat deshalb Vorrang).
+// - "plateau": seit PLATEAU_WEEKS Wochen keine neue Bestleistung mehr.
+// historyWeeks (siehe logsHistoryWeeks) verhindert ein Urteil, wenn es dafür
+// schlicht noch nicht genug Trainingshistorie gibt. Null heißt "kein
+// auffälliges Signal" - das schließt "diese Woche noch nichts trainiert" und
+// "zu wenig Historie" mit ein.
+function detectLoadSignal(values, historyWeeks = Infinity) {
+  if (!Array.isArray(values) || values.length === 0) return null;
+  const current = values[values.length - 1] || 0;
+  if (current <= 0) return null;
+
+  const overloadSlice = values.slice(
+    Math.max(0, values.length - 1 - OVERLOAD_LOOKBACK),
+    values.length - 1
+  );
+  if (overloadSlice.length === OVERLOAD_LOOKBACK && historyWeeks >= OVERLOAD_LOOKBACK) {
+    const withData = overloadSlice.filter((v) => v > 0).length;
+    const baseline = overloadSlice.reduce((sum, v) => sum + (v || 0), 0) / overloadSlice.length;
+    if (withData >= 2 && baseline > 0 && current > baseline * OVERLOAD_THRESHOLD) {
+      return { type: "overload" };
+    }
+  }
+
+  const plateauSlice = values.slice(
+    Math.max(0, values.length - 1 - PLATEAU_WEEKS),
+    values.length - 1
+  );
+  if (
+    plateauSlice.length === PLATEAU_WEEKS &&
+    historyWeeks >= PLATEAU_WEEKS &&
+    plateauSlice.every((v) => v > 0)
+  ) {
+    const priorBest = Math.max(...plateauSlice);
+    if (current <= priorBest * PLATEAU_TOLERANCE) {
+      return { type: "plateau" };
+    }
+  }
+
+  return null;
+}
+
+// Wöchentliche relative Belastung einer einzelnen Übung - dieselbe
+// Bestwert-Normierung wie getMuscleLoadSeries (siehe dort für die Herleitung),
+// nur ohne die Aggregation über Muskelgruppen. Grundlage für
+// detectLoadSignal auf Einzelübungs-Ebene.
+function getExerciseLoadSeries(logs, exerciseId, timeBasedExercises, weekCount = 12, nowTs = Date.now()) {
+  const safeLogs = Array.isArray(logs) ? logs : [];
+  const isTime = isTimeBasedInLogs(safeLogs, exerciseId, timeBasedExercises);
+  const hasWeight = safeLogs.some((l) =>
+    logEntries(l).some(
+      (e) =>
+        e.exerciseId === exerciseId &&
+        entrySets(e).some((s) => s.done && !s.warmup && toNum(s.weight) > 0)
+    )
+  );
+  const mode = isTime ? "time" : hasWeight ? "weight" : "reps";
+
+  let best = 0;
+  safeLogs.forEach((l) => {
+    logEntries(l).forEach((e) => {
+      if (e.exerciseId !== exerciseId) return;
+      entrySets(e).forEach((s) => {
+        if (!s.done || s.warmup) return;
+        const work = loadSetWork(s, mode);
+        if (work > best) best = work;
+      });
+    });
+  });
+
+  const weeks = new Array(weekCount).fill(0);
+  if (best <= 0) return weeks;
+  safeLogs.forEach((l) => {
+    const ts = new Date(l?.date).getTime();
+    if (!Number.isFinite(ts)) return;
+    const idx = Math.max(0, Math.floor((nowTs - ts) / LOAD_WEEK_MS));
+    if (idx >= weekCount) return;
+    logEntries(l).forEach((e) => {
+      if (e.exerciseId !== exerciseId) return;
+      entrySets(e).forEach((s) => {
+        if (!s.done || s.warmup) return;
+        weeks[idx] += loadSetWork(s, mode) / best;
+      });
+    });
+  });
+  return [...weeks].reverse();
 }
 
 const EQUIPMENT_OPTIONS = ["Langhantel", "Kurzhanteln", "Kabelzug", "Maschine", "Kettlebell", "Gewichtsscheibe", "Körpergewicht", "Band", "Sonstiges"];
@@ -2334,6 +2434,12 @@ export default function TrainingApp() {
           font-size: 14px;
           font-weight: 600;
         }
+        .stat-search-head-title {
+          display: flex;
+          align-items: center;
+          gap: 6px;
+          min-width: 0;
+        }
 
         .stats-grid {
           display: grid;
@@ -2881,7 +2987,7 @@ export default function TrainingApp() {
         }
         .muscle-load-row {
           display: grid;
-          grid-template-columns: 80px 1fr 46px 14px;
+          grid-template-columns: 80px 1fr 46px 18px 14px;
           align-items: center;
           gap: 8px;
           margin-bottom: 9px;
@@ -2890,12 +2996,20 @@ export default function TrainingApp() {
           cursor: pointer;
         }
         .muscle-load-row-sub {
-          grid-template-columns: 80px 1fr 46px;
+          grid-template-columns: 80px 1fr 46px 18px;
           margin-bottom: 7px;
         }
         .muscle-load-row-sub .muscle-week-label {
           font-size: 12px;
         }
+        .load-signal {
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          width: 18px;
+        }
+        .load-signal-overload { color: var(--danger); }
+        .load-signal-plateau { color: var(--text-dim); }
         .sparkline {
           display: block;
           overflow: visible;
@@ -10724,6 +10838,32 @@ function LoadChangeBadge({ change }) {
   return <span className={`load-change ${cls}`}>{sign}{rounded}%</span>;
 }
 
+// Warn-Icon für detectLoadSignal: Plateau (Minus) oder Überlastung
+// (AlertTriangle). Rendert bei fehlendem Signal einen leeren Platzhalter
+// statt null, damit die Grid-Spalte in der Muskelgruppen-/Übungs-Zeile nicht
+// je nach Zustand springt.
+function LoadSignalBadge({ signal }) {
+  if (!signal) return <span className="load-signal load-signal-empty" aria-hidden="true" />;
+  if (signal.type === "overload") {
+    return (
+      <span
+        className="load-signal load-signal-overload"
+        title="Belastung deutlich über dem Schnitt der letzten Wochen – Risiko für Überlastung"
+      >
+        <AlertTriangle size={14} />
+      </span>
+    );
+  }
+  return (
+    <span
+      className="load-signal load-signal-plateau"
+      title="Seit mehreren Wochen keine Steigerung – möglicherweise ein Plateau"
+    >
+      <Minus size={14} />
+    </span>
+  );
+}
+
 // ---------------------------------------------------------------------------
 // Progress view
 // ---------------------------------------------------------------------------
@@ -10891,6 +11031,30 @@ function ProgressView({
   const [expandedLoadGroups, setExpandedLoadGroups] = useState({});
   const toggleLoadGroupExpanded = (id) =>
     setExpandedLoadGroups((s) => ({ ...s, [id]: !s[id] }));
+
+  // Plateau-/Überlastungs-Signal für die aktuell aufgeklappte Einzelübung
+  // (siehe detectLoadSignal). Eigene, übungsspezifische Historienlänge statt
+  // loadHistoryWeeks - eine erst kürzlich hinzugefügte Übung soll nicht an
+  // der Gesamthistorie aller Logs gemessen werden.
+  const selectedExerciseSeries = useMemo(
+    () => (selected ? getExerciseLoadSeries(logs, selected, timeBasedExercises, 12) : []),
+    [selected, logs, timeBasedExercises]
+  );
+  const selectedExerciseHistoryWeeks = useMemo(() => {
+    if (!selected) return 0;
+    let oldest = Infinity;
+    logs.forEach((l) => {
+      if (!logEntries(l).some((e) => e.exerciseId === selected)) return;
+      const ts = new Date(l?.date).getTime();
+      if (Number.isFinite(ts) && ts < oldest) oldest = ts;
+    });
+    if (!Number.isFinite(oldest)) return 0;
+    return Math.max(0, Math.floor((Date.now() - oldest) / LOAD_WEEK_MS));
+  }, [selected, logs]);
+  const selectedExerciseSignal = useMemo(
+    () => detectLoadSignal(selectedExerciseSeries, selectedExerciseHistoryWeeks),
+    [selectedExerciseSeries, selectedExerciseHistoryWeeks]
+  );
 
   // Both of these (like the empty-state bail below) must come after every
   // hook above - React rejects a component that calls a different number
@@ -11083,6 +11247,7 @@ function ProgressView({
                     <span className="muscle-week-label">{g.label}</span>
                     <Sparkline values={g.values} />
                     <LoadChangeBadge change={change} />
+                    <LoadSignalBadge signal={detectLoadSignal(g.values, loadHistoryWeeks)} />
                     {isExpanded ? (
                       <ChevronDown size={14} color="var(--text-dim)" />
                     ) : (
@@ -11096,6 +11261,7 @@ function ProgressView({
                           <span className="muscle-week-label">{sg.label}</span>
                           <Sparkline values={sg.values} />
                           <LoadChangeBadge change={muscleLoadChange(sg.values, loadCompareWeeks, loadHistoryWeeks)} />
+                          <LoadSignalBadge signal={detectLoadSignal(sg.values, loadHistoryWeeks)} />
                         </div>
                       ))}
                     </div>
@@ -11151,12 +11317,15 @@ function ProgressView({
       {selected && (
         <>
           <div className="stat-search-head">
-            <span
-              className="ex-name ex-name-clickable"
-              onClick={() => setSelectedExerciseId(selected)}
-            >
-              {exBy[selected]?.name}
-            </span>
+            <div className="stat-search-head-title">
+              <span
+                className="ex-name ex-name-clickable"
+                onClick={() => setSelectedExerciseId(selected)}
+              >
+                {exBy[selected]?.name}
+              </span>
+              <LoadSignalBadge signal={selectedExerciseSignal} />
+            </div>
             <button className="btn-icon" onClick={() => setSelected("")} title="Schließen">
               <X size={15} />
             </button>

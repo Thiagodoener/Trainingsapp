@@ -181,6 +181,15 @@ function breathingTotalSeconds(exercise) {
   return phases.reduce((sum, p) => sum + toNum(p.seconds), 0) * breathingRounds(exercise);
 }
 
+// Kurzer Doppelpuls für ein normales Phasenende - spürbar auch wenn das
+// Handy auf dem Tisch liegt statt in der Hand, aber bewusst dezenter als das
+// Pausenzeit-Ende (siehe scheduleRestBeep-Umfeld), weil eine Atemübung ein
+// ruhiger Kontext ist.
+const BREATHING_PHASE_VIBRATION = [50, 40, 50];
+// Deutlich kräftiger - markiert das tatsächliche Ende der ganzen Übung
+// (letzte Phase der letzten Runde), nicht nur einen Phasenwechsel.
+const BREATHING_EXERCISE_END_VIBRATION = [150, 100, 150, 100, 150];
+
 // Exercise pickers only render a screenful at a time. Drawing all ~150
 // rows made every tap inside the picker redraw the entire list, which
 // felt like a stutter on each "Add".
@@ -10532,6 +10541,15 @@ function BreathingSessionView({ session, onFinish, onCancel }) {
   const goNext = () => {
     if (isOpen) maxOpenSecondsRef.current = Math.max(maxOpenSecondsRef.current, elapsed);
     const nextIndex = phaseIndex + 1;
+    // Vibriert für die Phase, die hier gerade endet - egal ob per Timer oder
+    // per Tippen auf "Weiter" bei einer offenen Phase. Die letzte Phase der
+    // letzten Runde bekommt das kräftigere Ende-Muster statt des normalen.
+    if (phase?.vibrate && navigator.vibrate) {
+      const isExerciseEnd = nextIndex >= phases.length && round >= totalRounds;
+      try {
+        navigator.vibrate(isExerciseEnd ? BREATHING_EXERCISE_END_VIBRATION : BREATHING_PHASE_VIBRATION);
+      } catch (_) {}
+    }
     if (nextIndex < phases.length) {
       setPhaseIndex(nextIndex);
       setPhaseStart(Date.now());
@@ -10675,16 +10693,21 @@ function BreathingEditor({ initial, onSave, onCancel }) {
   const [name, setName] = useState(initial?.name || "");
   const [rounds, setRounds] = useState(String(initial?.rounds ?? 4));
   const [display, setDisplay] = useState(initial?.display || "line");
+  // Zentraler Schalter: setzt beim Umschalten alle Phasen auf denselben Wert
+  // (siehe toggleVibrateDefault) und ist der Startwert für neu hinzugefügte
+  // Phasen - ist aber selbst kein "lebender" Aggregatwert, der bei
+  // individuellem Abweichen einzelner Phasen automatisch nachgeführt wird.
+  const [vibrateOnPhaseEnd, setVibrateOnPhaseEnd] = useState(!!initial?.vibrateOnPhaseEnd);
   const [phases, setPhases] = useState(
     initial?.phases?.length
-      ? initial.phases.map((p) => ({ ...p, seconds: p.seconds == null ? "" : String(p.seconds) }))
-      : [{ label: "Einatmen", direction: "in", seconds: "4" }]
+      ? initial.phases.map((p) => ({ ...p, seconds: p.seconds == null ? "" : String(p.seconds), vibrate: !!p.vibrate }))
+      : [{ label: "Einatmen", direction: "in", seconds: "4", vibrate: false }]
   );
 
   const updatePhase = (idx, patch) =>
     setPhases(phases.map((p, i) => (i === idx ? { ...p, ...patch } : p)));
   const addPhase = () =>
-    setPhases([...phases, { label: "", direction: "hold", seconds: "4" }]);
+    setPhases([...phases, { label: "", direction: "hold", seconds: "4", vibrate: vibrateOnPhaseEnd }]);
   const removePhase = (idx) => setPhases(phases.filter((_, i) => i !== idx));
   const movePhase = (idx, delta) => {
     const target = idx + delta;
@@ -10692,6 +10715,11 @@ function BreathingEditor({ initial, onSave, onCancel }) {
     const next = [...phases];
     [next[idx], next[target]] = [next[target], next[idx]];
     setPhases(next);
+  };
+  const toggleVibrateDefault = () => {
+    const next = !vibrateOnPhaseEnd;
+    setVibrateOnPhaseEnd(next);
+    setPhases(phases.map((p) => ({ ...p, vibrate: next })));
   };
 
   const canSave = name.trim() && phases.length > 0;
@@ -10702,12 +10730,16 @@ function BreathingEditor({ initial, onSave, onCancel }) {
       name: name.trim(),
       display,
       rounds: Math.max(1, toNum(rounds) || 1),
+      vibrateOnPhaseEnd,
       phases: phases.map((p) => ({
         label: p.label.trim() || BREATHING_DIRECTIONS.find((d) => d.id === p.direction)?.label || "Phase",
         direction: p.direction,
         // Leeres Feld heißt bewusst "offen" - das ist die Wim-Hof-Phase,
         // bei der man selbst weitertippt statt einem Countdown zu folgen.
+        // Kommazahlen sind erlaubt (toNum wandelt "4,5" -> 4.5), die
+        // Session-Anzeige läuft ohnehin über echte Sekundenbruchteile.
         seconds: String(p.seconds).trim() === "" ? null : Math.max(1, toNum(p.seconds) || 1),
+        vibrate: !!p.vibrate,
       })),
     });
   };
@@ -10729,6 +10761,11 @@ function BreathingEditor({ initial, onSave, onCancel }) {
           </span>
         ))}
       </div>
+
+      <label className="time-toggle-row" style={{ marginTop: 12 }}>
+        <input type="checkbox" checked={vibrateOnPhaseEnd} onChange={toggleVibrateDefault} />
+        Vibration am Ende jeder Phase
+      </label>
 
       <label className="field-label" style={{ marginTop: 8 }}>Phasen</label>
       <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
@@ -10767,7 +10804,7 @@ function BreathingEditor({ initial, onSave, onCancel }) {
             <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
               <input
                 type="text"
-                inputMode="numeric"
+                inputMode="decimal"
                 placeholder="Sekunden"
                 value={p.seconds}
                 onChange={(e) => updatePhase(idx, { seconds: e.target.value })}
@@ -10781,6 +10818,14 @@ function BreathingEditor({ initial, onSave, onCancel }) {
                 Offen
               </span>
             </div>
+            <label className="time-toggle-row" style={{ marginTop: 6, fontSize: 12.5 }}>
+              <input
+                type="checkbox"
+                checked={!!p.vibrate}
+                onChange={(e) => updatePhase(idx, { vibrate: e.target.checked })}
+              />
+              Vibration am Ende dieser Phase
+            </label>
           </div>
         ))}
       </div>

@@ -2027,8 +2027,10 @@ export default function TrainingApp() {
   };
   // Abschluss einer Atem-Sitzung: Protokoll schreiben und - wie beim
   // Training - einen offenen Kalendereintrag von heute automatisch abhaken,
-  // egal ob die Übung über den Kalender oder direkt gestartet wurde. Ohne
-  // das stünde dieselbe Sitzung zweimal im Tag.
+  // egal ob die Übung über den Kalender oder direkt gestartet wurde. Gibt es
+  // für heute noch gar keinen Eintrag (Übung direkt gestartet, nie geplant),
+  // wird einer nachgetragen - schon als erledigt markiert, damit der Tag im
+  // Kalender die tatsächlich absolvierte Übung zeigt statt leer zu bleiben.
   const finishBreathingSession = async ({ exercise, calendarEntryId, startedAt, completedRounds, maxHoldSeconds }) => {
     const log = {
       id: uid(),
@@ -2057,6 +2059,11 @@ export default function TrainingApp() {
       await persistCalendarEntries(
         calendarEntries.map((ce) => (ce.id === match.id ? { ...ce, logId: log.id } : ce))
       );
+    } else {
+      await persistCalendarEntries([
+        ...calendarEntries,
+        { id: uid(), date: dayKey, type: "breathing", breathingId: exercise.id, logId: log.id },
+      ]);
     }
     setBreathingSession(null);
   };
@@ -4293,7 +4300,10 @@ export default function TrainingApp() {
               }
               // If this workout was started from a calendar entry, link the
               // finished log back to it so the calendar can show results
-              // instead of a "start workout" prompt from now on.
+              // instead of a "start workout" prompt from now on. If none
+              // exists for today (started directly, never planned), one is
+              // added instead - already marked done, so the calendar shows
+              // what was actually trained instead of staying empty.
               if (cleaned.entries.length > 0) {
                 // Either the entry the workout was started from, or - if it
                 // was started from the plans page - an open entry for the
@@ -4316,6 +4326,11 @@ export default function TrainingApp() {
                       ce.id === match.id ? { ...ce, logId: cleaned.id } : ce
                     )
                   );
+                } else {
+                  await persistCalendarEntries([
+                    ...calendarEntries,
+                    { id: uid(), date: dayKey, type: "workout", planId: cleaned.planId ?? null, logId: cleaned.id },
+                  ]);
                 }
               }
               // Targets always track what was actually achieved last time,

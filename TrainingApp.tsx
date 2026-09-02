@@ -903,9 +903,11 @@ function getTimePR(logs, exerciseId) {
 
 const LOAD_WEEK_MS = 7 * 86400000;
 
-// Gemeinsame Vergleichszeiträume für "Sätze pro Muskelgruppe" und die
-// Prozent-Ansicht der Übungs-Charts - an einer Stelle definiert, damit beide
-// immer dieselben Chips zeigen.
+// Vergleichszeiträume für die Prozent-Ansicht der Übungs-Charts
+// (buildPercentSeries - Punkt-zu-Punkt-Vergleich "Wert vor X Wochen") und die
+// Atemübungs-Statistik. Bewusst getrennt von MUSCLE_COMPARE_OPTIONS unten:
+// buildPercentSeries kann mit "Gesamt" (Infinity) nichts anfangen, weil es
+// nach einem konkreten Zeitpunkt in der Vergangenheit sucht, keinem Schnitt.
 const WEEK_COMPARE_OPTIONS = [
   [1, "Vorwoche"],
   [3, "3 Wochen"],
@@ -913,6 +915,39 @@ const WEEK_COMPARE_OPTIONS = [
   [10, "10 Wochen"],
   [20, "20 Wochen"],
 ];
+
+// Zeiträume für "Sätze pro Muskelgruppe" und "Belastung pro Muskelgruppe"
+// (Karten + ihre Modal-Charts) - an einer Stelle definiert, damit beide
+// Karten und beide Modals immer dieselben Chips zeigen. Angelehnt an
+// gängige Periodisierungs-Zeiträume (Mesozyklus/Quartal/Halbjahr/Jahr) statt
+// beliebiger Wochenzahlen. muscleLoadChange kommt mit Infinity ("Gesamt")
+// klar, weil es dort um einen Schnitt über die verfügbare Historie geht,
+// nicht um einen Punkt-zu-Punkt-Vergleich zu einem festen Zeitpunkt.
+const MUSCLE_COMPARE_OPTIONS = [
+  [1, "Vorwoche"],
+  [4, "4 Wochen"],
+  [12, "12 Wochen"],
+  [26, "26 Wochen"],
+  [52, "52 Wochen"],
+  [Infinity, "Gesamt"],
+];
+
+// Wie viele Wochen die Rohdaten-Serie mindestens abdecken muss, damit jeder
+// MUSCLE_COMPARE_OPTIONS-Zeitraum (inkl. "Gesamt") daraus bedient werden
+// kann - die längste feste Option (52) als Minimum, plus die komplette
+// echte Historie, falls die länger zurückreicht.
+function muscleSeriesWeekCount(historyWeeks) {
+  return Math.max(52, historyWeeks + 1);
+}
+
+// Schneidet eine Wochenreihe (alt -> neu) auf die letzten `weeks` Wochen
+// zurecht - für den Zoom im Modal-Chart. Infinity ("Gesamt") liefert die
+// komplette Reihe unverändert.
+function zoomWeekSeries(values, weeks) {
+  if (!Array.isArray(values)) return [];
+  if (!Number.isFinite(weeks)) return values;
+  return values.slice(Math.max(0, values.length - weeks));
+}
 
 // Womit die "Arbeit" eines Satzes gemessen wird, hängt an der Übungsart.
 // Bei Übungen ohne Gewicht wären Kilogramm immer 0, bei Zeit-Übungen gibt es
@@ -11023,13 +11058,18 @@ function ProgressView({
     [logs, excludedPlanIds]
   );
 
+  // Grenze für den Vergleichszeitraum - siehe logsHistoryWeeks. Muss vor der
+  // Serie berechnet werden, weil deren Länge jetzt von der echten Historie
+  // abhängt (wegen "Gesamt" in MUSCLE_COMPARE_OPTIONS).
+  const setsHistoryWeeks = useMemo(() => logsHistoryWeeks(hypertrophyLogs), [hypertrophyLogs]);
   // Weekly set count per muscle group - the number that actually steers
   // hypertrophy training, and the one gap that showed up when looking at
-  // what the app already knows but never displays. weekCount=21 so the
-  // "vor 20 Wochen" comparison chip below always has enough history.
+  // what the app already knows but never displays. weekCount deckt jetzt
+  // immer mindestens 52 Wochen ab, plus die komplette echte Historie für
+  // die Chip-Option "Gesamt".
   const weeklySetSeries = useMemo(
-    () => getWeeklySetSeries(hypertrophyLogs, exBy, exerciseSubgroupOverrides, 21),
-    [hypertrophyLogs, exBy, exerciseSubgroupOverrides]
+    () => getWeeklySetSeries(hypertrophyLogs, exBy, exerciseSubgroupOverrides, muscleSeriesWeekCount(setsHistoryWeeks)),
+    [hypertrophyLogs, exBy, exerciseSubgroupOverrides, setsHistoryWeeks]
   );
   // Same shape as the old single-window version (g.sets/sg.sets) so the
   // existing render code keeps working, plus .values for sparkline/badge/
@@ -11045,10 +11085,6 @@ function ProgressView({
     [weeklySetSeries]
   );
   const weeklySetsTotal = weeklySetsByGroup.reduce((sum, g) => sum + g.sets, 0);
-  // Grenze für den Vergleichszeitraum, wie bei der Belastungs-Historie -
-  // verhindert, dass Wochen vor dem ersten (nicht ausgeschlossenen)
-  // Trainingseintrag als "0" in den Schnitt einfließen.
-  const setsHistoryWeeks = useMemo(() => logsHistoryWeeks(hypertrophyLogs), [hypertrophyLogs]);
   const [setsCompareWeeks, setSetsCompareWeeks] = useState(1);
   // Collapsed by default - opening a group is a deliberate look at detail,
   // not something that should greet you on every visit to the tab.
@@ -11057,32 +11093,50 @@ function ProgressView({
     setExpandedGroups((s) => ({ ...s, [id]: !s[id] }));
   // Tapping a muscle group opens a full chart (axes + tooltip) of its
   // weekly set history - the sparkline next to it is deliberately minimal.
+  // Gezoomt auf setsCompareWeeks (dieselbe Auswahl wie die Chips über der
+  // Liste), damit das Chart genau den Zeitraum zeigt, der gerade ausgewählt
+  // ist - inklusive "Gesamt", das die komplette Reihe unverändert liefert.
   const [chartGroup, setChartGroup] = useState(null);
   const chartColors = useChartColors(theme);
   const chartGroupData = useMemo(() => {
     if (!chartGroup) return [];
-    const weekCount = chartGroup.values.length;
-    return chartGroup.values.map((v, i) => {
+    const zoomed = zoomWeekSeries(chartGroup.values, setsCompareWeeks);
+    const weekCount = zoomed.length;
+    return zoomed.map((v, i) => {
       const weeksAgo = weekCount - 1 - i;
       const ts = Date.now() - weeksAgo * LOAD_WEEK_MS;
       return { date: fmtDate(new Date(ts).toISOString()), sets: v };
     });
-  }, [chartGroup]);
+  }, [chartGroup, setsCompareWeeks]);
 
-  // Belastung pro Muskelgruppe - siehe getMuscleLoadSeries für die Herleitung
-  // der Formel. 12 Wochen Reichweite genügt für "Schnitt der letzten 8
-  // Wochen" als weitesten Vergleich, den die Chip-Reihe unten anbietet.
-  const muscleLoadSeries = useMemo(
-    () => getMuscleLoadSeries(logs, exBy, exerciseSubgroupOverrides, timeBasedExercises, 12),
-    [logs, exBy, exerciseSubgroupOverrides, timeBasedExercises]
-  );
-  // Grenze für den Vergleichszeitraum - siehe logsHistoryWeeks. Verhindert,
-  // dass Wochen vor dem allerersten Trainingseintrag als "0" mitgezählt werden.
+  // Grenze für den Vergleichszeitraum - siehe logsHistoryWeeks. Muss vor der
+  // Serie berechnet werden, weil deren Länge jetzt von der echten Historie
+  // abhängt (wegen "Gesamt" in MUSCLE_COMPARE_OPTIONS).
   const loadHistoryWeeks = useMemo(() => logsHistoryWeeks(logs), [logs]);
+  // Belastung pro Muskelgruppe - siehe getMuscleLoadSeries für die Herleitung
+  // der Formel. weekCount deckt jetzt immer mindestens 52 Wochen ab, plus die
+  // komplette echte Historie für die Chip-Option "Gesamt".
+  const muscleLoadSeries = useMemo(
+    () => getMuscleLoadSeries(logs, exBy, exerciseSubgroupOverrides, timeBasedExercises, muscleSeriesWeekCount(loadHistoryWeeks)),
+    [logs, exBy, exerciseSubgroupOverrides, timeBasedExercises, loadHistoryWeeks]
+  );
   const [loadCompareWeeks, setLoadCompareWeeks] = useState(1);
   const [expandedLoadGroups, setExpandedLoadGroups] = useState({});
   const toggleLoadGroupExpanded = (id) =>
     setExpandedLoadGroups((s) => ({ ...s, [id]: !s[id] }));
+  // Wie bei "Sätze pro Muskelgruppe": Tippen auf eine Zeile öffnet ein
+  // Vollbild-Chart, gezoomt auf loadCompareWeeks.
+  const [loadChartGroup, setLoadChartGroup] = useState(null);
+  const loadChartGroupData = useMemo(() => {
+    if (!loadChartGroup) return [];
+    const zoomed = zoomWeekSeries(loadChartGroup.values, loadCompareWeeks);
+    const weekCount = zoomed.length;
+    return zoomed.map((v, i) => {
+      const weeksAgo = weekCount - 1 - i;
+      const ts = Date.now() - weeksAgo * LOAD_WEEK_MS;
+      return { date: fmtDate(new Date(ts).toISOString()), load: v };
+    });
+  }, [loadChartGroup, loadCompareWeeks]);
 
   // Plateau-/Überlastungs-Signal für die aktuell aufgeklappte Einzelübung
   // (siehe detectLoadSignal). Eigene, übungsspezifische Historienlänge statt
@@ -11199,7 +11253,7 @@ function ProgressView({
       <div className="card">
         <span className="plan-title">Sätze pro Muskelgruppe (7 Tage)</span>
         <div className="chip-row" style={{ marginTop: 10, marginBottom: 4 }}>
-          {WEEK_COMPARE_OPTIONS.map(([weeks, label]) => (
+          {MUSCLE_COMPARE_OPTIONS.map(([weeks, label]) => (
             <span
               key={weeks}
               className={`chip chip-sm ${setsCompareWeeks === weeks ? "active" : ""}`}
@@ -11223,7 +11277,7 @@ function ProgressView({
                   <div
                     className="muscle-week-row-v2 muscle-week-row-v2-clickable"
                     onClick={() => setChartGroup(g)}
-                    title="Tippen für den vollständigen Verlauf"
+                    title="Tippen für den Verlauf im gewählten Zeitraum"
                   >
                     <span className="muscle-week-label">{g.label}</span>
                     <Sparkline values={g.values} />
@@ -11262,24 +11316,15 @@ function ProgressView({
       <div className="card">
         <span className="plan-title">Belastung pro Muskelgruppe</span>
         <div className="chip-row" style={{ marginTop: 10, marginBottom: 4 }}>
-          <span
-            className={`chip chip-sm ${loadCompareWeeks === 1 ? "active" : ""}`}
-            onClick={() => setLoadCompareWeeks(1)}
-          >
-            vs. Vorwoche
-          </span>
-          <span
-            className={`chip chip-sm ${loadCompareWeeks === 4 ? "active" : ""}`}
-            onClick={() => setLoadCompareWeeks(4)}
-          >
-            vs. Schnitt 4 Wochen
-          </span>
-          <span
-            className={`chip chip-sm ${loadCompareWeeks === 8 ? "active" : ""}`}
-            onClick={() => setLoadCompareWeeks(8)}
-          >
-            vs. Schnitt 8 Wochen
-          </span>
+          {MUSCLE_COMPARE_OPTIONS.map(([weeks, label]) => (
+            <span
+              key={weeks}
+              className={`chip chip-sm ${loadCompareWeeks === weeks ? "active" : ""}`}
+              onClick={() => setLoadCompareWeeks(weeks)}
+            >
+              {label}
+            </span>
+          ))}
         </div>
         {muscleLoadSeries.every((g) => g.current === 0) ? (
           <div className="empty-state" style={{ padding: "14px 0" }}>
@@ -11294,17 +11339,23 @@ function ProgressView({
                 <div key={g.id}>
                   <div
                     className="muscle-load-row muscle-load-row-clickable"
-                    onClick={() => toggleLoadGroupExpanded(g.id)}
+                    onClick={() => setLoadChartGroup(g)}
+                    title="Tippen für den Verlauf im gewählten Zeitraum"
                   >
                     <span className="muscle-week-label">{g.label}</span>
                     <Sparkline values={g.values} />
                     <LoadChangeBadge change={change} />
                     <LoadSignalBadge signal={detectLoadSignal(g.values, loadHistoryWeeks)} />
-                    {isExpanded ? (
-                      <ChevronDown size={14} color="var(--text-dim)" />
-                    ) : (
-                      <ChevronRight size={14} color="var(--text-dim)" />
-                    )}
+                    <span
+                      className="muscle-week-chevron"
+                      onClick={(e) => { e.stopPropagation(); toggleLoadGroupExpanded(g.id); }}
+                    >
+                      {isExpanded ? (
+                        <ChevronDown size={14} color="var(--text-dim)" />
+                      ) : (
+                        <ChevronRight size={14} color="var(--text-dim)" />
+                      )}
+                    </span>
                   </div>
                   {isExpanded && (
                     <div className="muscle-week-subs">
@@ -11417,11 +11468,29 @@ function ProgressView({
 
       {chartGroup && (
         <Modal title={`${chartGroup.label} – Sätze pro Woche`} onClose={() => setChartGroup(null)} width={420}>
+          <div className="chip-row" style={{ marginTop: 0, marginBottom: 10 }}>
+            {MUSCLE_COMPARE_OPTIONS.map(([weeks, label]) => (
+              <span
+                key={weeks}
+                className={`chip chip-sm ${setsCompareWeeks === weeks ? "active" : ""}`}
+                onClick={() => setSetsCompareWeeks(weeks)}
+              >
+                {label}
+              </span>
+            ))}
+          </div>
           <div style={{ height: 220 }}>
             <ResponsiveContainer width="99%" height="100%" debounce={1}>
               <LineChart data={chartGroupData} margin={{ top: 6, right: 4, left: 0, bottom: 0 }}>
                 <CartesianGrid strokeDasharray="3 3" stroke={chartColors.grid} vertical={false} />
-                <XAxis dataKey="date" stroke={chartColors.axis} fontSize={11} axisLine={false} tickLine={false} />
+                <XAxis
+                  dataKey="date"
+                  stroke={chartColors.axis}
+                  fontSize={11}
+                  axisLine={false}
+                  tickLine={false}
+                  interval={Math.max(0, Math.ceil(chartGroupData.length / 6) - 1)}
+                />
                 <YAxis
                   stroke={chartColors.axis}
                   fontSize={11}
@@ -11442,6 +11511,61 @@ function ProgressView({
                 <Line
                   type="monotone"
                   dataKey="sets"
+                  stroke="#c1652e"
+                  strokeWidth={2.5}
+                  dot={{ r: 3, fill: "#c1652e", strokeWidth: 0 }}
+                  activeDot={{ r: 5 }}
+                />
+              </LineChart>
+            </ResponsiveContainer>
+          </div>
+        </Modal>
+      )}
+
+      {loadChartGroup && (
+        <Modal title={`${loadChartGroup.label} – Belastung pro Woche`} onClose={() => setLoadChartGroup(null)} width={420}>
+          <div className="chip-row" style={{ marginTop: 0, marginBottom: 10 }}>
+            {MUSCLE_COMPARE_OPTIONS.map(([weeks, label]) => (
+              <span
+                key={weeks}
+                className={`chip chip-sm ${loadCompareWeeks === weeks ? "active" : ""}`}
+                onClick={() => setLoadCompareWeeks(weeks)}
+              >
+                {label}
+              </span>
+            ))}
+          </div>
+          <div style={{ height: 220 }}>
+            <ResponsiveContainer width="99%" height="100%" debounce={1}>
+              <LineChart data={loadChartGroupData} margin={{ top: 6, right: 4, left: 0, bottom: 0 }}>
+                <CartesianGrid strokeDasharray="3 3" stroke={chartColors.grid} vertical={false} />
+                <XAxis
+                  dataKey="date"
+                  stroke={chartColors.axis}
+                  fontSize={11}
+                  axisLine={false}
+                  tickLine={false}
+                  interval={Math.max(0, Math.ceil(loadChartGroupData.length / 6) - 1)}
+                />
+                <YAxis
+                  stroke={chartColors.axis}
+                  fontSize={11}
+                  axisLine={false}
+                  tickLine={false}
+                  width={28}
+                />
+                <Tooltip
+                  contentStyle={{
+                    background: chartColors.tooltipBg,
+                    border: `1px solid ${chartColors.tooltipBorder}`,
+                    borderRadius: 10,
+                    fontSize: 12,
+                  }}
+                  formatter={(v) => [`${(Math.round(v * 100) / 100).toLocaleString("de-DE")}`, "Relative Belastung"]}
+                />
+                <Line
+                  type="monotone"
+                  dataKey="load"
                   stroke="#c1652e"
                   strokeWidth={2.5}
                   dot={{ r: 3, fill: "#c1652e", strokeWidth: 0 }}

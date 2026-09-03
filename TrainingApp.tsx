@@ -10119,6 +10119,11 @@ function ExerciseCharts({ logs, exerciseId, isTimeBased, theme, gyms = [], gymIn
         { key: "best1RM", title: "Geschätztes 1RM", color: "#9a7bc4" },
         { key: "totalVolume", title: "Gesamtvolumen pro Training", color: "#e8c547" },
         { key: "maxWeight", title: "Maximalgewicht pro Training (kg)", color: "#c1652e" },
+        // Reps werden bei Gewichtsübungen längst pro Satz erfasst (siehe
+        // workingSets oben), standen als eigene Karte bisher aber nur bei
+        // reinen Bodyweight-Übungen zur Verfügung.
+        { key: "maxReps", title: "Maximale Wdh. pro Satz", color: "#6ea866" },
+        { key: "totalReps", title: "Gesamte Wdh. pro Training", color: "#4f8049" },
       ];
 
   return chartData.length === 0 ? (

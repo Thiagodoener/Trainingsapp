@@ -6114,9 +6114,6 @@ function NewExerciseForm({ exercises, onAddCustom, onSetExerciseSubgroups, onDon
       {(SUBGROUPS[newGroup] || []).length > 0 && (
         <div style={{ marginTop: 10 }}>
           <label className="field-label">Untergruppen (optional)</label>
-          <p style={{ fontSize: 12.5, color: "var(--text-dim)", margin: "2px 0 6px" }}>
-            Mehrere möglich – die Übung erscheint dann bei jedem dieser Filter.
-          </p>
           <div className="chip-row" style={{ marginTop: 6 }}>
             <span
               className={`chip chip-sm ${newSubgroups.length === 0 ? "active" : ""}`}

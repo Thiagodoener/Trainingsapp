@@ -5058,19 +5058,6 @@ function DashboardView({
     };
   }, [lastLog, logs, exBy, timeBasedExercises, gymIndependentExercises]);
 
-  // Konstanz: wie viel von dem, was in den letzten 8 Wochen im Kalender
-  // stand, auch tatsächlich absolviert wurde. Termine in der Zukunft zählen
-  // nicht mit - die konnten noch gar nicht erledigt werden.
-  const adherence = useMemo(() => {
-    const since = toDateKey(new Date(Date.now() - 56 * 86400000));
-    const past = calendarEntries.filter(
-      (ce) => ce.type !== "action" && ce.date >= since && ce.date <= todayKey
-    );
-    if (past.length === 0) return null;
-    const done = past.filter((ce) => ce.logId).length;
-    return { done, total: past.length, percent: Math.round((done / past.length) * 100) };
-  }, [calendarEntries, todayKey]);
-
   const planById = useMemo(() => {
     const map = {};
     plans.forEach((p) => { map[p.id] = p; });
@@ -5189,19 +5176,6 @@ function DashboardView({
         </>
       )}
 
-      {adherence && (
-        <>
-          <span className="stat-section-title">Konstanz (8 Wochen)</span>
-          <div className="card">
-            <div style={{ display: "flex", alignItems: "baseline", gap: 8 }}>
-              <span className="stat-value">{adherence.percent} %</span>
-              <span style={{ color: "var(--text-dim)", fontSize: 13 }}>
-                {adherence.done} von {adherence.total} geplanten Einheiten
-              </span>
-            </div>
-          </div>
-        </>
-      )}
     </div>
   );
 }

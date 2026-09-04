@@ -273,6 +273,45 @@ const toNum = (value) => {
 const logEntries = (log) => (Array.isArray(log?.entries) ? log.entries.filter(Boolean) : []);
 const entrySets = (entry) => (Array.isArray(entry?.sets) ? entry.sets.filter(Boolean) : []);
 
+// Ein Satz ist entweder Aufwaermsatz, Dropsatz oder ein normaler Arbeitssatz.
+// Aufwaermsaetze bleiben ueberall aus der Statistik ausgeschlossen; ein
+// Dropsatz ist echtes Arbeitsvolumen und zaehlt wie jeder andere Satz mit.
+const SET_KINDS = [
+  ["normal", "Normaler Satz"],
+  ["warmup", "Aufwärmsatz"],
+  ["dropset", "Dropsatz"],
+];
+const setKind = (set) => (set?.warmup ? "warmup" : set?.dropset ? "dropset" : "normal");
+const setKindFlags = (kind) => ({ warmup: kind === "warmup", dropset: kind === "dropset" });
+
+// Ein Dropsatz haengt immer an dem Arbeitssatz davor - ohne einen solchen
+// (erster Satz der Uebung, oder davor stehen nur Aufwaermsaetze) ergibt er
+// keinen Sinn und wird gar nicht erst angeboten.
+function canBeDropset(sets, idx) {
+  for (let i = idx - 1; i >= 0; i -= 1) {
+    if (!sets[i]?.warmup) return true;
+  }
+  return false;
+}
+
+// Sichtbare Nummer je Satz: Aufwaermsaetze zeigen "W", Dropsaetze haengen als
+// Unternummer am vorangehenden Arbeitssatz (3.1, 3.2), alles andere zaehlt
+// hoch. Dropsaetze bekommen also keine eigene Satznummer.
+function setNumberLabels(sets) {
+  let working = 0;
+  let drops = 0;
+  return (Array.isArray(sets) ? sets : []).map((s) => {
+    if (s?.warmup) return "W";
+    if (s?.dropset && working > 0) {
+      drops += 1;
+      return `${working}.${drops}`;
+    }
+    working += 1;
+    drops = 0;
+    return String(working);
+  });
+}
+
 // A subgroup assignment always comes from the override map (works the same
 // way for built-in and custom exercises), so there is exactly one place
 // that decides an exercise's subgroup.
@@ -3020,16 +3059,114 @@ export default function TrainingApp() {
 
         .set-row {
           display: grid;
-          grid-template-columns: 24px 28px 24px minmax(0, 1fr) minmax(0, 1fr);
+          grid-template-columns: 38px minmax(0, 1fr) minmax(0, 1fr) 30px;
+          gap: 6px;
+          align-items: center;
         }
         /* Band exercises drop the weight column entirely - the reps then get
            the space instead of sitting next to an input that only ever holds 0. */
         .set-row.set-row-noweight {
-          grid-template-columns: 24px 28px 24px minmax(0, 1fr);
-          gap: 6px;
-          align-items: center;
-          margin-bottom: 6px;
+          grid-template-columns: 38px minmax(0, 1fr) 30px;
         }
+        /* Jede Zeile liegt in einem eigenen Kaestchen, damit das Satzart-Menue
+           darunter aufklappen kann, ohne von der naechsten Zeile verdeckt zu
+           werden. */
+        .set-line {
+          position: relative;
+        }
+        .set-line + .set-line {
+          margin-top: 5px;
+        }
+        /* Dropsaetze ruecken eng an den Satz, zu dem sie gehoeren. */
+        .set-line.is-drop {
+          margin-top: 2px;
+        }
+        .set-line.menu-open {
+          z-index: 40;
+        }
+        .set-row.is-drop {
+          padding-left: 20px;
+        }
+        /* Die kleine Ecke zeigt, an welchem Arbeitssatz der Drop haengt. */
+        .set-row.is-drop::after {
+          content: "";
+          position: absolute;
+          left: 5px;
+          top: -4px;
+          bottom: 50%;
+          width: 9px;
+          border-left: 1.5px solid var(--border-strong);
+          border-bottom: 1.5px solid var(--border-strong);
+          border-bottom-left-radius: 6px;
+          pointer-events: none;
+        }
+        /* Satznummer = Schalter fuer die Satzart. */
+        .set-kind {
+          height: 30px;
+          border-radius: 8px;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          cursor: pointer;
+          font-family: 'Inter', sans-serif;
+          font-variant-numeric: tabular-nums;
+          font-size: 14px;
+          font-weight: 500;
+          color: var(--text-faint);
+          user-select: none;
+        }
+        .set-kind.is-warmup {
+          font-style: italic;
+        }
+        .set-kind.is-dropset {
+          font-size: 12.5px;
+          color: var(--text-dim);
+        }
+        .set-kind.is-open {
+          background: var(--fill);
+          color: var(--text);
+        }
+        .set-kind-menu {
+          position: absolute;
+          left: 0;
+          top: calc(100% + 4px);
+          z-index: 50;
+          width: 190px;
+          background: var(--elevated);
+          border: 1px solid var(--border);
+          border-radius: 12px;
+          box-shadow: 0 10px 30px rgba(0,0,0,calc(var(--shadow-strength) * 2));
+          padding: 6px;
+          animation: modal-fade 140ms ease-out both;
+        }
+        .set-kind-menu.drop-up {
+          top: auto;
+          bottom: calc(100% + 4px);
+        }
+        .set-kind-option {
+          display: flex;
+          align-items: center;
+          gap: 9px;
+          width: 100%;
+          text-align: left;
+          padding: 11px 10px;
+          border: none;
+          border-radius: 9px;
+          background: transparent;
+          color: var(--text);
+          font-family: 'Inter', sans-serif;
+          font-size: 15px;
+          cursor: pointer;
+        }
+        .set-kind-dot {
+          width: 7px;
+          height: 7px;
+          border-radius: 50%;
+          flex-shrink: 0;
+          background: var(--text-faint);
+        }
+        .set-kind-option.is-warmup .set-kind-dot { background: var(--brass); }
+        .set-kind-option.is-dropset .set-kind-dot { background: var(--accent); }
         .entry-card {
           transition: box-shadow 160ms ease;
         }
@@ -3076,29 +3213,8 @@ export default function TrainingApp() {
              pan would fight the gesture. */
           touch-action: pan-y;
         }
-        .warmup-toggle {
-          width: 22px;
-          height: 22px;
-          border-radius: 7px;
-          border: none;
-          background: var(--fill);
-          color: var(--text-dim);
-          display: flex;
-          align-items: center;
-          justify-content: center;
-          cursor: pointer;
-          font-family: 'Inter', sans-serif;
-          font-size: 11px;
-          font-weight: 600;
-          flex-shrink: 0;
-        }
-        .warmup-toggle.active {
-          background: var(--brass);
-          border-color: var(--brass);
-          color: var(--bg);
-        }
         .set-row.is-warmup input,
-        .set-row.is-warmup .set-num {
+        .set-row.is-warmup .set-kind {
           opacity: 0.6;
         }
         .program-switcher {
@@ -3672,6 +3788,7 @@ export default function TrainingApp() {
         .set-check {
           width: 24px;
           height: 24px;
+          justify-self: end;
           border-radius: 999px;
           border: 1.5px solid var(--border-strong);
           background: transparent;
@@ -3960,7 +4077,7 @@ export default function TrainingApp() {
         .confirm-actions{display:flex;gap:8px}
         .confirm-actions .btn{background:transparent}
         .toast-snackbar{position:fixed;left:50%;bottom:82px;transform:translateX(-50%);z-index:35;background:var(--surface-alt);border:1px solid var(--border);border-radius:12px;padding:10px 14px;box-shadow:0 8px 30px rgba(0,0,0,.3);font-size:13px;max-width:90%;text-align:center}
-        @media (max-width:600px){.content{padding-left:18px!important;padding-right:18px!important}.card{padding:14px 0!important}.set-row{grid-template-columns:24px 28px 28px 1fr 1fr!important;gap:5px!important}.set-row input{min-width:0}.meta-grid{grid-template-columns:1fr 1fr}.stat-value{font-size:28px}.bottom-dock{left:0!important;right:0!important;bottom:0!important}.nav-btn{min-width:0!important}.plan-title{font-size:19px}.btn{min-height:44px}.btn-icon{min-width:36px;min-height:36px}}
+        @media (max-width:600px){.content{padding-left:18px!important;padding-right:18px!important}.card{padding:14px 0!important}.set-row{grid-template-columns:36px 1fr 1fr 30px!important;gap:6px!important}.set-row.set-row-noweight{grid-template-columns:36px 1fr 30px!important}.set-row input{min-width:0}.meta-grid{grid-template-columns:1fr 1fr}.stat-value{font-size:28px}.bottom-dock{left:0!important;right:0!important;bottom:0!important}.nav-btn{min-width:0!important}.plan-title{font-size:19px}.btn{min-height:44px}.btn-icon{min-width:36px;min-height:36px}}
         @media (prefers-reduced-motion:reduce){*{scroll-behavior:auto!important;transition:none!important;animation:none!important}}
 
         .cal-header {
@@ -5809,7 +5926,11 @@ function CalendarView({
                         const ex = exBy[e.exerciseId];
                         const workingSets = entrySets(e).filter((s) => !s.warmup);
                         const summary = workingSets
-                          .map((s) => (s.duration ? `${s.duration}s` : `${s.weight || 0}kg×${s.reps || 0}`))
+                          .map(
+                            (s) =>
+                              (s.dropset ? "↓" : "") +
+                              (s.duration ? `${s.duration}s` : `${s.weight || 0}kg×${s.reps || 0}`)
+                          )
                           .join(", ");
                         return (
                           <div key={e.exerciseId} className="history-exercise-row">
@@ -7164,6 +7285,7 @@ function ExerciseDetailSheet({
                     {t.sets.map((s, i) => (
                       <span key={i} className="tag" style={s.warmup ? { opacity: 0.6 } : undefined}>
                         {s.warmup ? "W · " : ""}
+                        {s.dropset ? "↓ " : ""}
                         {timeBasedExercises[exercise.id]
                           ? `${s.duration || 0}s`
                           : `${s.weight || 0}kg×${s.reps || 0}`}
@@ -9040,6 +9162,10 @@ function LogView({
   const restBeepScheduledRef = useRef(hasPendingRestBeep());
   const [openNotes, setOpenNotes] = useState({});
   const [openRestPicker, setOpenRestPicker] = useState({});
+  // Offenes Satzart-Menue: { exerciseId, idx } oder null.
+  const [openSetKind, setOpenSetKind] = useState(null);
+  const [setKindMenuUp, setSetKindMenuUp] = useState(false);
+  const setKindMenuRef = useMenuFlip(openSetKind, setSetKindMenuUp);
   const [elapsedSec, setElapsedSec] = useState(0);
   const [selectedExerciseId, setSelectedExerciseId] = useState(null);
   const selectedExercise = exercises.find((e) => e.id === selectedExerciseId) || null;
@@ -9145,6 +9271,20 @@ function LogView({
     document.addEventListener("mousedown", closeOnOutsideClick);
     return () => document.removeEventListener("mousedown", closeOnOutsideClick);
   }, [openRestPicker]);
+
+  // Satzart-Menue: schliesst beim Tippen irgendwo daneben. Der oeffnende
+  // Klick trifft die Nummer selbst, kann also nicht sein eigenes Menue
+  // wieder zuklappen.
+  useEffect(() => {
+    if (!openSetKind) return;
+    const closeOnOutsideClick = (e) => {
+      if (!e.target.closest?.(".set-kind") && !e.target.closest?.(".set-kind-menu")) {
+        setOpenSetKind(null);
+      }
+    };
+    document.addEventListener("click", closeOnOutsideClick);
+    return () => document.removeEventListener("click", closeOnOutsideClick);
+  }, [openSetKind]);
 
   useEffect(() => {
     if (!settingsMenuOpen) return;
@@ -9302,7 +9442,14 @@ function LogView({
     return setIdx >= (entries[idx]?.sets?.length || 1) - 1;
   };
 
+  // Folgt auf diesen Satz direkt ein Dropsatz? Dann faellt die Pause weg.
+  const nextSetIsDrop = (exerciseId, setIdx) => {
+    const sets = (session?.entries || []).find((e) => e.exerciseId === exerciseId)?.sets;
+    return !!(Array.isArray(sets) && sets[setIdx + 1]?.dropset);
+  };
+
   const restAfter = (exerciseId, setIdx) => {
+    if (nextSetIsDrop(exerciseId, setIdx)) return 0;
     const roundRest = toNum(session?.roundRestSeconds);
     if (finishesRound(exerciseId, setIdx)) return Math.max(0, roundRest);
     return Math.max(0, getRestDurationFor(exerciseId));
@@ -9553,6 +9700,7 @@ function LogView({
     });
   };
   const removeSet = (exerciseId, idx) => {
+    setOpenSetKind(null);
     onUpdateSession({
       ...session,
       entries: session.entries.map((e) =>
@@ -9649,7 +9797,9 @@ function LogView({
     // the linked exercises — the timer only starts once the last exercise
     // in the group has a set checked off.
     const isLastInGroup = supersetGroupInfo[exerciseId]?.isLast ?? true;
-    if (nowDone && isLastInGroup) startRest(exerciseId);
+    // Vor einem Dropsatz gibt es keine Pause: das Gewicht wird sofort
+    // reduziert und weitergemacht - genau das macht ihn zum Dropsatz.
+    if (nowDone && isLastInGroup && !nextSetIsDrop(exerciseId, idx)) startRest(exerciseId);
   };
   const toggleEntryNotes = (exerciseId) => {
     setOpenNotes((s) => ({ ...s, [exerciseId]: !s[exerciseId] }));
@@ -9666,14 +9816,16 @@ function LogView({
     // what the note said on a given day.
     onUpdateExerciseNote?.(exerciseId, notes);
   };
-  const toggleWarmup = (exerciseId, idx) => {
+  const changeSetKind = (exerciseId, idx, kind) => {
+    setOpenSetKind(null);
+    setSetKindMenuUp(false);
     onUpdateSession({
       ...session,
       entries: session.entries.map((e) =>
         e.exerciseId === exerciseId
           ? {
               ...e,
-              sets: e.sets.map((s, i) => (i === idx ? { ...s, warmup: !s.warmup } : s)),
+              sets: e.sets.map((s, i) => (i === idx ? { ...s, ...setKindFlags(kind) } : s)),
             }
           : e
       ),
@@ -9879,6 +10031,9 @@ function LogView({
 
       {session.entries.map((entry, entryIndex) => {
         const ex = exBy[entry.exerciseId];
+        // Nummern haengen an der ganzen Satzliste (Dropsaetze bekommen eine
+        // Unternummer), nicht an der Position der einzelnen Zeile.
+        const setLabels = setNumberLabels(entry.sets);
         // Band work has no meaningful weight, so the field would only ever
         // hold a 0 and take space away from the reps.
         const usesWeight =
@@ -10175,9 +10330,12 @@ function LogView({
                 Letztes Mal ({fmtDate(history.lastDate)}):{" "}
                 {history.lastSets
                   .map((s) =>
-                    isTimeBased
+                    // Ohne Pfeil saehe ein Dropsatz in dieser Zeile wie ein
+                    // Leistungseinbruch aus.
+                    (s.dropset ? "↓" : "") +
+                    (isTimeBased
                       ? `${s.duration || 0}s`
-                      : `${s.weight || 0}kg×${s.reps || 0}`
+                      : `${s.weight || 0}kg×${s.reps || 0}`)
                   )
                   .join(", ")}
               </div>
@@ -10204,39 +10362,43 @@ function LogView({
                   style={{ marginBottom: 4 }}
                 >
                   <span />
-                  <span />
-                  <span />
                   <label className="field-label" style={{ margin: 0 }}>
                     {isTimeBased ? "Sek." : "Wdh."}
                   </label>
                   {usesWeight && (
                     <label className="field-label" style={{ margin: 0 }}>kg</label>
                   )}
+                  <span />
                 </div>
                 {entry.sets.map((s, idx) => {
                   const pr = setPrIndex === idx ? setPrList : null;
+                  const kind = setKind(s);
+                  const kindMenuOpen =
+                    openSetKind?.exerciseId === entry.exerciseId && openSetKind?.idx === idx;
                   return (
-                    <React.Fragment key={idx}>
+                    <div
+                      className={`set-line ${s.dropset ? "is-drop" : ""} ${kindMenuOpen ? "menu-open" : ""}`}
+                      key={idx}
+                    >
                     <SwipeableSetRow
-                      className={`set-row ${s.done ? "is-done" : ""} ${s.warmup ? "is-warmup" : ""} ${usesWeight ? "" : "set-row-noweight"}`}
+                      className={`set-row ${s.done ? "is-done" : ""} ${s.warmup ? "is-warmup" : ""} ${s.dropset ? "is-drop" : ""} ${usesWeight ? "" : "set-row-noweight"}`}
                       onSwipeRight={() => toggleSetDone(entry.exerciseId, idx)}
                       onSwipeLeft={() => removeSet(entry.exerciseId, idx)}
                     >
-                      <span className="set-num">{idx + 1}</span>
+                      {/* Die Nummer ist zugleich der Schalter fuer die Satzart:
+                          antippen, dann Aufwaermsatz oder Dropsatz waehlen. */}
                       <span
-                        className={`set-check ${s.done ? "checked" : ""}`}
-                        onClick={() => toggleSetDone(entry.exerciseId, idx)}
-                        role="checkbox"
-                        aria-checked={!!s.done}
+                        className={`set-kind is-${kind} ${kindMenuOpen ? "is-open" : ""}`}
+                        onClick={() => {
+                          setSetKindMenuUp(false);
+                          setOpenSetKind(
+                            kindMenuOpen ? null : { exerciseId: entry.exerciseId, idx }
+                          );
+                        }}
+                        role="button"
+                        title="Satzart wählen"
                       >
-                        {s.done && <Check size={13} color="white" />}
-                      </span>
-                      <span
-                        className={`warmup-toggle ${s.warmup ? "active" : ""}`}
-                        onClick={() => toggleWarmup(entry.exerciseId, idx)}
-                        title="Als Aufwärmsatz markieren"
-                      >
-                        W
+                        {setLabels[idx]}
                       </span>
                       {/* One column, two meanings: a timed set has no rep
                           count, so the seconds take that slot instead of
@@ -10295,8 +10457,37 @@ function LogView({
                           </span>
                         )}
                       </div>
+                      <span
+                        className={`set-check ${s.done ? "checked" : ""}`}
+                        onClick={() => toggleSetDone(entry.exerciseId, idx)}
+                        role="checkbox"
+                        aria-checked={!!s.done}
+                      >
+                        {s.done && <Check size={13} color="white" />}
+                      </span>
                     </SwipeableSetRow>
-                    </React.Fragment>
+                    {kindMenuOpen && (
+                      <div
+                        className={`set-kind-menu ${setKindMenuUp ? "drop-up" : ""}`}
+                        ref={setKindMenuRef}
+                      >
+                        {SET_KINDS.filter(
+                          ([id]) =>
+                            id !== kind &&
+                            (id !== "dropset" || canBeDropset(entry.sets, idx))
+                        ).map(([id, label]) => (
+                          <button
+                            key={id}
+                            className={`set-kind-option is-${id}`}
+                            onClick={() => changeSetKind(entry.exerciseId, idx, id)}
+                          >
+                            <span className="set-kind-dot" />
+                            {label}
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                    </div>
                   );
                 })}
               </div>
@@ -12473,10 +12664,12 @@ function HistoryView({
                   const isTimeBased = isTimeBasedInLogs(logs, entry.exerciseId, timeBasedExercises);
                   const workingSets = entrySets(entry).filter((s) => !s.warmup);
                   const summary = workingSets
-                    .map((s) =>
-                      isTimeBased && s.duration
-                        ? `${s.duration}s`
-                        : `${s.weight || 0}kg×${s.reps || 0}`
+                    .map(
+                      (s) =>
+                        (s.dropset ? "↓" : "") +
+                        (isTimeBased && s.duration
+                          ? `${s.duration}s`
+                          : `${s.weight || 0}kg×${s.reps || 0}`)
                     )
                     .join(", ");
                   return (

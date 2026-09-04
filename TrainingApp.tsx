@@ -5058,6 +5058,58 @@ function DashboardView({
     };
   }, [lastLog, logs, exBy, timeBasedExercises, gymIndependentExercises]);
 
+  // Die vier Kacheln. Alle rollierend über 7 Tage gerechnet, wie überall
+  // sonst in der App - nicht nach Kalenderwoche, damit "diese Woche" am
+  // Montagmorgen nicht plötzlich bei null steht.
+  const tiles = useMemo(() => {
+    const now = Date.now();
+    const week = 7 * 86400000;
+    const workingSets = (l) =>
+      logEntries(l).flatMap((e) => entrySets(e).filter((s) => s.done && !s.warmup));
+    const volumeOf = (list) =>
+      list.reduce((sum, l) => sum + workingSets(l).reduce(
+        (s, x) => s + toNum(x.weight) * toNum(x.reps), 0
+      ), 0);
+
+    const inWindow = (from, to) => logs.filter((l) => {
+      const ts = new Date(l?.date).getTime();
+      return Number.isFinite(ts) && ts > now - from && ts <= now - to;
+    });
+    const thisWeek = inWindow(week, 0);
+    const lastWeek = inWindow(2 * week, week);
+    const volume = volumeOf(thisWeek);
+    const prevVolume = volumeOf(lastWeek);
+    const volumeChange = prevVolume > 0 ? Math.round(((volume - prevVolume) / prevVolume) * 100) : null;
+
+    const daysSince = lastLog
+      ? Math.max(0, Math.floor((now - new Date(lastLog.date).getTime()) / 86400000))
+      : null;
+
+    // Vernachlässigt heißt: seit dem längsten Zeitraum nicht mehr trainiert.
+    // Nie trainierte Gruppen bleiben außen vor - die sind meist Absicht und
+    // stünden sonst dauerhaft und unveränderlich in der Kachel.
+    const lastByGroup = {};
+    logs.forEach((l) => {
+      const ts = new Date(l?.date).getTime();
+      if (!Number.isFinite(ts)) return;
+      logEntries(l).forEach((e) => {
+        const g = exBy[e.exerciseId]?.group;
+        if (!g) return;
+        if (!entrySets(e).some((s) => s.done && !s.warmup)) return;
+        if (!lastByGroup[g] || ts > lastByGroup[g]) lastByGroup[g] = ts;
+      });
+    });
+    let neglected = null;
+    Object.entries(lastByGroup).forEach(([g, ts]) => {
+      const days = Math.floor((now - ts) / 86400000);
+      if (!neglected || days > neglected.days) {
+        neglected = { days, label: MUSCLE_GROUPS.find((m) => m.id === g)?.label || g };
+      }
+    });
+
+    return { daysSince, count: thisWeek.length, volume, volumeChange, neglected };
+  }, [logs, exBy, lastLog]);
+
   const planById = useMemo(() => {
     const map = {};
     plans.forEach((p) => { map[p.id] = p; });
@@ -5133,6 +5185,36 @@ function DashboardView({
             );
           })}
         </>
+      )}
+
+      {lastLog && (
+        <div className="stats-grid" style={{ marginBottom: 4 }}>
+          <div className="stat-item">
+            <span className="stat-value">{tiles.daysSince}</span>
+            <span className="stat-label">
+              {tiles.daysSince === 0 ? "Heute trainiert" : "Tage seit Training"}
+            </span>
+          </div>
+          <div className="stat-item">
+            <span className="stat-value">{tiles.count}</span>
+            <span className="stat-label">Trainings (7 Tage)</span>
+          </div>
+          <div className="stat-item">
+            <span className="stat-value">{Math.round(tiles.volume).toLocaleString("de-DE")}</span>
+            <span className="stat-label">
+              kg Volumen
+              {tiles.volumeChange != null && (
+                <> · {tiles.volumeChange > 0 ? "+" : ""}{tiles.volumeChange} % ggü. Vorwoche</>
+              )}
+            </span>
+          </div>
+          {tiles.neglected && (
+            <div className="stat-item">
+              <span className="stat-value">{tiles.neglected.days}</span>
+              <span className="stat-label">Tage ohne {tiles.neglected.label}</span>
+            </div>
+          )}
+        </div>
       )}
 
       <span className="stat-section-title">Belastung</span>

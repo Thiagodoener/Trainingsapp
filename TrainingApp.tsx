@@ -6142,9 +6142,17 @@ function NewExerciseForm({ exercises, onAddCustom, onSetExerciseSubgroups, onDon
       )}
       <div style={{ marginTop: 10 }}>
         <label className="field-label">Equipment</label>
-        <select value={newEquipment} onChange={(e) => setNewEquipment(e.target.value)}>
-          {EQUIPMENT_OPTIONS.map((x) => <option key={x}>{x}</option>)}
-        </select>
+        <div className="chip-row" style={{ marginTop: 6 }}>
+          {EQUIPMENT_OPTIONS.map((opt) => (
+            <span
+              key={opt}
+              className={`chip ${newEquipment === opt ? "active" : ""}`}
+              onClick={() => setNewEquipment(opt)}
+            >
+              {opt}
+            </span>
+          ))}
+        </div>
       </div>
       <div style={{ marginTop: 10 }}>
         <label className="field-label">Beschreibung</label>

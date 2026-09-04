@@ -2302,6 +2302,7 @@ export default function TrainingApp() {
           --chart-green-2: #5f8f6a;
         }
         .app-shell.theme-light {
+          color-scheme: light;
           --bg: #ffffff;
           --surface: #ffffff;
           --surface-alt: #f4f4f5;
@@ -2329,6 +2330,10 @@ export default function TrainingApp() {
         * { box-sizing: border-box; }
 
         .app-shell {
+          /* Sagt dem Browser, in welchem Modus er seine eigenen Bedienelemente
+             zeichnen soll - sonst bleiben Zahlenfeld-Pfeile und Scrollbalken
+             im dunklen Modus hell. */
+          color-scheme: dark;
           /* Die Seite laeuft wegen viewport-fit=cover bis unter die
              Statusleiste. Unten war der Abstand schon beruecksichtigt, oben
              fehlte er - dadurch lag die Kopfzeile unter Uhrzeit und
@@ -2822,7 +2827,7 @@ export default function TrainingApp() {
              dem iPhone einen fingerbreiten leeren Streifen unter den
              Beschriftungen stehen. Die Hälfte hält die Knöpfe weiterhin
              klar über dem Home-Indikator, gibt den Rest aber frei. */
-          padding: 8px 6px calc(4px + env(safe-area-inset-bottom) * 0.5);
+          padding: 8px 4px calc(4px + env(safe-area-inset-bottom) * 0.5);
         }
         .session-bar {
           display: flex;
@@ -2889,9 +2894,11 @@ export default function TrainingApp() {
           border: none;
           color: var(--text-faint);
           font-family: 'Inter', sans-serif;
-          font-size: 9.5px;
+          /* "Fortschritt" ist die laengste Beschriftung und muss in ein
+             Fuenftel der Bildschirmbreite passen, ohne den Rand zu beruehren. */
+          font-size: 9px;
           text-transform: uppercase;
-          letter-spacing: 0.06em;
+          letter-spacing: 0.03em;
           padding: 6px 0;
           cursor: pointer;
           transition: color 120ms ease, transform 100ms ease;
@@ -3951,8 +3958,9 @@ export default function TrainingApp() {
         .confirm-card{background:var(--elevated);border:1px solid var(--border);border-radius:14px;padding:18px;max-width:320px;width:100%}
         .confirm-card p{margin:0 0 16px;font-size:14px;line-height:1.5}
         .confirm-actions{display:flex;gap:8px}
+        .confirm-actions .btn{background:transparent}
         .toast-snackbar{position:fixed;left:50%;bottom:82px;transform:translateX(-50%);z-index:35;background:var(--surface-alt);border:1px solid var(--border);border-radius:12px;padding:10px 14px;box-shadow:0 8px 30px rgba(0,0,0,.3);font-size:13px;max-width:90%;text-align:center}
-        @media (max-width:600px){.content{padding-left:10px!important;padding-right:10px!important}.card{padding:12px!important}.set-row{grid-template-columns:24px 28px 28px 1fr 1fr!important;gap:5px!important}.set-row input{min-width:0}.meta-grid{grid-template-columns:1fr 1fr}.stat-value{font-size:23px!important}.bottom-dock{left:8px!important;right:8px!important;bottom:2px!important}.nav-btn{min-width:0!important}.plan-title{font-size:17px}.btn{min-height:40px}.btn-icon{min-width:36px;min-height:36px}}
+        @media (max-width:600px){.content{padding-left:18px!important;padding-right:18px!important}.card{padding:14px 0!important}.set-row{grid-template-columns:24px 28px 28px 1fr 1fr!important;gap:5px!important}.set-row input{min-width:0}.meta-grid{grid-template-columns:1fr 1fr}.stat-value{font-size:28px}.bottom-dock{left:0!important;right:0!important;bottom:0!important}.nav-btn{min-width:0!important}.plan-title{font-size:19px}.btn{min-height:44px}.btn-icon{min-width:36px;min-height:36px}}
         @media (prefers-reduced-motion:reduce){*{scroll-behavior:auto!important;transition:none!important;animation:none!important}}
 
         .cal-header {
@@ -4106,6 +4114,11 @@ export default function TrainingApp() {
         .cal-detail-done {
           border-left: 2px solid var(--success);
           padding-left: 10px;
+        }
+        /* Der letzte Eintrag des Tages braucht keine eigene Abschlusslinie -
+           die des umgebenden Abschnitts steht direkt darunter. */
+        .cal-detail-item:last-child {
+          border-bottom: none;
         }
 
         /* --- Atemübung: geführte Sitzung ---------------------------------

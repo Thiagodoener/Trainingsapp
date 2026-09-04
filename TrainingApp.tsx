@@ -1942,6 +1942,18 @@ export default function TrainingApp() {
     }
     await persistExerciseSubgroupOverrides(next);
   };
+  // Sets the complete subgroup list in one call, instead of toggling one at
+  // a time like handleSetExerciseSubgroup above. Needed for a freshly
+  // created exercise with several subgroups chosen at once: calling the
+  // toggle handler once per subgroup would fire multiple synchronous state
+  // updates that all read the same stale exerciseSubgroupOverrides closure,
+  // so every call but the last would be silently lost.
+  const handleSetExerciseSubgroups = async (exerciseId, subgroupIds) => {
+    const next = { ...exerciseSubgroupOverrides };
+    if (!subgroupIds || subgroupIds.length === 0) delete next[exerciseId];
+    else next[exerciseId] = subgroupIds;
+    await persistExerciseSubgroupOverrides(next);
+  };
   const handleSetExerciseEquipment = async (exerciseId, equipment) => {
     await persistExerciseEquipmentOverrides({ ...exerciseEquipmentOverrides, [exerciseId]: equipment });
   };
@@ -4053,6 +4065,7 @@ export default function TrainingApp() {
             exerciseNotes={exerciseNotes}
             exerciseSubgroupOverrides={exerciseSubgroupOverrides}
             onSetExerciseSubgroup={handleSetExerciseSubgroup}
+            onSetExerciseSubgroups={handleSetExerciseSubgroups}
             exerciseEquipmentOverrides={exerciseEquipmentOverrides}
             onSetExerciseEquipment={handleSetExerciseEquipment}
             onAddCustom={handleAddCustomExercise}
@@ -4080,6 +4093,7 @@ export default function TrainingApp() {
               exerciseNotes={exerciseNotes}
               exerciseSubgroupOverrides={exerciseSubgroupOverrides}
               onSetExerciseSubgroup={handleSetExerciseSubgroup}
+              onSetExerciseSubgroups={handleSetExerciseSubgroups}
               exerciseEquipmentOverrides={exerciseEquipmentOverrides}
               onSetExerciseEquipment={handleSetExerciseEquipment}
               onAddCustom={handleAddCustomExercise}
@@ -4191,6 +4205,7 @@ export default function TrainingApp() {
             exerciseNotes={exerciseNotes}
             exerciseSubgroupOverrides={exerciseSubgroupOverrides}
             onSetExerciseSubgroup={handleSetExerciseSubgroup}
+            onSetExerciseSubgroups={handleSetExerciseSubgroups}
             exerciseEquipmentOverrides={exerciseEquipmentOverrides}
             onSetExerciseEquipment={handleSetExerciseEquipment}
             timeBasedExercises={timeBasedExercises}
@@ -6019,10 +6034,14 @@ function SwipeableSetRow({ className, onSwipeRight, onSwipeLeft, children }) {
 // what they're doing (building a workout) just to add a missing exercise.
 // ---------------------------------------------------------------------------
 
-function NewExerciseForm({ exercises, onAddCustom, onSetExerciseSubgroup, onDone }) {
+function NewExerciseForm({ exercises, onAddCustom, onSetExerciseSubgroups, onDone }) {
   const [newName, setNewName] = useState("");
   const [newGroup, setNewGroup] = useState(MUSCLE_GROUPS[0].id);
-  const [newSubgroup, setNewSubgroup] = useState(null);
+  // Mehrere Untergruppen möglich, wie beim Bearbeiten einer bestehenden
+  // Übung ("Untergruppen wählen" in der Detailansicht) - vorher konnte man
+  // beim Neuanlegen nur eine einzige wählen, obwohl das Datenmodell und der
+  // Bearbeiten-Dialog längst mehrere erlauben.
+  const [newSubgroups, setNewSubgroups] = useState([]);
   const [newEquipment, setNewEquipment] = useState("Körpergewicht");
   const [newDescription, setNewDescription] = useState("");
   const [newVideo, setNewVideo] = useState("");
@@ -6056,7 +6075,7 @@ function NewExerciseForm({ exercises, onAddCustom, onSetExerciseSubgroup, onDone
     }
     const newExercise = { id, name: trimmed, group: newGroup, custom: true, meta: { equipment: newEquipment, primary: MUSCLE_GROUPS.find((g) => g.id === newGroup)?.label || newGroup, secondary: "–", description: newDescription.trim() || `${trimmed} – eigene Übung.`, video: newVideo.trim() } };
     onAddCustom(newExercise);
-    if (newSubgroup) onSetExerciseSubgroup(id, newSubgroup);
+    if (newSubgroups.length > 0) onSetExerciseSubgroups(id, newSubgroups);
     // The parent's exercise list hasn't re-rendered with the new entry yet
     // (state update is still pending), so hand the fresh object back
     // directly instead of making the caller look it up.
@@ -6085,7 +6104,7 @@ function NewExerciseForm({ exercises, onAddCustom, onSetExerciseSubgroup, onDone
             <span
               key={g.id}
               className={`chip ${newGroup === g.id ? "active" : ""}`}
-              onClick={() => { setNewGroup(g.id); setNewSubgroup(null); }}
+              onClick={() => { setNewGroup(g.id); setNewSubgroups([]); }}
             >
               {g.label}
             </span>
@@ -6094,19 +6113,26 @@ function NewExerciseForm({ exercises, onAddCustom, onSetExerciseSubgroup, onDone
       </div>
       {(SUBGROUPS[newGroup] || []).length > 0 && (
         <div style={{ marginTop: 10 }}>
-          <label className="field-label">Untergruppe (optional)</label>
+          <label className="field-label">Untergruppen (optional)</label>
+          <p style={{ fontSize: 12.5, color: "var(--text-dim)", margin: "2px 0 6px" }}>
+            Mehrere möglich – die Übung erscheint dann bei jedem dieser Filter.
+          </p>
           <div className="chip-row" style={{ marginTop: 6 }}>
             <span
-              className={`chip chip-sm ${!newSubgroup ? "active" : ""}`}
-              onClick={() => setNewSubgroup(null)}
+              className={`chip chip-sm ${newSubgroups.length === 0 ? "active" : ""}`}
+              onClick={() => setNewSubgroups([])}
             >
               Keine
             </span>
             {SUBGROUPS[newGroup].map((sg) => (
               <span
                 key={sg.id}
-                className={`chip chip-sm ${newSubgroup === sg.id ? "active" : ""}`}
-                onClick={() => setNewSubgroup(sg.id)}
+                className={`chip chip-sm ${newSubgroups.includes(sg.id) ? "active" : ""}`}
+                onClick={() =>
+                  setNewSubgroups((prev) =>
+                    prev.includes(sg.id) ? prev.filter((id) => id !== sg.id) : [...prev, sg.id]
+                  )
+                }
               >
                 {sg.label}
               </span>
@@ -6159,6 +6185,7 @@ function ExercisesView({
   exerciseNotes,
   exerciseSubgroupOverrides,
   onSetExerciseSubgroup,
+  onSetExerciseSubgroups,
   exerciseEquipmentOverrides,
   onSetExerciseEquipment,
   onAddCustom,
@@ -6268,7 +6295,7 @@ function ExercisesView({
         <NewExerciseForm
           exercises={exercises}
           onAddCustom={onAddCustom}
-          onSetExerciseSubgroup={onSetExerciseSubgroup}
+          onSetExerciseSubgroups={onSetExerciseSubgroups}
           onDone={() => setCreating(false)}
         />
       ) : (
@@ -6293,21 +6320,11 @@ function ExercisesView({
             >
               <span className="ex-name">{e.name}</span>
               <div style={{ display: "flex", alignItems: "center", gap: 8, flexShrink: 0 }}>
-                {/* Tags wrap onto a second line instead of squeezing the name
-                    down to nothing when an exercise has two subgroups. */}
-                <div
-                  style={{
-                    display: "flex",
-                    flexWrap: "wrap",
-                    alignItems: "center",
-                    justifyContent: "flex-end",
-                    gap: 6,
-                    maxWidth: "48vw",
-                  }}
-                >
-                  <MuscleTag exercise={e} subgroupOverrides={exerciseSubgroupOverrides} />
-                  <span className="tag tag-equipment">{getExerciseEquipment(e, exerciseEquipmentOverrides)}</span>
-                </div>
+                {/* Untergruppen stehen bewusst nicht mehr hier - bei mehreren
+                    zugewiesenen Untergruppen wurde die Zeile zu voll und
+                    quetschte den Namen zusammen. Die Übungs-Detailansicht
+                    (ein Tap entfernt) zeigt und bearbeitet sie weiterhin. */}
+                <span className="tag tag-equipment">{getExerciseEquipment(e, exerciseEquipmentOverrides)}</span>
                 {e.custom && (
                   <button
                     className="btn-icon"
@@ -6742,6 +6759,7 @@ function PlanBuilder({
   exerciseNotes,
   exerciseSubgroupOverrides,
   onSetExerciseSubgroup,
+  onSetExerciseSubgroups,
   exerciseEquipmentOverrides,
   onSetExerciseEquipment,
   onAddCustom,
@@ -7082,7 +7100,7 @@ function PlanBuilder({
           <NewExerciseForm
             exercises={exercises}
             onAddCustom={onAddCustom}
-            onSetExerciseSubgroup={onSetExerciseSubgroup}
+            onSetExerciseSubgroups={onSetExerciseSubgroups}
             onDone={(newExercise) => {
               setCreatingExercise(false);
               // Jump straight to it in the picker below so it can be added
@@ -8422,6 +8440,7 @@ function LogView({
   exerciseNotes,
   exerciseSubgroupOverrides,
   onSetExerciseSubgroup,
+  onSetExerciseSubgroups,
   exerciseEquipmentOverrides,
   onSetExerciseEquipment,
   timeBasedExercises,
@@ -9797,7 +9816,7 @@ function LogView({
               <NewExerciseForm
                 exercises={exercises}
                 onAddCustom={onAddCustom}
-                onSetExerciseSubgroup={onSetExerciseSubgroup}
+                onSetExerciseSubgroups={onSetExerciseSubgroups}
                 onDone={(created) => {
                   setCreatingExercise(false);
                   // The parent's exercise list has not re-rendered yet, so the

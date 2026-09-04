@@ -2126,6 +2126,13 @@ export default function TrainingApp() {
     setTheme(next);
     await saveJSON("app-theme", next);
   };
+
+  // Die Statusleiste des iPhones faerbt sich nach diesem Meta-Tag. Ohne
+  // Nachfuehren bliebe oben ein dunkler Streifen ueber der hellen App stehen.
+  useEffect(() => {
+    const meta = document.querySelector('meta[name="theme-color"]');
+    if (meta) meta.setAttribute("content", theme === "dark" ? "#000000" : "#ffffff");
+  }, [theme]);
   // Turns a finished workout back into an editable session. The log is
   // removed from the history for the duration - finishing writes it back,
   // discarding restores nothing, which matches "the workout is running again".
@@ -2769,8 +2776,12 @@ export default function TrainingApp() {
           padding: 13px 18px;
           cursor: pointer;
         }
+        /* Ein ausgegrauter Knopf soll nicht wie eine verblasste Version
+           des aktiven aussehen, sondern klar unbenutzbar: neutrale Flaeche
+           statt durchscheinender Akzentfarbe. */
         .btn:disabled {
-          opacity: 0.4;
+          background: var(--fill);
+          color: var(--text-faint);
           cursor: not-allowed;
         }
         .btn-primary { background: var(--accent); color: #fff; }
@@ -2778,6 +2789,8 @@ export default function TrainingApp() {
         .btn-block { width: 100%; }
         .btn-sm { padding: 8px 12px; font-size: 13px; border-radius: 9px; }
         .btn-danger { background: transparent; color: var(--danger); }
+        /* Bereits hinzugefuegt: ruhig und abgehakt, nicht als Aktion. */
+        .btn-done { background: var(--fill); color: var(--success); }
         .btn-icon {
           width: 34px; height: 34px; border-radius: 999px;
           display: inline-flex; align-items: center; justify-content: center;
@@ -3413,8 +3426,9 @@ export default function TrainingApp() {
         .ex-name-clickable {
           cursor: pointer;
           text-decoration: underline;
-          text-decoration-color: var(--border);
-          text-underline-offset: 3px;
+          text-decoration-color: color-mix(in srgb, var(--text-faint) 45%, transparent);
+          text-decoration-thickness: 1px;
+          text-underline-offset: 4px;
         }
         .quick-toggle-row {
           display: flex;
@@ -7825,7 +7839,7 @@ function PlanBuilder({
                 {e.name}
               </span>
               <button
-                className={`btn btn-sm ${added ? "btn-ghost" : "btn-primary"}`}
+                className={`btn btn-sm ${added ? "btn-done" : "btn-ghost"}`}
                 onClick={() => (added ? removeExercise(e.id) : addExercise(e.id))}
               >
                 {added ? <Check size={14} /> : <Plus size={14} />}
@@ -10102,7 +10116,7 @@ function LogView({
                         <div className="ex-row" key={e.id}>
                           <span className="ex-name">{e.name}</span>
                           <button
-                            className={`btn btn-sm ${already ? "btn-ghost" : "btn-primary"}`}
+                            className={`btn btn-sm ${already ? "btn-done" : "btn-ghost"}`}
                             disabled={already}
                             onClick={() => replaceExerciseInSession(entry.exerciseId, e.id)}
                           >
@@ -10442,7 +10456,7 @@ function LogView({
                     <div className="ex-row" key={e.id}>
                       <span className="ex-name">{e.name}</span>
                       <button
-                        className={`btn btn-sm ${already ? "btn-ghost" : "btn-primary"}`}
+                        className={`btn btn-sm ${already ? "btn-done" : "btn-ghost"}`}
                         disabled={already}
                         onClick={() => addExerciseToSession(e.id)}
                       >

@@ -32,6 +32,7 @@ import {
   Wind,
   AlertTriangle,
   Minus,
+  Home,
 } from "lucide-react";
 import {
   LineChart,
@@ -1528,7 +1529,7 @@ function SubgroupTag({ group, subgroupId, subgroupIds }) {
 export default function TrainingApp() {
   // Plans is the first thing shown: starting a workout is the most
   // common reason to open the app.
-  const [tab, setTab] = useState("plans");
+  const [tab, setTab] = useState("dashboard");
   const [plans, setPlans] = useState([]);
   const [logs, setLogs] = useState([]);
   // Same exercise, different gym, different weights: a leg press at 60kg in
@@ -2325,6 +2326,11 @@ export default function TrainingApp() {
           -webkit-overflow-scrolling: touch;
           padding: 16px 16px 90px;
         }
+        /* Die Trainings-Leiste sitzt über der Navigation und würde sonst den
+           letzten Inhalt der Seite verdecken. */
+        .content.with-session-bar {
+          padding-bottom: 132px;
+        }
 
         .tab-panel {
           /* No "both"/"forwards" fill-mode: leaving a lingering (even
@@ -2694,13 +2700,11 @@ export default function TrainingApp() {
           cursor: pointer;
         }
 
-        .fab-nav {
+        /* Dock = laufende Trainings-Leiste + Navigation. Die Positionierung
+           sitzt hier, damit beide beim Wegscrollen gemeinsam verschwinden. */
+        .bottom-dock {
           position: absolute;
           bottom: 0; left: 0; right: 0;
-          display: flex;
-          background: var(--surface);
-          border-top: 1px solid var(--border);
-          padding: 8px 6px calc(8px + env(safe-area-inset-bottom));
           transition: transform 0.25s ease;
           transform: translateY(0);
           /* The bar carries a transform, which creates its own stacking
@@ -2709,8 +2713,72 @@ export default function TrainingApp() {
              transformed siblings. */
           z-index: 10;
         }
-        .fab-nav.nav-hidden {
+        .bottom-dock.nav-hidden {
           transform: translateY(100%);
+        }
+        .fab-nav {
+          display: flex;
+          background: var(--surface);
+          border-top: 1px solid var(--border);
+          /* Unten nur der halbe Safe-Area-Abstand: der volle Wert ließ auf
+             dem iPhone einen fingerbreiten leeren Streifen unter den
+             Beschriftungen stehen. Die Hälfte hält die Knöpfe weiterhin
+             klar über dem Home-Indikator, gibt den Rest aber frei. */
+          padding: 8px 6px calc(4px + env(safe-area-inset-bottom) * 0.5);
+        }
+        .session-bar {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          gap: 10px;
+          width: 100%;
+          border: none;
+          border-bottom: 1px solid var(--border);
+          background: var(--accent);
+          color: #fff;
+          font-family: 'Inter', sans-serif;
+          font-size: 13px;
+          padding: 9px 14px;
+          cursor: pointer;
+        }
+        .session-bar-main {
+          display: flex;
+          align-items: center;
+          gap: 8px;
+          min-width: 0;
+        }
+        .session-bar-name {
+          overflow: hidden;
+          text-overflow: ellipsis;
+          white-space: nowrap;
+        }
+        .session-bar-time {
+          font-family: 'Oswald', sans-serif;
+          font-size: 14px;
+          flex-shrink: 0;
+        }
+        .session-bar-time.is-rest {
+          background: rgba(255,255,255,0.18);
+          border-radius: 6px;
+          padding: 1px 7px;
+        }
+        .dash-signal-row {
+          display: flex;
+          align-items: center;
+          gap: 8px;
+          padding: 7px 0;
+          cursor: pointer;
+        }
+        .dash-signal-label {
+          font-size: 13.5px;
+          color: var(--text);
+          flex-shrink: 0;
+        }
+        .dash-signal-text {
+          font-size: 12.5px;
+          color: var(--text-dim);
+          flex: 1;
+          min-width: 0;
         }
         .nav-btn {
           flex: 1;
@@ -3771,7 +3839,7 @@ export default function TrainingApp() {
         .confirm-card p{margin:0 0 16px;font-size:14px;line-height:1.5}
         .confirm-actions{display:flex;gap:8px}
         .toast-snackbar{position:fixed;left:50%;bottom:82px;transform:translateX(-50%);z-index:35;background:var(--surface-alt);border:1px solid var(--border);border-radius:12px;padding:10px 14px;box-shadow:0 8px 30px rgba(0,0,0,.3);font-size:13px;max-width:90%;text-align:center}
-        @media (max-width:600px){.content{padding-left:10px!important;padding-right:10px!important}.card{padding:12px!important}.set-row{grid-template-columns:24px 28px 28px 1fr 1fr!important;gap:5px!important}.set-row input{min-width:0}.meta-grid{grid-template-columns:1fr 1fr}.stat-value{font-size:23px!important}.fab-nav{left:8px!important;right:8px!important;bottom:8px!important}.nav-btn{min-width:0!important}.plan-title{font-size:17px}.btn{min-height:40px}.btn-icon{min-width:36px;min-height:36px}}
+        @media (max-width:600px){.content{padding-left:10px!important;padding-right:10px!important}.card{padding:12px!important}.set-row{grid-template-columns:24px 28px 28px 1fr 1fr!important;gap:5px!important}.set-row input{min-width:0}.meta-grid{grid-template-columns:1fr 1fr}.stat-value{font-size:23px!important}.bottom-dock{left:8px!important;right:8px!important;bottom:2px!important}.nav-btn{min-width:0!important}.plan-title{font-size:17px}.btn{min-height:40px}.btn-icon{min-width:36px;min-height:36px}}
         @media (prefers-reduced-motion:reduce){*{scroll-behavior:auto!important;transition:none!important;animation:none!important}}
 
         .cal-header {
@@ -4029,13 +4097,31 @@ export default function TrainingApp() {
         }
       `}</style>
 
-      <div className="content" onScroll={handleContentScroll}>
+      <div
+        className={`content ${session && tab !== "log" ? "with-session-bar" : ""}`}
+        onScroll={handleContentScroll}
+      >
         <div className="tab-panel" key={loading ? "loading" : tab}>
         {loading ? (
           <div className="empty-state">
             <Loader2 className="animate-spin" size={22} />
             <p>Lade deine Daten…</p>
           </div>
+        ) : tab === "dashboard" ? (
+          <DashboardView
+            plans={allPlans}
+            logs={logs}
+            exBy={allExBy}
+            calendarEntries={calendarEntries}
+            breathingExercises={breathingExercises}
+            breathingLogs={breathingLogs}
+            exerciseSubgroupOverrides={exerciseSubgroupOverrides}
+            timeBasedExercises={timeBasedExercises}
+            gymIndependentExercises={gymIndependentExercises}
+            onStartWorkout={(plan, entryId) => startScheduledWorkout(plan, entryId)}
+            onStartBreathing={(exercise, entryId) => startBreathingSession(exercise, entryId)}
+            onOpenProgress={() => setTab("progress")}
+          />
         ) : tab === "calendar" ? (
           <CalendarView
             onOpenLog={(log) => { setTab("progress"); setHistoryFocusLogId(log.id); }}
@@ -4801,48 +4887,321 @@ export default function TrainingApp() {
         </div>
       )}
 
-      <nav className={`fab-nav ${navHidden ? "nav-hidden" : ""}`}>
-        <button
-          className={`nav-btn ${tab === "calendar" ? "active" : ""}`}
-          onClick={() => setTab("calendar")}
-        >
-          <Calendar size={19} />
-          Kalender
-        </button>
-        <button
-          className={`nav-btn ${tab === "plans" ? "active" : ""}`}
-          onClick={() => {
-            setBuilding(false);
-            setTab("plans");
-          }}
-        >
-          <ClipboardList size={19} />
-          Pläne
-        </button>
-        <button
-          className={`nav-btn ${tab === "exercises" ? "active" : ""}`}
-          onClick={() => setTab("exercises")}
-        >
-          <Dumbbell size={19} />
-          Übungen
-        </button>
-        {session && (
-          <button
-            className={`nav-btn ${tab === "log" ? "active" : ""}`}
-            onClick={() => setTab("log")}
-          >
-            <Play size={19} />
-            Training
-          </button>
+      {/* Leiste und Navigation sitzen in einem gemeinsamen Dock: so
+          verschieben sie sich beim Ausblenden zusammen, statt getrennt
+          übereinander wegzurutschen. */}
+      <div className={`bottom-dock ${navHidden ? "nav-hidden" : ""}`}>
+        {session && tab !== "log" && (
+          <ActiveSessionBar
+            session={session}
+            restEndsAt={restEndsAt}
+            onOpen={() => setTab("log")}
+          />
         )}
-        <button
-          className={`nav-btn ${tab === "progress" ? "active" : ""}`}
-          onClick={() => setTab("progress")}
-        >
-          <TrendingUp size={19} />
-          Fortschritt
-        </button>
-      </nav>
+        <nav className="fab-nav">
+          <button
+            className={`nav-btn ${tab === "dashboard" ? "active" : ""}`}
+            onClick={() => setTab("dashboard")}
+          >
+            <Home size={19} />
+            Start
+          </button>
+          <button
+            className={`nav-btn ${tab === "calendar" ? "active" : ""}`}
+            onClick={() => setTab("calendar")}
+          >
+            <Calendar size={19} />
+            Kalender
+          </button>
+          <button
+            className={`nav-btn ${tab === "plans" ? "active" : ""}`}
+            onClick={() => {
+              setBuilding(false);
+              setTab("plans");
+            }}
+          >
+            <ClipboardList size={19} />
+            Pläne
+          </button>
+          <button
+            className={`nav-btn ${tab === "exercises" ? "active" : ""}`}
+            onClick={() => setTab("exercises")}
+          >
+            <Dumbbell size={19} />
+            Übungen
+          </button>
+          <button
+            className={`nav-btn ${tab === "progress" ? "active" : ""}`}
+            onClick={() => setTab("progress")}
+          >
+            <TrendingUp size={19} />
+            Fortschritt
+          </button>
+        </nav>
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Dashboard (Start)
+// ---------------------------------------------------------------------------
+
+// Schmale Leiste über der Navigation, solange ein Training läuft und man
+// gerade woanders ist. Ersetzt den früheren "Training"-Reiter als Rückweg -
+// und zeigt zusätzlich die laufende Satzpause, die vorher nur innerhalb der
+// Trainingsansicht sichtbar war. Eigene Komponente mit eigenem Sekundentakt,
+// damit nicht die ganze App im Sekundenrhythmus neu rendert.
+function ActiveSessionBar({ session, restEndsAt, onOpen }) {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const id = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(id);
+  }, []);
+  const restLeft = restEndsAt > now ? Math.round((restEndsAt - now) / 1000) : 0;
+  const startedAt = session?.startedAt ? new Date(session.startedAt).getTime() : null;
+  const elapsed = startedAt ? Math.max(0, Math.floor((now - startedAt) / 1000)) : 0;
+  const fmtClock = (s) => `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
+  return (
+    <button className="session-bar" onClick={onOpen}>
+      <span className="session-bar-main">
+        <Play size={14} />
+        <span className="session-bar-name">{session.planName || "Freies Training"}</span>
+      </span>
+      <span className={`session-bar-time ${restLeft > 0 ? "is-rest" : ""}`}>
+        {restLeft > 0 ? `Pause ${fmtClock(restLeft)}` : fmtClock(elapsed)}
+      </span>
+    </button>
+  );
+}
+
+// Zählt die Rekorde eines einzelnen Trainings nach - dieselbe Regel wie die
+// Abschluss-Zusammenfassung: verglichen wird gegen die Historie OHNE dieses
+// Training, sonst schlüge jeder Satz seinen eigenen Wert.
+function countLogPRs(log, logs, exBy, timeBasedExercises, gymIndependentExercises) {
+  let prs = 0;
+  logEntries(log).forEach((entry) => {
+    if (!exBy[entry.exerciseId]) return;
+    const isTime =
+      isTimeBasedInLogs(logs, entry.exerciseId, timeBasedExercises) || !!entry.targetUseTime;
+    const history = getExerciseHistory(
+      logs, entry.exerciseId, log.id, isTime,
+      effectiveGymId(entry.exerciseId, log.gymId, gymIndependentExercises)
+    );
+    if (entrySets(entry).some((s) => s.done && !s.warmup && isNewPR(s, history, isTime))) prs += 1;
+  });
+  return prs;
+}
+
+function DashboardView({
+  plans,
+  logs,
+  exBy,
+  calendarEntries,
+  breathingExercises,
+  breathingLogs,
+  exerciseSubgroupOverrides,
+  timeBasedExercises,
+  gymIndependentExercises,
+  onStartWorkout,
+  onStartBreathing,
+  onOpenProgress,
+}) {
+  const todayKey = toDateKey(new Date());
+
+  // Nur was heute noch offen ist - schon Erledigtes steht im Kalender und
+  // im Verlauf, hier wäre es nur Ballast.
+  const todayOpen = useMemo(
+    () => calendarEntries.filter((ce) => ce.date === todayKey && !ce.logId && ce.type !== "action"),
+    [calendarEntries, todayKey]
+  );
+
+  // Belastungssignale: dieselbe Auswertung wie im Fortschritt-Tab, hier aber
+  // auf die auffälligen Gruppen eingedampft.
+  const loadHistoryWeeks = useMemo(() => logsHistoryWeeks(logs), [logs]);
+  const signals = useMemo(() => {
+    const series = getMuscleLoadSeries(
+      logs, exBy, exerciseSubgroupOverrides, timeBasedExercises,
+      muscleSeriesWeekCount(loadHistoryWeeks)
+    );
+    return series
+      .map((g) => ({
+        id: g.id,
+        label: g.label,
+        signal: detectLoadSignal(g.values, loadHistoryWeeks),
+        change: muscleLoadChange(g.values, 4, loadHistoryWeeks),
+      }))
+      .filter((g) => g.signal);
+  }, [logs, exBy, exerciseSubgroupOverrides, timeBasedExercises, loadHistoryWeeks]);
+
+  const lastLog = useMemo(() => {
+    let best = null;
+    logs.forEach((l) => {
+      const ts = new Date(l?.date).getTime();
+      if (!Number.isFinite(ts)) return;
+      if (!best || ts > new Date(best.date).getTime()) best = l;
+    });
+    return best;
+  }, [logs]);
+
+  const lastLogInfo = useMemo(() => {
+    if (!lastLog) return null;
+    const doneSets = logEntries(lastLog).reduce(
+      (sum, e) => sum + entrySets(e).filter((s) => s.done && !s.warmup).length, 0
+    );
+    return {
+      name: lastLog.planName || lastLog.name || "Freies Training",
+      date: lastLog.date,
+      minutes: toNum(lastLog.durationMinutes),
+      doneSets,
+      prs: countLogPRs(lastLog, logs, exBy, timeBasedExercises, gymIndependentExercises),
+    };
+  }, [lastLog, logs, exBy, timeBasedExercises, gymIndependentExercises]);
+
+  // Konstanz: wie viel von dem, was in den letzten 8 Wochen im Kalender
+  // stand, auch tatsächlich absolviert wurde. Termine in der Zukunft zählen
+  // nicht mit - die konnten noch gar nicht erledigt werden.
+  const adherence = useMemo(() => {
+    const since = toDateKey(new Date(Date.now() - 56 * 86400000));
+    const past = calendarEntries.filter(
+      (ce) => ce.type !== "action" && ce.date >= since && ce.date <= todayKey
+    );
+    if (past.length === 0) return null;
+    const done = past.filter((ce) => ce.logId).length;
+    return { done, total: past.length, percent: Math.round((done / past.length) * 100) };
+  }, [calendarEntries, todayKey]);
+
+  const planById = useMemo(() => {
+    const map = {};
+    plans.forEach((p) => { map[p.id] = p; });
+    return map;
+  }, [plans]);
+  const breathingById = useMemo(() => {
+    const map = {};
+    breathingExercises.forEach((b) => { map[b.id] = b; });
+    return map;
+  }, [breathingExercises]);
+
+  // Geschätzte Dauer aus den bisherigen Durchläufen desselben Plans - eine
+  // gemittelte Erfahrung sagt mehr als jede Formel aus Sätzen mal Pausenzeit.
+  const planMinutes = (planId) => {
+    const durations = logs
+      .filter((l) => l.planId === planId && toNum(l.durationMinutes) > 0)
+      .map((l) => toNum(l.durationMinutes));
+    if (durations.length === 0) return null;
+    return Math.round(durations.reduce((a, b) => a + b, 0) / durations.length);
+  };
+
+  const planGroups = (plan) => {
+    const seen = [];
+    (Array.isArray(plan?.items) ? plan.items : []).forEach((it) => {
+      const g = exBy[it.exerciseId]?.group;
+      if (g && !seen.includes(g)) seen.push(g);
+    });
+    return seen.map((g) => MUSCLE_GROUPS.find((m) => m.id === g)?.label || g);
+  };
+
+  return (
+    <div>
+      {todayOpen.length > 0 && (
+        <>
+          <span className="stat-section-title">Heute</span>
+          {todayOpen.map((ce) => {
+            if (ce.type === "breathing") {
+              const ex = breathingById[ce.breathingId];
+              if (!ex) return null;
+              const total = breathingTotalSeconds(ex);
+              return (
+                <div className="card" key={ce.id}>
+                  <div className="plan-title">
+                    <Wind size={15} style={{ marginRight: 6, verticalAlign: -2 }} />
+                    {ex.name}
+                  </div>
+                  <div style={{ margin: "6px 0 10px", color: "var(--text-dim)", fontSize: 13 }}>
+                    {breathingPhases(ex).length} Phasen · {breathingRounds(ex)} Runden
+                    {total == null ? " · offene Dauer" : ` · ca. ${Math.max(1, Math.round(total / 60))} Min.`}
+                  </div>
+                  <button className="btn btn-primary btn-block" onClick={() => onStartBreathing(ex, ce.id)}>
+                    <Play size={15} /> Starten
+                  </button>
+                </div>
+              );
+            }
+            const plan = planById[ce.planId];
+            if (!plan) return null;
+            const groups = planGroups(plan);
+            const minutes = planMinutes(plan.id);
+            return (
+              <div className="card" key={ce.id}>
+                <div className="plan-title">{plan.name}</div>
+                <div style={{ margin: "6px 0 10px", color: "var(--text-dim)", fontSize: 13 }}>
+                  {groups.length > 0 && <>{groups.join(" · ")}<br /></>}
+                  {(plan.items || []).length} Übungen
+                  {minutes ? ` · ca. ${minutes} Min.` : ""}
+                </div>
+                <button className="btn btn-primary btn-block" onClick={() => onStartWorkout(plan, ce.id)}>
+                  <Play size={15} /> Training starten
+                </button>
+              </div>
+            );
+          })}
+        </>
+      )}
+
+      <span className="stat-section-title">Belastung</span>
+      <div className="card">
+        {signals.length === 0 ? (
+          <div style={{ color: "var(--text-dim)", fontSize: 13 }}>
+            Keine Auffälligkeiten.
+          </div>
+        ) : (
+          signals.map((g) => (
+            <div className="dash-signal-row" key={g.id} onClick={onOpenProgress}>
+              <LoadSignalBadge signal={g.signal} />
+              <span className="dash-signal-label">{g.label}</span>
+              <span className="dash-signal-text">
+                {g.signal.type === "plateau"
+                  ? "seit Wochen keine Steigerung"
+                  : `${g.change != null && g.change > 0 ? "+" : ""}${g.change != null ? Math.round(g.change) : "?"} % ggü. 4-Wochen-Schnitt`}
+              </span>
+              <ChevronRight size={14} color="var(--text-dim)" />
+            </div>
+          ))
+        )}
+      </div>
+
+      {lastLogInfo && (
+        <>
+          <span className="stat-section-title">Letztes Training</span>
+          <div className="card">
+            <div className="plan-title">{lastLogInfo.name}</div>
+            <div style={{ marginTop: 6, color: "var(--text-dim)", fontSize: 13 }}>
+              {timeAgoShort(lastLogInfo.date)}
+              {lastLogInfo.minutes > 0 ? ` · ${lastLogInfo.minutes} Min.` : ""}
+              {` · ${lastLogInfo.doneSets} Sätze`}
+            </div>
+            {lastLogInfo.prs > 0 && (
+              <div style={{ marginTop: 6, color: "var(--brass)", fontSize: 13, display: "flex", alignItems: "center", gap: 6 }}>
+                <Trophy size={14} /> {lastLogInfo.prs} {lastLogInfo.prs === 1 ? "Rekord" : "Rekorde"}
+              </div>
+            )}
+          </div>
+        </>
+      )}
+
+      {adherence && (
+        <>
+          <span className="stat-section-title">Konstanz (8 Wochen)</span>
+          <div className="card">
+            <div style={{ display: "flex", alignItems: "baseline", gap: 8 }}>
+              <span className="stat-value">{adherence.percent} %</span>
+              <span style={{ color: "var(--text-dim)", fontSize: 13 }}>
+                {adherence.done} von {adherence.total} geplanten Einheiten
+              </span>
+            </div>
+          </div>
+        </>
+      )}
     </div>
   );
 }
@@ -10300,8 +10659,10 @@ const MENU_SPACE_NEEDED = 300;
 // The usable area ends at the top of the navigation bar, not at the bottom
 // of the window - measuring against the window let menus slide underneath it.
 function usableBottom() {
-  const nav = document.querySelector(".fab-nav");
-  const navTop = nav ? nav.getBoundingClientRect().top : window.innerHeight;
+  // Das Dock zuerst: liegt eine Trainings-Leiste über der Navigation, ist
+  // deren Oberkante die eigentliche Grenze, nicht die der Navigation.
+  const dock = document.querySelector(".bottom-dock") || document.querySelector(".fab-nav");
+  const navTop = dock ? dock.getBoundingClientRect().top : window.innerHeight;
   return Math.min(navTop, window.innerHeight) - 8;
 }
 

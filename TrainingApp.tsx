@@ -2259,38 +2259,64 @@ export default function TrainingApp() {
   return (
     <div className={`app-shell ${theme === "light" ? "theme-light" : ""}`}>
       <style>{`
-        @import url('https://fonts.googleapis.com/css2?family=Oswald:wght@500;600;700&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@500;600&display=swap');
+        @import url('https://fonts.googleapis.com/css2?family=Newsreader:opsz,wght@6..72,400;6..72,500;6..72,600&family=Inter:wght@400;500;600;700&display=swap');
 
+        /* Farbwelt: neutrale Flaechen, Trennung durch Haarlinien statt
+           durch Kaesten. Die Akzentfarbe ist ausschliesslich fuer
+           Bedienelemente da (Knoepfe, aktiver Reiter, Links) - Zahlen und
+           Ueberschriften stehen in der normalen Textfarbe, Rot/Gelb bleiben
+           den Belastungssignalen vorbehalten.
+           Hier stehen die Werte des dunklen Modus; der helle Modus (Standard)
+           ueberschreibt sie direkt darunter. */
         :root {
-          --bg: #141317;
-          --surface: #1d1c21;
-          --surface-alt: #26242b;
-          --border: #37343c;
-          --text: #f4f0e6;
-          --text-dim: #9a948d;
-          --accent: #c1652e;
-          --accent-dim: #8f4a22;
-          --brass: #e8c547;
-          --success: #6ea866;
-          --danger: #d85a4f;
-          --shadow-strength: 0.18;
+          --bg: #000000;
+          --surface: #000000;
+          --surface-alt: #161616;
+          /* Schwebende Ebenen (Modal, Sheet, Menue) heben sich vom Grund ab. */
+          --elevated: #1c1c1e;
+          --border: rgba(255,255,255,0.14);
+          --border-strong: rgba(255,255,255,0.30);
+          --text: #f5f5f7;
+          --text-dim: #98989d;
+          --text-faint: #616166;
+          --accent: #dd8442;
+          --accent-dim: #a8632f;
+          --brass: #d3a63f;
+          --success: #79ac6d;
+          --danger: #e0705c;
+          --fill: rgba(255,255,255,0.07);
+          --shadow-strength: 0.5;
+          /* Diagrammfarben: gedaempft und untereinander abgestimmt. */
+          --chart-accent: #dd8442;
+          --chart-gold: #d3a63f;
+          --chart-teal: #6fb0c0;
+          --chart-violet: #a493cf;
+          --chart-green: #85b078;
+          --chart-green-2: #5f8f6a;
         }
-        /* Light mode keeps the same warm accent so the app still feels
-           like itself; only the surfaces and text invert. Shadows are
-           softened because heavy shadows read as dirt on a light UI. */
         .app-shell.theme-light {
-          --bg: #f2efe9;
+          --bg: #ffffff;
           --surface: #ffffff;
-          --surface-alt: #eae5dc;
-          --border: #d6cfc3;
-          --text: #23201d;
-          --text-dim: #6d675f;
+          --surface-alt: #f4f4f5;
+          --elevated: #ffffff;
+          --border: rgba(60,60,67,0.15);
+          --border-strong: rgba(60,60,67,0.32);
+          --text: #1c1c1e;
+          --text-dim: #6e6e73;
+          --text-faint: #a3a3a8;
           --accent: #b25a26;
           --accent-dim: #8f4a22;
-          --brass: #a8862a;
-          --success: #4f8049;
-          --danger: #c04437;
-          --shadow-strength: 0.08;
+          --brass: #a67c14;
+          --success: #3f7a4e;
+          --danger: #c0402e;
+          --fill: rgba(60,60,67,0.06);
+          --shadow-strength: 0.10;
+          --chart-accent: #b25a26;
+          --chart-gold: #9a7414;
+          --chart-teal: #41707d;
+          --chart-violet: #6f5f92;
+          --chart-green: #4f7a48;
+          --chart-green-2: #3c6b52;
         }
 
         * { box-sizing: border-box; }
@@ -2313,9 +2339,10 @@ export default function TrainingApp() {
           margin: 0 auto;
           display: flex;
           flex-direction: column;
-          border-radius: 20px;
+          /* Kein Rahmen und keine abgerundeten Ecken mehr: die App soll
+             randlos wirken wie eine native App, nicht wie eine Seite in
+             einem Kasten. */
           overflow: hidden;
-          border: 1px solid var(--border);
           position: relative;
         }
 
@@ -2324,7 +2351,7 @@ export default function TrainingApp() {
           min-height: 0;
           overflow-y: auto;
           -webkit-overflow-scrolling: touch;
-          padding: 16px 16px 90px;
+          padding: 8px 20px 90px;
         }
         /* Die Trainings-Leiste sitzt über der Navigation und würde sonst den
            letzten Inhalt der Seite verdecken. */
@@ -2349,32 +2376,39 @@ export default function TrainingApp() {
           to { opacity: 1; transform: translateY(0); }
         }
 
+        /* Textreiter mit Unterstrich statt Kaesten - dieselbe Sprache wie
+           die Abschnittslinien darunter. */
         .sub-tab-row {
           display: flex;
-          gap: 8px;
+          gap: 24px;
           margin-bottom: 14px;
+          border-bottom: 1px solid var(--border-strong);
         }
         .sub-tab {
-          flex: 1;
+          flex: 0 0 auto;
           display: flex;
           align-items: center;
           justify-content: center;
           gap: 6px;
-          background: var(--surface-alt);
-          border: 1px solid var(--border);
+          background: none;
+          border: none;
+          border-bottom: 2px solid transparent;
+          margin-bottom: -1px;
           color: var(--text-dim);
           font-family: 'Inter', sans-serif;
-          font-size: 12.5px;
-          font-weight: 600;
-          padding: 9px 0;
-          border-radius: 10px;
+          font-size: 12px;
+          font-weight: 500;
+          text-transform: uppercase;
+          letter-spacing: 0.08em;
+          padding: 4px 0 10px;
+          border-radius: 0;
           cursor: pointer;
-          transition: color 120ms ease, background 120ms ease, transform 100ms ease;
+          transition: color 120ms ease, border-color 120ms ease;
         }
         .sub-tab.active {
-          color: var(--accent);
-          background: rgba(193, 101, 46, 0.14);
-          border-color: var(--accent);
+          color: var(--text);
+          background: none;
+          border-bottom-color: var(--accent);
         }
         .sub-tab:active {
           transform: scale(0.97);
@@ -2394,11 +2428,12 @@ export default function TrainingApp() {
           gap: 8px;
         }
         .history-card-date {
-          font-family: 'JetBrains Mono', monospace;
+          font-family: 'Inter', sans-serif;
+          font-variant-numeric: tabular-nums;
           font-size: 11px;
-          color: var(--text-dim);
+          color: var(--text-faint);
           text-transform: uppercase;
-          letter-spacing: 0.4px;
+          letter-spacing: 0.1em;
         }
         .history-card-meta {
           display: flex;
@@ -2432,8 +2467,9 @@ export default function TrainingApp() {
         }
         .history-set-summary {
           color: var(--text-dim);
-          font-family: 'JetBrains Mono', monospace;
-          font-size: 11.5px;
+          font-family: 'Inter', sans-serif;
+          font-variant-numeric: tabular-nums;
+          font-size: 12px;
         }
         .history-session-notes {
           margin-top: 10px;
@@ -2446,21 +2482,20 @@ export default function TrainingApp() {
 
 
         .tag {
-          font-family: 'JetBrains Mono', monospace;
-          font-size: 10px;
-          text-transform: uppercase;
-          letter-spacing: 0.5px;
-          background: var(--surface-alt);
+          font-family: 'Inter', sans-serif;
+          font-size: 11px;
+          letter-spacing: 0.1px;
+          background: var(--fill);
           color: var(--text-dim);
-          padding: 3px 8px;
+          padding: 3px 9px;
           border-radius: 999px;
-          border: 1px solid var(--border);
+          border: none;
         }
         .tag-subgroup {
           background: transparent;
-          border-style: dashed;
-          border-color: var(--accent);
-          color: var(--accent);
+          border: none;
+          color: var(--text-dim);
+          padding-left: 0;
         }
         .tag-equipment {
           background: transparent;
@@ -2477,30 +2512,41 @@ export default function TrainingApp() {
           opacity: 0.7;
         }
 
+        /* Karten sind keine Kaesten mehr, sondern Abschnitte, die eine
+           Haarlinie voneinander trennt. Dadurch faellt eine komplette
+           Rahmenebene weg und die Seite wird deutlich ruhiger. */
         .card {
-          background: var(--surface);
-          border: 1px solid var(--border);
-          border-radius: 16px;
-          padding: 14px;
-          margin-bottom: 10px;
-          box-shadow: 0 2px 10px rgba(0,0,0,var(--shadow-strength));
+          background: transparent;
+          border: none;
+          border-bottom: 1px solid var(--border);
+          border-radius: 0;
+          padding: 14px 0;
+          margin-bottom: 0;
+          box-shadow: none;
+        }
+        /* In Modalen und Sheets liegt der Inhalt schon auf einer eigenen
+           Flaeche - dort braucht die letzte Karte keine Abschlusslinie. */
+        .modal-body > .card:last-child,
+        .exercise-detail-body > .card:last-child {
+          border-bottom: none;
         }
         .chart-card {
-          padding: 16px 12px 14px;
-          border-color: rgba(255,255,255,0.06);
+          padding: 16px 0 14px;
         }
         .chart-card .plan-title {
-          padding-left: 4px;
+          padding-left: 0;
         }
 
         .stat-section-title {
           display: block;
-          margin: 20px 2px 10px;
-          font-size: 12px;
-          font-weight: 600;
-          letter-spacing: 0.06em;
+          margin: 26px 0 0;
+          padding-bottom: 8px;
+          border-bottom: 1px solid var(--border-strong);
+          font-size: 11px;
+          font-weight: 500;
+          letter-spacing: 0.12em;
           text-transform: uppercase;
-          color: var(--text-dim);
+          color: var(--text-faint);
         }
 
         .stat-search-head {
@@ -2521,40 +2567,64 @@ export default function TrainingApp() {
           min-width: 0;
         }
 
+        /* Kennzahlen ohne Kaesten: ein Raster, das nur durch Haarlinien
+           geteilt wird. */
         .stats-grid {
           display: grid;
           grid-template-columns: 1fr 1fr;
-          gap: 10px;
+          gap: 0;
+        }
+        .stats-grid .stat-item:nth-child(odd) {
+          border-right: 1px solid var(--border);
+          padding-right: 16px;
+        }
+        .stats-grid .stat-item:nth-child(even) {
+          padding-left: 18px;
         }
         .stats-grid-secondary {
           grid-template-columns: repeat(3, 1fr);
         }
         .stats-grid-secondary .stat-value {
-          font-size: 20px;
+          font-size: 24px;
+        }
+        /* Im Dreierraster gilt die gerade/ungerade Regel nicht - hier
+           bekommt jede Spalte ausser der letzten die Trennlinie. */
+        .stats-grid-secondary .stat-item:nth-child(odd),
+        .stats-grid-secondary .stat-item:nth-child(even) {
+          border-right: none;
+          padding-left: 12px;
+          padding-right: 12px;
+        }
+        .stats-grid-secondary .stat-item:not(:nth-child(3n)) {
+          border-right: 1px solid var(--border);
+        }
+        .stats-grid-secondary .stat-item:nth-child(3n + 1) {
+          padding-left: 0;
         }
         .stat-hero {
           display: flex;
-          flex-direction: column;
-          gap: 2px;
-          background: linear-gradient(155deg, var(--surface-alt), var(--surface));
-          border: 1px solid var(--border);
-          border-left: 3px solid var(--accent);
-          border-radius: 14px;
-          padding: 18px 18px 16px;
-          margin-bottom: 10px;
+          flex-direction: column-reverse;
+          gap: 6px;
+          background: transparent;
+          border: none;
+          border-bottom: 1px solid var(--border);
+          border-radius: 0;
+          padding: 14px 0 18px;
+          margin-bottom: 0;
         }
         .stat-hero-label {
-          font-size: 12px;
-          text-transform: uppercase;
-          letter-spacing: 0.5px;
+          font-size: 11.5px;
+          letter-spacing: 0.2px;
           color: var(--text-dim);
         }
         .stat-hero-value {
-          font-family: 'Oswald', sans-serif;
-          font-weight: 700;
-          font-size: 42px;
-          line-height: 1.1;
-          color: var(--accent);
+          font-family: 'Newsreader', Georgia, serif;
+          font-weight: 400;
+          font-size: 46px;
+          line-height: 1;
+          letter-spacing: -1px;
+          font-variant-numeric: tabular-nums;
+          color: var(--text);
         }
         .stat-hero-value small {
           font-size: 18px;
@@ -2565,21 +2635,25 @@ export default function TrainingApp() {
         .stat-item {
           display: flex;
           flex-direction: column;
-          gap: 4px;
-          background: var(--surface-alt, rgba(255,255,255,0.04));
-          border: 1px solid var(--border);
-          border-radius: 12px;
-          padding: 14px 14px 12px;
+          gap: 7px;
+          background: transparent;
+          border: none;
+          border-bottom: 1px solid var(--border);
+          border-radius: 0;
+          padding: 16px 0 18px;
         }
         .stat-value {
-          font-family: 'Oswald', sans-serif;
-          font-weight: 600;
-          font-size: 28px;
-          line-height: 1.1;
-          color: var(--accent);
+          font-family: 'Newsreader', Georgia, serif;
+          font-weight: 400;
+          font-size: 32px;
+          line-height: 1;
+          letter-spacing: -0.6px;
+          font-variant-numeric: tabular-nums;
+          color: var(--text);
         }
         .stat-label {
-          font-size: 12.5px;
+          font-size: 11.5px;
+          line-height: 1.45;
           color: var(--text-dim);
         }
 
@@ -2587,11 +2661,13 @@ export default function TrainingApp() {
           display: flex;
           align-items: center;
           gap: 8px;
-          background: var(--surface);
-          border: 1px solid var(--border);
-          border-radius: 12px;
-          padding: 10px 12px;
-          margin-bottom: 14px;
+          background: transparent;
+          border: none;
+          border-bottom: 1px solid var(--border-strong);
+          border-radius: 0;
+          padding: 4px 0 9px;
+          margin-bottom: 12px;
+          color: var(--text-faint);
         }
         .search-box input {
           background: transparent;
@@ -2609,29 +2685,32 @@ export default function TrainingApp() {
           gap: 8px;
           overflow-x: auto;
           padding-bottom: 4px;
-          margin-bottom: 14px;
+          margin-bottom: 12px;
         }
+        /* Randlose Pillen: die Auswahl zeigt sich durch die Fuellung, nicht
+           durch einen zusaetzlichen Rahmen. Gemischte Gross-/Kleinschreibung
+           statt Versalien, damit die Beschriftungen lesbar bleiben. */
         .chip {
           flex-shrink: 0;
-          font-family: 'JetBrains Mono', monospace;
-          font-size: 11px;
-          text-transform: uppercase;
-          letter-spacing: 0.4px;
-          padding: 7px 12px;
+          font-family: 'Inter', sans-serif;
+          font-size: 13px;
+          font-weight: 400;
+          letter-spacing: 0.1px;
+          padding: 7px 13px;
           border-radius: 999px;
-          border: 1px solid var(--border);
-          background: var(--surface);
-          color: var(--text-dim);
+          border: none;
+          background: var(--fill);
+          color: var(--text);
           cursor: pointer;
         }
         .chip.active {
           background: var(--accent);
-          border-color: var(--accent);
-          color: white;
+          color: #fff;
+          font-weight: 500;
         }
         .chip-sm {
-          padding: 5px 10px;
-          font-size: 10px;
+          padding: 6px 11px;
+          font-size: 12px;
           display: inline-flex;
           align-items: center;
           gap: 4px;
@@ -2669,34 +2748,40 @@ export default function TrainingApp() {
           overflow: hidden;
           text-overflow: ellipsis;
         }
-        .ex-name { font-weight: 500; font-size: 14.5px; }
+        .ex-name {
+          font-family: 'Newsreader', Georgia, serif;
+          font-weight: 500;
+          font-size: 18px;
+          letter-spacing: -0.1px;
+        }
 
         .btn {
           display: inline-flex;
           align-items: center;
           justify-content: center;
-          gap: 6px;
+          gap: 7px;
           font-family: 'Inter', sans-serif;
           font-weight: 600;
-          font-size: 14px;
-          border-radius: 10px;
+          font-size: 15px;
+          letter-spacing: -0.1px;
+          border-radius: 12px;
           border: none;
-          padding: 11px 16px;
+          padding: 13px 18px;
           cursor: pointer;
         }
         .btn:disabled {
           opacity: 0.4;
           cursor: not-allowed;
         }
-        .btn-primary { background: var(--accent); color: white; box-shadow: 0 4px 14px rgba(193,101,46,0.35); }
-        .btn-ghost { background: var(--surface-alt); color: var(--text); border: 1px solid var(--border); }
+        .btn-primary { background: var(--accent); color: #fff; }
+        .btn-ghost { background: var(--fill); color: var(--accent); border: none; }
         .btn-block { width: 100%; }
-        .btn-sm { padding: 7px 10px; font-size: 12.5px; }
-        .btn-danger { background: rgba(216,90,79,0.12); color: var(--danger); }
+        .btn-sm { padding: 8px 12px; font-size: 13px; border-radius: 9px; }
+        .btn-danger { background: transparent; color: var(--danger); }
         .btn-icon {
-          width: 34px; height: 34px; border-radius: 9px;
+          width: 34px; height: 34px; border-radius: 999px;
           display: inline-flex; align-items: center; justify-content: center;
-          background: var(--surface-alt); border: 1px solid var(--border); color: var(--text);
+          background: var(--fill); border: none; color: var(--text);
           cursor: pointer;
         }
 
@@ -2718,8 +2803,8 @@ export default function TrainingApp() {
         }
         .fab-nav {
           display: flex;
-          background: var(--surface);
-          border-top: 1px solid var(--border);
+          background: var(--bg);
+          border-top: 1px solid var(--border-strong);
           /* Unten nur der halbe Safe-Area-Abstand: der volle Wert ließ auf
              dem iPhone einen fingerbreiten leeren Streifen unter den
              Beschriftungen stehen. Die Hälfte hält die Knöpfe weiterhin
@@ -2753,8 +2838,9 @@ export default function TrainingApp() {
           white-space: nowrap;
         }
         .session-bar-time {
-          font-family: 'Oswald', sans-serif;
-          font-size: 14px;
+          font-family: 'Newsreader', Georgia, serif;
+          font-size: 16px;
+          font-variant-numeric: tabular-nums;
           flex-shrink: 0;
         }
         .session-bar-time.is-rest {
@@ -2785,24 +2871,28 @@ export default function TrainingApp() {
           display: flex;
           flex-direction: column;
           align-items: center;
-          gap: 3px;
+          gap: 5px;
           background: none;
           border: none;
-          color: var(--text-dim);
+          color: var(--text-faint);
           font-family: 'Inter', sans-serif;
-          font-size: 10.5px;
+          font-size: 9.5px;
+          text-transform: uppercase;
+          letter-spacing: 0.06em;
           padding: 6px 0;
           cursor: pointer;
           transition: color 120ms ease, transform 100ms ease;
         }
-        .nav-btn.active { color: var(--accent); }
+        .nav-btn.active { color: var(--text); }
+        .nav-btn.active svg { color: var(--accent); }
         .nav-btn:active { transform: scale(0.92); }
 
         .plan-title {
-          font-family: 'Oswald', sans-serif;
-          font-weight: 600;
-          font-size: 16px;
-          letter-spacing: 0.3px;
+          font-family: 'Newsreader', Georgia, serif;
+          font-weight: 500;
+          font-size: 21px;
+          line-height: 1.15;
+          letter-spacing: -0.2px;
         }
 
         /* iOS Safari auto-zooms the page whenever a focused form control
@@ -2810,20 +2900,21 @@ export default function TrainingApp() {
            that jump-and-zoom when tapping a name to rename it. */
         input[type=number], input[type=text] {
           background: var(--surface-alt);
-          border: 1px solid var(--border);
+          border: none;
           color: var(--text);
-          border-radius: 8px;
-          padding: 8px 10px;
-          font-family: 'JetBrains Mono', monospace;
+          border-radius: 9px;
+          padding: 10px 11px;
+          font-family: 'Inter', sans-serif;
+          font-variant-numeric: tabular-nums;
           font-size: 16px;
           width: 100%;
         }
         select, textarea {
           background: var(--surface-alt);
-          border: 1px solid var(--border);
+          border: none;
           color: var(--text);
-          border-radius: 8px;
-          padding: 8px 10px;
+          border-radius: 9px;
+          padding: 10px 11px;
           font-family: 'Inter', sans-serif;
           font-size: 16px;
           width: 100%;
@@ -2849,10 +2940,10 @@ export default function TrainingApp() {
         }
         label.field-label {
           font-size: 11px;
-          color: var(--text-dim);
+          color: var(--text-faint);
           text-transform: uppercase;
-          letter-spacing: 0.4px;
-          margin-bottom: 4px;
+          letter-spacing: 0.1em;
+          margin-bottom: 6px;
           display: block;
         }
 
@@ -2968,15 +3059,15 @@ export default function TrainingApp() {
         .warmup-toggle {
           width: 22px;
           height: 22px;
-          border-radius: 6px;
-          border: 1.5px solid var(--border);
-          background: var(--surface-alt);
+          border-radius: 7px;
+          border: none;
+          background: var(--fill);
           color: var(--text-dim);
           display: flex;
           align-items: center;
           justify-content: center;
           cursor: pointer;
-          font-family: 'JetBrains Mono', monospace;
+          font-family: 'Inter', sans-serif;
           font-size: 11px;
           font-weight: 600;
           flex-shrink: 0;
@@ -2999,17 +3090,16 @@ export default function TrainingApp() {
           align-items: center;
           gap: 8px;
           max-width: 100%;
-          background: var(--surface);
-          border: 1px solid var(--border);
-          border-radius: 12px;
-          padding: 9px 12px;
+          background: transparent;
+          border: none;
+          border-radius: 0;
+          padding: 2px 0;
           color: var(--text);
           cursor: pointer;
-          font-family: 'Oswald', sans-serif;
-          font-weight: 600;
-          font-size: 16px;
-          letter-spacing: 0.3px;
-          text-transform: uppercase;
+          font-family: 'Newsreader', Georgia, serif;
+          font-weight: 500;
+          font-size: 30px;
+          letter-spacing: -0.5px;
         }
         .program-trigger-label {
           overflow: hidden;
@@ -3022,7 +3112,7 @@ export default function TrainingApp() {
           left: 0;
           min-width: 240px;
           max-width: calc(100vw - 32px);
-          background: var(--surface);
+          background: var(--elevated);
           border: 1px solid var(--border);
           border-radius: 12px;
           box-shadow: 0 8px 26px rgba(0,0,0,calc(var(--shadow-strength) * 2.2));
@@ -3068,11 +3158,10 @@ export default function TrainingApp() {
           white-space: nowrap;
         }
         .folder-header-title {
-          font-family: 'Oswald', sans-serif;
-          font-weight: 600;
-          font-size: 15px;
-          letter-spacing: 0.3px;
-          text-transform: uppercase;
+          font-family: 'Newsreader', Georgia, serif;
+          font-weight: 500;
+          font-size: 19px;
+          letter-spacing: -0.1px;
           flex: 1 1 auto;
           min-width: 0;
           overflow: hidden;
@@ -3087,7 +3176,8 @@ export default function TrainingApp() {
           text-overflow: ellipsis;
         }
         .muscle-week-value {
-          font-family: 'Oswald', sans-serif;
+          font-family: 'Inter', sans-serif;
+          font-variant-numeric: tabular-nums;
           font-size: 13px;
           text-align: right;
           color: var(--text);
@@ -3159,7 +3249,7 @@ export default function TrainingApp() {
           overflow: visible;
         }
         .sparkline polyline {
-          stroke: var(--accent);
+          stroke: var(--text-dim);
         }
         .sparkline-empty line {
           stroke: var(--border);
@@ -3167,7 +3257,8 @@ export default function TrainingApp() {
           stroke-dasharray: 2 2;
         }
         .load-change {
-          font-family: 'Oswald', sans-serif;
+          font-family: 'Inter', sans-serif;
+          font-variant-numeric: tabular-nums;
           font-size: 12.5px;
           text-align: right;
           white-space: nowrap;
@@ -3245,7 +3336,7 @@ export default function TrainingApp() {
           width: 100%;
           max-height: 100%;
           animation: modal-rise 200ms ease-out both;
-          background: var(--surface);
+          background: var(--elevated);
           border: 1px solid var(--border);
           border-radius: 16px;
           box-shadow: 0 18px 48px rgba(0,0,0,0.45);
@@ -3262,9 +3353,10 @@ export default function TrainingApp() {
           flex-shrink: 0;
         }
         .modal-title {
-          font-family: 'Oswald', sans-serif;
-          font-weight: 600;
-          font-size: 16px;
+          font-family: 'Newsreader', Georgia, serif;
+          font-weight: 500;
+          font-size: 21px;
+          letter-spacing: -0.2px;
           color: var(--text);
         }
         .modal-body {
@@ -3286,18 +3378,19 @@ export default function TrainingApp() {
           gap: 10px;
           width: 100%;
           text-align: left;
-          padding: 11px 12px;
+          padding: 12px 12px;
           border-radius: 10px;
-          border: 1px solid var(--border);
-          background: var(--surface-alt);
+          border: none;
+          background: var(--fill);
           color: var(--text);
           font-family: 'Inter', sans-serif;
-          font-size: 14px;
+          font-size: 15px;
           cursor: pointer;
         }
         .modal-option.active {
-          border-color: var(--accent);
-          color: var(--accent);
+          background: var(--accent);
+          color: #fff;
+          font-weight: 500;
         }
         .move-overlay {
           /* Lag vorher absolut im scrollenden Inhaltsbereich und wurde von
@@ -3353,7 +3446,7 @@ export default function TrainingApp() {
              meant the tabs sat just above the navigation bar and everything
              below had to be scrolled into view first. */
           min-height: min(72dvh, calc(100dvh - env(safe-area-inset-top) - 24px));
-          background: var(--surface);
+          background: var(--elevated);
           border-top: 1px solid var(--border);
           border-radius: 18px 18px 0 0;
           padding: 18px 16px calc(22px + env(safe-area-inset-bottom));
@@ -3387,15 +3480,16 @@ export default function TrainingApp() {
           overflow-y: auto;
           -webkit-overflow-scrolling: touch;
           overscroll-behavior: contain;
-          background: var(--surface);
+          background: var(--elevated);
           border-top: 1px solid var(--border);
           border-radius: 18px 18px 0 0;
           padding: 18px 16px calc(22px + env(safe-area-inset-bottom));
         }
         .move-sheet-title {
-          font-family: 'Oswald', sans-serif;
-          font-weight: 600;
-          font-size: 16px;
+          font-family: 'Newsreader', Georgia, serif;
+          font-weight: 500;
+          font-size: 21px;
+          letter-spacing: -0.2px;
           margin-bottom: 12px;
         }
         .move-sheet-options {
@@ -3409,20 +3503,21 @@ export default function TrainingApp() {
           display: flex;
           align-items: center;
           gap: 10px;
-          background: var(--surface-alt);
-          border: 1px solid var(--border);
+          background: var(--fill);
+          border: none;
           color: var(--text);
           border-radius: 10px;
-          padding: 11px 14px;
+          padding: 12px 14px;
           font-family: 'Inter', sans-serif;
-          font-size: 14px;
-          font-weight: 500;
+          font-size: 15px;
+          font-weight: 400;
           cursor: pointer;
           text-align: left;
         }
         .move-option.active {
-          border-color: var(--accent);
-          background: rgba(193,101,46,0.14);
+          background: var(--accent);
+          color: #fff;
+          font-weight: 500;
         }
         .color-swatch {
           width: 24px;
@@ -3450,9 +3545,9 @@ export default function TrainingApp() {
         .note-toggle {
           width: 26px;
           height: 26px;
-          border-radius: 8px;
-          border: 1px solid var(--border);
-          background: var(--surface-alt);
+          border-radius: 999px;
+          border: none;
+          background: var(--fill);
           color: var(--text-dim);
           display: flex;
           align-items: center;
@@ -3475,10 +3570,11 @@ export default function TrainingApp() {
           gap: 5px;
           padding: 5px 10px;
           border-radius: 999px;
-          font-family: 'JetBrains Mono', monospace;
-          font-size: 12px;
+          font-family: 'Inter', sans-serif;
+          font-variant-numeric: tabular-nums;
+          font-size: 12.5px;
           color: var(--text-dim);
-          background: var(--surface);
+          background: var(--surface-alt);
           border: 1px solid var(--border);
           /* Deliberately understated: small, muted and slightly see-through
              so it reads as a status line, not as a notification. */
@@ -3491,10 +3587,11 @@ export default function TrainingApp() {
           display: flex;
           align-items: center;
           gap: 5px;
-          font-family: 'JetBrains Mono', monospace;
+          font-family: 'Inter', sans-serif;
+          font-variant-numeric: tabular-nums;
           font-size: 12px;
           color: var(--text-dim);
-          background: var(--surface-alt);
+          background: var(--fill);
           border-radius: 8px;
           padding: 5px 9px;
           height: fit-content;
@@ -3511,7 +3608,7 @@ export default function TrainingApp() {
           right: 0;
           width: 260px;
           max-width: calc(100vw - 48px);
-          background: var(--surface);
+          background: var(--elevated);
           border: 1px solid var(--border);
           border-radius: 12px;
           box-shadow: 0 8px 26px rgba(0,0,0,calc(var(--shadow-strength) * 2.2));
@@ -3545,17 +3642,18 @@ export default function TrainingApp() {
           padding: 2px;
         }
         .set-num {
-          font-family: 'JetBrains Mono', monospace;
-          font-size: 12px;
-          color: var(--text-dim);
+          font-family: 'Inter', sans-serif;
+          font-variant-numeric: tabular-nums;
+          font-size: 13px;
+          color: var(--text-faint);
           text-align: center;
         }
         .set-check {
-          width: 22px;
-          height: 22px;
-          border-radius: 6px;
-          border: 1.5px solid var(--border);
-          background: var(--surface-alt);
+          width: 24px;
+          height: 24px;
+          border-radius: 999px;
+          border: 1.5px solid var(--border-strong);
+          background: transparent;
           display: flex;
           align-items: center;
           justify-content: center;
@@ -3571,12 +3669,13 @@ export default function TrainingApp() {
         }
 
         .last-performance {
-          font-size: 12px;
+          font-size: 12.5px;
           color: var(--text-dim);
-          font-family: 'JetBrains Mono', monospace;
-          background: var(--surface-alt);
+          font-family: 'Inter', sans-serif;
+          font-variant-numeric: tabular-nums;
+          background: var(--fill);
           border-radius: 8px;
-          padding: 6px 10px;
+          padding: 7px 10px;
           margin-top: 2px;
         }
         .superset-link-toggle {
@@ -3603,26 +3702,20 @@ export default function TrainingApp() {
           display: flex;
           align-items: center;
           gap: 5px;
-          font-family: 'JetBrains Mono', monospace;
+          font-family: 'Inter', sans-serif;
           font-size: 10.5px;
           text-transform: uppercase;
-          letter-spacing: 0.4px;
-          color: var(--accent);
-          margin: 10px 2px 4px;
+          letter-spacing: 0.1em;
+          color: var(--text-faint);
+          margin: 10px 0 4px;
         }
         .superset-card {
-          border-color: var(--accent);
           position: relative;
+          border-left: 2px solid var(--accent);
+          padding-left: 12px;
         }
         .superset-card-linked {
-          margin-bottom: 2px;
-          border-bottom-left-radius: 4px;
-          border-bottom-right-radius: 4px;
-          border-bottom-width: 0;
-        }
-        .superset-card + .superset-card {
-          border-top-left-radius: 4px;
-          border-top-right-radius: 4px;
+          border-bottom-color: transparent;
         }
         /* Collapsed exercise cards in the plan builder: a whole workout
            fits on one screen instead of scrolling through five tall cards. */
@@ -3749,12 +3842,13 @@ export default function TrainingApp() {
         .volume-change-badge {
           margin-left: 4px;
           flex-shrink: 0;
-          font-family: 'Oswald', sans-serif;
+          font-family: 'Inter', sans-serif;
+          font-variant-numeric: tabular-nums;
           font-size: 12px;
           font-weight: 600;
           padding: 2px 7px;
           border-radius: 999px;
-          background: var(--surface-alt);
+          background: var(--fill);
         }
         .volume-change-up { color: var(--success); }
         .volume-change-down { color: var(--danger); }
@@ -3769,18 +3863,20 @@ export default function TrainingApp() {
           text-align: center;
         }
         .auto-run-phase {
-          font-family: 'Oswald', sans-serif;
-          font-size: 12px;
-          letter-spacing: 0.08em;
+          font-family: 'Inter', sans-serif;
+          font-size: 11px;
+          letter-spacing: 0.12em;
           text-transform: uppercase;
-          color: var(--text-dim);
+          color: var(--text-faint);
         }
         .auto-run-time {
-          font-family: 'Oswald', sans-serif;
-          font-size: 44px;
-          font-weight: 600;
-          line-height: 1.05;
-          color: var(--accent);
+          font-family: 'Newsreader', Georgia, serif;
+          font-variant-numeric: tabular-nums;
+          font-size: 50px;
+          font-weight: 400;
+          line-height: 1;
+          letter-spacing: -1.4px;
+          color: var(--text);
         }
         .auto-run-what {
           font-size: 12.5px;
@@ -3795,33 +3891,36 @@ export default function TrainingApp() {
           align-items: center;
           justify-content: space-between;
           gap: 10px;
-          background: var(--accent);
-          color: white;
-          border-radius: 14px;
-          padding: 12px 14px;
+          background: var(--bg);
+          color: var(--text);
+          border-top: 1px solid var(--border-strong);
+          border-bottom: 1px solid var(--border);
+          border-radius: 0;
+          padding: 12px 0;
           margin-bottom: 12px;
         }
         .rest-timer .rest-label {
           display: flex;
           align-items: center;
           gap: 8px;
-          font-family: 'JetBrains Mono', monospace;
-          font-size: 22px;
-          font-weight: 600;
+          font-family: 'Newsreader', Georgia, serif;
+          font-variant-numeric: tabular-nums;
+          font-size: 26px;
+          font-weight: 400;
         }
         .rest-timer .rest-actions {
           display: flex;
           gap: 6px;
         }
         .rest-btn {
-          background: rgba(255,255,255,0.18);
+          background: var(--fill);
           border: none;
-          color: white;
+          color: var(--accent);
           border-radius: 8px;
-          padding: 6px 9px;
-          font-size: 12px;
+          padding: 7px 10px;
+          font-size: 13px;
           font-family: 'Inter', sans-serif;
-          font-weight: 600;
+          font-weight: 500;
           display: flex;
           align-items: center;
           gap: 4px;
@@ -3835,7 +3934,7 @@ export default function TrainingApp() {
    heraus ausgeloest wurde. Fixed statt absolute, damit sie nicht vom
    scrollenden Inhaltsbereich beschnitten wird. */
         .confirm-overlay{position:fixed;top:0;right:0;bottom:0;left:0;background:rgba(0,0,0,.55);display:flex;align-items:center;justify-content:center;z-index:400;padding:calc(24px + env(safe-area-inset-top)) 24px calc(24px + env(safe-area-inset-bottom))}
-        .confirm-card{background:var(--surface);border:1px solid var(--border);border-radius:14px;padding:18px;max-width:320px;width:100%}
+        .confirm-card{background:var(--elevated);border:1px solid var(--border);border-radius:14px;padding:18px;max-width:320px;width:100%}
         .confirm-card p{margin:0 0 16px;font-size:14px;line-height:1.5}
         .confirm-actions{display:flex;gap:8px}
         .toast-snackbar{position:fixed;left:50%;bottom:82px;transform:translateX(-50%);z-index:35;background:var(--surface-alt);border:1px solid var(--border);border-radius:12px;padding:10px 14px;box-shadow:0 8px 30px rgba(0,0,0,.3);font-size:13px;max-width:90%;text-align:center}
@@ -3849,11 +3948,11 @@ export default function TrainingApp() {
           margin-bottom: 10px;
         }
         .cal-month-label {
-          font-family: 'Oswald', sans-serif;
-          font-weight: 600;
-          font-size: 16px;
+          font-family: 'Newsreader', Georgia, serif;
+          font-weight: 500;
+          font-size: 26px;
+          letter-spacing: -0.4px;
           text-transform: capitalize;
-          letter-spacing: 0.3px;
           cursor: pointer;
         }
         .cal-category-row {
@@ -3887,11 +3986,12 @@ export default function TrainingApp() {
           gap: 3px;
         }
         .cal-day {
-          background: var(--surface);
-          border: 1px solid var(--border);
-          border-radius: 8px;
-          padding: 3px 3px 4px;
-          min-height: 40px;
+          background: transparent;
+          border: none;
+          border-top: 1px solid var(--border);
+          border-radius: 0;
+          padding: 4px 2px 6px;
+          min-height: 46px;
           cursor: pointer;
           display: flex;
           flex-direction: column;
@@ -3909,15 +4009,15 @@ export default function TrainingApp() {
           opacity: 0.35;
         }
         .cal-day.is-today {
-          border-color: var(--accent);
+          border-top-color: var(--accent);
         }
         .cal-day.is-selected {
-          background: var(--surface-alt);
-          box-shadow: inset 0 0 0 1px var(--accent);
+          background: var(--fill);
         }
         .cal-day-num {
-          font-family: 'JetBrains Mono', monospace;
-          font-size: 10.5px;
+          font-family: 'Inter', sans-serif;
+          font-variant-numeric: tabular-nums;
+          font-size: 11px;
           color: var(--text-dim);
           padding-left: 1px;
         }
@@ -3979,17 +4079,19 @@ export default function TrainingApp() {
           padding: 10px 4px 4px;
         }
         .cal-detail-item {
-          background: var(--surface-alt);
-          border: 1px solid var(--border);
-          border-radius: 10px;
-          padding: 10px 12px;
+          background: transparent;
+          border: none;
+          border-bottom: 1px solid var(--border);
+          border-radius: 0;
+          padding: 12px 0;
         }
         /* Anything already done gets a green left edge, so a day reads as
            "what happened" versus "what is still planned" without having to
            compare the individual rows. The class was used before this rule
            existed and simply did nothing. */
         .cal-detail-done {
-          border-left: 3px solid var(--success);
+          border-left: 2px solid var(--success);
+          padding-left: 10px;
         }
 
         /* --- Atemübung: geführte Sitzung ---------------------------------
@@ -4011,8 +4113,10 @@ export default function TrainingApp() {
           gap: 10px;
         }
         .breathing-title {
-          font-family: 'Oswald', sans-serif;
-          font-size: 18px;
+          font-family: 'Newsreader', Georgia, serif;
+          font-weight: 500;
+          font-size: 22px;
+          letter-spacing: -0.2px;
           color: var(--text);
         }
         .breathing-round {
@@ -4075,14 +4179,17 @@ export default function TrainingApp() {
         }
         .breathing-phase {
           text-align: center;
-          font-family: 'Oswald', sans-serif;
-          font-size: 22px;
+          font-family: 'Newsreader', Georgia, serif;
+          font-weight: 500;
+          font-size: 25px;
           color: var(--text);
         }
         .breathing-time {
           text-align: center;
-          font-family: 'JetBrains Mono', monospace;
-          font-size: 40px;
+          font-family: 'Newsreader', Georgia, serif;
+          font-variant-numeric: tabular-nums;
+          font-size: 48px;
+          letter-spacing: -1px;
           color: ${BREATHING_COLOR};
           margin: 2px 0 18px;
         }
@@ -5145,7 +5252,7 @@ function DashboardView({
       {todayOpen.length > 0 && (
         <>
           <span className="stat-section-title">Heute</span>
-          {todayOpen.map((ce) => {
+          {todayOpen.map((ce, idx) => {
             if (ce.type === "breathing") {
               const ex = breathingById[ce.breathingId];
               if (!ex) return null;
@@ -5160,7 +5267,10 @@ function DashboardView({
                     {breathingPhases(ex).length} Phasen · {breathingRounds(ex)} Runden
                     {total == null ? " · offene Dauer" : ` · ca. ${Math.max(1, Math.round(total / 60))} Min.`}
                   </div>
-                  <button className="btn btn-primary btn-block" onClick={() => onStartBreathing(ex, ce.id)}>
+                  <button
+                    className={`btn ${idx === 0 ? "btn-primary" : "btn-ghost"} btn-block`}
+                    onClick={() => onStartBreathing(ex, ce.id)}
+                  >
                     <Play size={15} /> Starten
                   </button>
                 </div>
@@ -5178,7 +5288,10 @@ function DashboardView({
                   {(plan.items || []).length} Übungen
                   {minutes ? ` · ca. ${minutes} Min.` : ""}
                 </div>
-                <button className="btn btn-primary btn-block" onClick={() => onStartWorkout(plan, ce.id)}>
+                <button
+                  className={`btn ${idx === 0 ? "btn-primary" : "btn-ghost"} btn-block`}
+                  onClick={() => onStartWorkout(plan, ce.id)}
+                >
                   <Play size={15} /> Training starten
                 </button>
               </div>
@@ -5686,7 +5799,7 @@ function CalendarView({
                     </div>
                   ) : plan ? (
                     <button
-                      className="btn btn-primary btn-block btn-sm"
+                      className="btn btn-ghost btn-block btn-sm"
                       style={{ marginTop: 10 }}
                       onClick={() => onStartScheduledWorkout(plan, entry.id)}
                     >
@@ -5730,7 +5843,7 @@ function CalendarView({
                     </div>
                   ) : br ? (
                     <button
-                      className="btn btn-primary btn-block btn-sm"
+                      className="btn btn-ghost btn-block btn-sm"
                       style={{ marginTop: 10 }}
                       onClick={() => onStartScheduledBreathing?.(br, entry.id)}
                     >
@@ -10406,7 +10519,7 @@ function LogView({
 // exercise detail sheet, so both always show identical numbers.
 // ---------------------------------------------------------------------------
 
-const GYM_LINE_COLORS = ["#c1652e", "#3b82f6", "#16a34a", "#a855f7", "#e11d48"];
+const GYM_LINE_COLORS = ["#b25a26", "#41707d", "#4f7a48", "#6f5f92", "#9a7414"];
 
 // Recharts takes plain colour strings rather than CSS variables, so the
 // current theme's values are read off the stylesheet once per render.
@@ -10420,10 +10533,18 @@ function useChartColors(theme) {
       return value || fallback;
     };
     return {
-      grid: read("--surface-alt", "#26242b"),
-      axis: read("--text-dim", "#9a948d"),
-      tooltipBg: read("--surface", "#1d1c21"),
-      tooltipBorder: read("--border", "#37343c"),
+      grid: read("--border", "rgba(60,60,67,0.15)"),
+      axis: read("--text-faint", "#a3a3a8"),
+      tooltipBg: read("--elevated", "#ffffff"),
+      tooltipBorder: read("--border", "rgba(60,60,67,0.15)"),
+      series: {
+        accent: read("--chart-accent", "#b25a26"),
+        gold: read("--chart-gold", "#9a7414"),
+        teal: read("--chart-teal", "#41707d"),
+        violet: read("--chart-violet", "#6f5f92"),
+        green: read("--chart-green", "#4f7a48"),
+        green2: read("--chart-green-2", "#3c6b52"),
+      },
     };
   }, [theme]);
 }
@@ -10545,24 +10666,24 @@ function ExerciseCharts({ logs, exerciseId, isTimeBased, theme, gyms = [], gymIn
   );
   const cards = selectedIsTimeBased
     ? [
-        { key: "maxDuration", title: "Längster Satz (Sek.)", color: "#c1652e" },
-        { key: "totalDuration", title: "Gesamtzeit pro Training (Sek.)", color: "#e8c547" },
+        { key: "maxDuration", title: "Längster Satz (Sek.)", color: chartColors.series.accent },
+        { key: "totalDuration", title: "Gesamtzeit pro Training (Sek.)", color: chartColors.series.gold },
       ]
     : !hasAnyWeight
     ? [
-        { key: "maxReps", title: "Maximale Wdh. pro Satz", color: "#c1652e" },
-        { key: "totalReps", title: "Gesamte Wdh. pro Training", color: "#e8c547" },
+        { key: "maxReps", title: "Maximale Wdh. pro Satz", color: chartColors.series.accent },
+        { key: "totalReps", title: "Gesamte Wdh. pro Training", color: chartColors.series.gold },
       ]
     : [
-        { key: "maxSetVolume", title: "Maximales Satzvolumen", color: "#5b9aa8" },
-        { key: "best1RM", title: "Geschätztes 1RM", color: "#9a7bc4" },
-        { key: "totalVolume", title: "Gesamtvolumen pro Training", color: "#e8c547" },
-        { key: "maxWeight", title: "Maximalgewicht pro Training (kg)", color: "#c1652e" },
+        { key: "maxSetVolume", title: "Maximales Satzvolumen", color: chartColors.series.teal },
+        { key: "best1RM", title: "Geschätztes 1RM", color: chartColors.series.violet },
+        { key: "totalVolume", title: "Gesamtvolumen pro Training", color: chartColors.series.gold },
+        { key: "maxWeight", title: "Maximalgewicht pro Training (kg)", color: chartColors.series.accent },
         // Reps werden bei Gewichtsübungen längst pro Satz erfasst (siehe
         // workingSets oben), standen als eigene Karte bisher aber nur bei
         // reinen Bodyweight-Übungen zur Verfügung.
-        { key: "maxReps", title: "Maximale Wdh. pro Satz", color: "#6ea866" },
-        { key: "totalReps", title: "Gesamte Wdh. pro Training", color: "#4f8049" },
+        { key: "maxReps", title: "Maximale Wdh. pro Satz", color: chartColors.series.green },
+        { key: "totalReps", title: "Gesamte Wdh. pro Training", color: chartColors.series.green2 },
       ];
 
   return chartData.length === 0 ? (
@@ -12017,9 +12138,9 @@ function ProgressView({
                 <Line
                   type="monotone"
                   dataKey="sets"
-                  stroke="#c1652e"
+                  stroke={chartColors.series.accent}
                   strokeWidth={2.5}
-                  dot={{ r: 3, fill: "#c1652e", strokeWidth: 0 }}
+                  dot={{ r: 3, fill: chartColors.series.accent, strokeWidth: 0 }}
                   activeDot={{ r: 5 }}
                 />
               </LineChart>
@@ -12072,9 +12193,9 @@ function ProgressView({
                 <Line
                   type="monotone"
                   dataKey="load"
-                  stroke="#c1652e"
+                  stroke={chartColors.series.accent}
                   strokeWidth={2.5}
-                  dot={{ r: 3, fill: "#c1652e", strokeWidth: 0 }}
+                  dot={{ r: 3, fill: chartColors.series.accent, strokeWidth: 0 }}
                   activeDot={{ r: 5 }}
                 />
               </LineChart>

@@ -10,6 +10,7 @@ import {
   Trash2,
   Search,
   Play,
+  Pause,
   Save,
   Loader2,
   Timer,
@@ -4070,7 +4071,13 @@ export default function TrainingApp() {
         .volume-change-down { color: var(--danger); }
         .volume-change-neutral { color: var(--text-dim); }
 
+        /* Bleibt beim Scrollen oben stehen, wie der manuelle Pausen-Timer -
+           sonst verschwindet die Automatik samt Restzeit und Pause-Knopf
+           sobald man an ihr vorbeiscrollt. */
         .auto-run-bar {
+          position: sticky;
+          top: 0;
+          z-index: 5;
           background: var(--surface);
           border: 1px solid var(--accent);
           border-radius: 14px;
@@ -4126,6 +4133,15 @@ export default function TrainingApp() {
         }
         .rest-timer .rest-actions {
           display: flex;
+          gap: 6px;
+        }
+        /* Dieselbe Klasse steckt auch in der Automatik-Leiste, dort fehlte
+           bisher die Zeilen-Anordnung - die Knoepfe stapelten sich einzeln
+           untereinander. Jetzt bei Bedarf zwei Zeilen statt vier. */
+        .auto-run-bar .rest-actions {
+          display: flex;
+          flex-wrap: wrap;
+          justify-content: center;
           gap: 6px;
         }
         .rest-btn {
@@ -9578,6 +9594,25 @@ function LogView({
     releaseAudio();
   };
 
+  // Friert die laufende Phase an genau der Restzeit ein, statt sie wie
+  // "Stopp" zu verwerfen - man macht an derselben Stelle weiter, nicht am
+  // Anfang des nächsten unerledigten Satzes.
+  const pauseAuto = () => {
+    if (!autoRun || !autoRun.endsAt || autoRun.paused) return;
+    const left = Math.max(0, autoRun.endsAt - Date.now());
+    setAutoLeft(left);
+    applyAutoRun({ ...autoRun, paused: true, pausedLeftMs: left, endsAt: null });
+  };
+  const resumeAuto = () => {
+    if (!autoRun || !autoRun.paused) return;
+    applyAutoRun({
+      ...autoRun,
+      paused: false,
+      endsAt: Date.now() + (autoRun.pausedLeftMs || 0),
+      pausedLeftMs: undefined,
+    });
+  };
+
   const anyAutoRun = (session?.entries || []).some((e) => entryAutoRuns(e));
   const firstUnfinishedSet = () => {
     for (const entry of session?.entries || []) {
@@ -10004,7 +10039,9 @@ function LogView({
       {autoRun && (
         <div className="auto-run-bar">
           <div className="auto-run-phase">
-            {autoRun.phase === "work"
+            {autoRun.paused
+              ? "Pausiert"
+              : autoRun.phase === "work"
               ? "Satz läuft"
               : autoRun.phase === "rest"
               ? autoRun.isRoundRest
@@ -10022,13 +10059,24 @@ function LogView({
             {autoRun.phase === "waiting" && " · abhaken zum Fortfahren"}
           </div>
           <div className="rest-actions" style={{ marginTop: 8 }}>
-            {autoRun.phase !== "waiting" && (
+            {autoRun.phase !== "waiting" && !autoRun.paused && (
               <button
                 className="rest-btn"
                 onClick={() => applyAutoRun({ ...autoRun, endsAt: autoRun.endsAt + 15000 })}
               >
                 +15s
               </button>
+            )}
+            {autoRun.phase !== "waiting" && (
+              autoRun.paused ? (
+                <button className="rest-btn" onClick={resumeAuto}>
+                  <Play size={13} /> Fortsetzen
+                </button>
+              ) : (
+                <button className="rest-btn" onClick={pauseAuto}>
+                  <Pause size={13} /> Pause
+                </button>
+              )
             )}
             <button
               className="rest-btn"

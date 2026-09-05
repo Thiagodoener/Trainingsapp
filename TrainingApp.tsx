@@ -3160,15 +3160,20 @@ export default function TrainingApp() {
            soll auffallen, wenn die Uebung durch ist, aber nicht mit dem
            "Satz hinzufuegen"-Knopf um Aufmerksamkeit konkurrieren. */
         .rir-ask {
+          display: flex;
+          align-items: center;
+          gap: 12px;
           margin: 10px 0 12px;
           padding-top: 10px;
           border-top: 1px solid var(--border);
         }
         .rir-ask-label {
-          display: block;
-          font-size: 12.5px;
-          color: var(--text-dim);
-          margin-bottom: 8px;
+          flex-shrink: 0;
+          font-size: 11px;
+          font-weight: 500;
+          letter-spacing: 0.1em;
+          text-transform: uppercase;
+          color: var(--text-faint);
         }
         .rir-ask-row {
           margin-bottom: 0;
@@ -10610,15 +10615,18 @@ function LogView({
               && entry.sets.every((s) => s.done)
               && entry.sets.some((s) => s.done && !s.warmup) && (
               <div className="rir-ask">
-                <span className="rir-ask-label">Wie viele hättest du noch geschafft?</span>
+                <span className="rir-ask-label" title="Wiederholungen in Reserve im letzten Satz – 0 heißt bis zum Muskelversagen">
+                  RIR
+                </span>
                 <div className="chip-row rir-ask-row">
                   {RIR_OPTIONS.map((value) => (
                     <span
                       key={value}
                       className={`chip chip-sm ${entry.rir === value ? "active" : ""}`}
                       onClick={() => setEntryRir(entry.exerciseId, value)}
+                      title={value === 0 ? "Bis zum Muskelversagen" : undefined}
                     >
-                      {value === 0 ? "Keine" : rirLabel(value)}
+                      {rirLabel(value)}
                     </span>
                   ))}
                 </div>

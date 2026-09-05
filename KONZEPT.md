@@ -34,7 +34,8 @@ Daraus folgen drei Regeln:
 
 ## Die drei Ziele der Statistik
 
-1. **Über- und Unterbelastung erkennen.**
+1. **Über- und Unterbelastung erkennen.** Mit einer wichtigen Einschränkung: „zu wenig für
+   dein Ziel" kann keine App aus Trainingsdaten allein bestimmen – siehe Stufe 2.
 2. **Zeigen, ob progressive Overload noch stattfindet.**
 3. **Aktuellen Zustand mit der Vergangenheit vergleichbar machen.**
 
@@ -44,7 +45,7 @@ Daraus folgen drei Regeln:
 |---|---|---|
 | Überbelastung | teilweise | Schwellen sind Bevölkerungsdurchschnitt, nicht persönlich. Nach einer Pause entstehen Fehlalarme, weil der Vergleichsschnitt niedrig ist. |
 | Unterbelastung | fehlt | `detectLoadSignal` kennt nur `overload`, `overload-watch`, `plateau`. Alles wird nur relativ zum eigenen jüngsten Schnitt gemessen – sinkt der Schnitt langsam mit, fällt schleichender Abbau nie auf. |
-| Progressive Overload | Rohdaten da, Urteil fehlt | Charts und Plateau-Signal existieren, aber nirgends steht in Klartext „läuft" / „steht seit X Wochen". Kraft und Volumen werden in einer Kennzahl vermischt. |
+| Progressive Overload | Rohdaten da, Zusammenfassung fehlt | Charts und Plateau-Signal existieren, aber nirgends steht in Klartext „Kraft seit X Wochen flach". Kraft und Volumen werden in einer Kennzahl vermischt, obwohl es zwei verschiedene Wege sind, zu progressieren. |
 | Vergleich früher/heute | gut | Zeiträume, Sparklines, %-Vergleiche, Verlauf. |
 
 ---
@@ -59,8 +60,9 @@ Ohne diese Daten bleibt alles andere eine Schätzung aus Tonnage.
   Begründung: 1RM-Schätzungen sind nur nahe am Muskelversagen belastbar; ein Satz mit
   4 Wiederholungen Reserve liefert kaum verwertbare Information. Der letzte Satz trägt
   die Aussage, die übrigen kosten vor allem Tipparbeit.
-- **RIR, nicht RPE** – erfasst wird „wie viele hättest du noch geschafft", nicht eine
-  10er-Skala. Begründung:
+- **RIR, nicht RPE** – erfasst wird, wie viele Wiederholungen noch drin gewesen wären,
+  nicht ein Wert auf einer 10er-Skala. In der Bedienung steht schlicht „RIR"; die Frage
+  ausformuliert hinzuschreiben kostet im Training nur Platz. Begründung:
   - Beides misst dasselbe: Die moderne Kraftsport-RPE-Skala (Zourdos et al. 2016) ist über
     RIR *definiert* (RPE 10 = 0 RIR, RPE 9 = 1 RIR). Die Frage ist also nur, welche
     Formulierung zuverlässiger beantwortet wird.
@@ -83,38 +85,59 @@ Ohne diese Daten bleibt alles andere eine Schätzung aus Tonnage.
 
 ### Stufe 2 – Die zwei fehlenden Signale
 
-**Zielkorridor je Muskelgruppe** (löst Unterbelastung):
-- Spanne aus den letzten 12–16 Wochen, konkret das 25.–75. Perzentil der Wochenwerte
-  (robuster als Mittelwert ± Streuung, einzelne Ausreißerwochen verzerren nicht).
-- Wochen ganz ohne Training fließen nicht ein, sonst zieht jeder Urlaub den Korridor nach unten.
-- Angezeigt wird die Lage zum eigenen Korridor (darunter / drin / darüber), nicht eine
-  nackte Prozentzahl. Innerhalb der Spanne gibt es keine Meldung – das ist normales Auf und Ab.
-- Der Korridor der Vorperiode (Woche 13–26) blass dahinter macht schleichenden Abbau sichtbar:
-  wandert das Band selbst nach unten, sieht man es.
-- **Beschreibend, nicht vorschreibend.** Der Korridor sagt „das ist deine normale
-  Arbeitsspanne", nicht „das ist die richtige Menge für dein Ziel".
+**Normalbereich je Muskelgruppe** – bewusst *nicht* „Unterbelastungs-Erkennung" genannt:
+Der Bereich wird aus dem eigenen Verhalten gebildet und kann deshalb nur sagen
+„weniger als sonst", niemals „zu wenig für dein Ziel".
+- Verglichen wird ein **rollierender 3-Wochen-Schnitt**, nicht eine Einzelwoche. Das macht
+  die Trainingsfrequenz egal: eine Muskelgruppe, die alle 10 Tage drankommt, fällt sonst
+  in halbleeren Wochen fälschlich unter den Bereich.
+- Der Bereich selbst kommt aus **16–20 Wochen** Historie. Aus 12 Wochenwerten ist ein
+  Perzentilband zu dünn geschätzt und wandert von Woche zu Woche spürbar.
+- Gemeldet wird erst nach **zwei aufeinanderfolgenden** Zeiträumen außerhalb – ein
+  Hinweis, der bei jedem Ausreißer anspringt, wird zu Recht ignoriert.
+- Der Bereich der Vorperiode blass dahinter macht schleichenden Abbau sichtbar: wandert
+  das Band selbst nach unten, sieht man es.
 
-**Progressive-Overload-Urteil je Übung**, auf zwei getrennten Achsen:
-- **Kraft** aus dem *besten Satz* je Übung (geschätztes 1RM), **Volumen** getrennt davon.
-- Vier Fälle in Klartext: Kraft ↑ Volumen ↑ = Fortschritt · Kraft ↑ Volumen gleich =
-  effizienter · **Kraft flach, Volumen ↑ = mehr Arbeit ohne Ertrag** (der wichtigste Fall,
-  heute nirgends sichtbar) · Kraft ↓ Volumen ↓ = Rückschritt oder Erholungsproblem.
+**Echte Unterbelastung braucht zwei Signale gleichzeitig:** *weniger als sonst* **und**
+*kein Fortschritt* über mehrere Wochen. Erst diese Kombination erlaubt die Aussage „das ist
+für dich zu wenig" – hergeleitet aus der eigenen Reaktion statt aus einer Lehrbuchzahl.
+Jedes Signal für sich kann das nicht.
 
-**Ein kurzer Tag darf das Urteil nicht kippen.** Heute tut er das: die Plateau-Erkennung
+**Progressive Overload: zwei Trends zeigen, kein Urteil fällen.**
+- **Kraft** = geschätztes 1RM des **ersten Arbeitssatzes** je Übung. Begründung: Bei
+  gleichbleibendem Gewicht über alle Sätze (der hier genutzte Stil) ist der letzte Satz der
+  am stärksten vorermüdete – und wie viel Vorermüdung drinsteckt, hängt davon ab, wie viele
+  Sätze an dem Tag geschafft wurden. Ein kurzer Tag sähe damit wie Kraftzuwachs aus. Der
+  erste Satz wird dagegen immer frisch ausgeführt, egal wie lang das Training war. Dass dort
+  1–3 Wiederholungen in Reserve bleiben, macht die Schätzung systematisch etwas zu niedrig –
+  aber immer gleich, und für einen Trend zählt Vergleichbarkeit, nicht absolute Genauigkeit.
+- **Volumen** getrennt davon, über einen mehrwöchigen Trend statt Einzelwochen-Vergleich.
+- **Kein Label wie „mehr Arbeit ohne Ertrag".** Kraft flach bei steigendem Volumen ist in
+  einer Hypertrophie-Phase im 10–15er-Bereich völlig normal. Welche Phase gerade läuft, weiß
+  die App nicht – ein Urteil zu fällen, das die Absicht nicht kennt, verstößt gegen Regel 3.
+  Gezeigt wird „Kraft seit 8 Wochen flach, Volumen +18 %", gedeutet wird selbst.
+
+**Ein kurzer Tag darf das Bild nicht kippen.** Heute tut er das: die Plateau-Erkennung
 vergleicht die aktuelle Woche gegen das Maximum der drei Wochen davor, eine Woche mit wenig
-Zeit löst deshalb eine Plateau-Meldung aus. Gegenmittel:
-- Kraft am besten Satz messen, nicht an der Wochensumme – zwei starke Sätze statt fünf
-  bedeuten weniger Volumen, aber keinen Kraftverlust.
-- Trend über mehrere Wochen statt Einzelwochen-Vergleich.
-- Ausgefallene Einheiten sind **Lücken, keine Nullen**.
+Zeit löst deshalb eine Plateau-Meldung aus. Gegenmittel sind der Erst-Satz-Anker oben, der
+Mehrwochen-Trend, und: ausgefallene Einheiten sind **Lücken, keine Nullen**.
 
 ### Stufe 3 – Kalibrierungs-Schleife
 
 - **Eichsätze mit Vorher-Schätzung:** gelegentlich ein letzter Satz bis zum echten Versagen,
   Schätzung vorher. Danach: „8 geschätzt, 11 geschafft." Über Wochen entsteht die eigene
   Kalibrierungskurve („ich unterschätze mich um ~2 Wiederholungen").
-- **Gefühl gegen Leistung:** „Wenn du dich schwach fühlst, machst du trotzdem 95 % deiner
-  üblichen Leistung" – Rückmeldung auf die eigene Wahrnehmung.
+- **Gefühl gegen Leistung:** Rückmeldung auf die eigene Wahrnehmung. Zwei Fallstricke:
+  - Die Leistung steigt über die Zeit ohnehin. Verglichen wird deshalb nicht gegen einen
+    flachen Durchschnitt, sondern gegen die **Erwartung für diesen Tag** (rollierender
+    Schnitt der letzten vergleichbaren Sitzungen); ausgewertet wird die *Abweichung* davon,
+    die per Konstruktion keinen Trend mehr enthält.
+  - Die Datenmenge ist der Engpass: Aus 10–15 Sitzungen entstehen nur eine Handvoll „müde"-
+    Tage, ein Mittelwert daraus ist Rauschen. Die Abweichung wird deshalb **pro Übung**
+    gerechnet (4–5 Beobachtungen je Training statt einer) – kein echter Faktor 5, weil die
+    Übungen eines Tages sich ähneln, aber deutlich schneller. Bis die Basis trägt, wird
+    **keine Prozentzahl** gezeigt, sondern eine Tendenz, immer mit der Angabe, worauf sie
+    beruht („aus 7 müden Tagen").
 - **Antworten auf Warnungen justieren die Schwellen** (siehe Regel 2 oben).
 
 ---
@@ -128,8 +151,9 @@ und ab wann liefert es etwas. Ein Feld ohne Zeile in dieser Tabelle wird nicht g
 |---|---|---|---|
 | **RIR letzter Satz** | %1RM-Schätzung des Satzes | „Letztes Mal: 100 kg × 8 (1 in Reserve)" im Training | 2. Training |
 | | Rekorderkennung mit Kontext | „100 × 5 mit 2 in Reserve – stärker als der alte Rekord am Limit" | sofort |
-| | Kraft-Achse des Fortschritts-Urteils | „Bankdrücken: Kraft steigt seit 6 Wochen" | 4–6 Sitzungen je Übung |
+| | Kontext „war der Tag so hart wie sonst?" | Vergleich mit dem üblichen RIR derselben Übung | 3–4 Sitzungen je Übung |
 | | Belastung pro Muskelgruppe | korrekte statt geschätzter Intensität | sofort |
+| | Kalibrierung (Stufe 3) | Vorhersage gegen tatsächliche Leistung | siehe Eichsätze |
 | **Sitzungsgefühl 1–5** | Abgleich Gefühl ↔ Leistung | „An ‚müde'-Tagen liegst du bei 97 % deiner üblichen Leistung" | 10–15 Sitzungen |
 | | Kontext für schwache Wochen | Unterbelastungs-Warnung unterscheidet „wenig Zeit" von „ausgelaugt" | sofort |
 | | Frühwarnung Überlastung | „3 Wochen ‚ausgelaugt' bei steigender Belastung" | ~3 Wochen |

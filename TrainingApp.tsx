@@ -1116,6 +1116,12 @@ function getMuscleLoadSeries(
 // Arbeit. weekCount=21, weil der weiteste angebotene Vergleich "vor 20
 // Wochen" ist und dafür 20 Wochen Vorgeschichte plus die aktuelle Woche
 // gebraucht werden.
+// Dropsätze zählen hier nicht als eigener Satz: die Kennzahl bildet
+// unabhängige Trainingsreize mit Erholung dazwischen ab (MEV/MAV/MRV-
+// Logik), und genau die fehlt zwischen einem Satz und seinen Drops - sie
+// sind ein Anhängsel des Satzes, den sie fortsetzen, kein zusätzlicher.
+// Ihre Arbeit fehlt dadurch nicht in der Statistik, sie steht bereits
+// vollständig in Volumen, Wdh.-Summen und "Belastung pro Muskelgruppe".
 function getWeeklySetSeries(logs, exBy, subgroupOverrides, weekCount = 21, nowTs = Date.now()) {
   const safeLogs = Array.isArray(logs) ? logs : [];
   const emptyWeeks = () => new Array(weekCount).fill(0);
@@ -1129,7 +1135,7 @@ function getWeeklySetSeries(logs, exBy, subgroupOverrides, weekCount = 21, nowTs
     logEntries(l).forEach((e) => {
       const ex = exBy[e.exerciseId];
       if (!ex) return;
-      const done = entrySets(e).filter((x) => x.done && !x.warmup).length;
+      const done = entrySets(e).filter((x) => x.done && !x.warmup && !x.dropset).length;
       if (done === 0) return;
       if (!groupWeeks[ex.group]) groupWeeks[ex.group] = emptyWeeks();
       groupWeeks[ex.group][idx] += done;

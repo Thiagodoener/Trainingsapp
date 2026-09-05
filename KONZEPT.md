@@ -24,6 +24,11 @@ Daraus folgen drei Regeln:
 3. **Keine Trainingsvorschläge.** Die App zeigt Zustand und Verlauf. Was daraus folgt,
    entscheidet der Mensch. Genau an der Stelle würde sonst das Abtrainieren des eigenen
    Gefühls beginnen.
+4. **Kein Eingabefeld ohne konkrete Rückmeldung.** Lässt sich für ein geplantes Feld nicht
+   benennen, *wo* es sichtbar wird und *ab wann*, wird es nicht gebaut. Sonst entstehen
+   Datenfriedhöfe: man tippt bei jedem Training etwas ein und sieht nie wieder etwas davon.
+   Die Tabelle unter „Was mit welchem Datum passiert" ist die Umsetzung dieser Regel und
+   ist bei jedem neuen Feld zu ergänzen.
 
 ---
 
@@ -54,6 +59,21 @@ Ohne diese Daten bleibt alles andere eine Schätzung aus Tonnage.
   Begründung: 1RM-Schätzungen sind nur nahe am Muskelversagen belastbar; ein Satz mit
   4 Wiederholungen Reserve liefert kaum verwertbare Information. Der letzte Satz trägt
   die Aussage, die übrigen kosten vor allem Tipparbeit.
+- **RIR, nicht RPE** – erfasst wird „wie viele hättest du noch geschafft", nicht eine
+  10er-Skala. Begründung:
+  - Beides misst dasselbe: Die moderne Kraftsport-RPE-Skala (Zourdos et al. 2016) ist über
+    RIR *definiert* (RPE 10 = 0 RIR, RPE 9 = 1 RIR). Die Frage ist also nur, welche
+    Formulierung zuverlässiger beantwortet wird.
+  - Die RIR-basierte Skala gilt gegenüber der klassischen RPE-Skala als valider, besonders
+    bei Sätzen nahe am Limit – genau dort, wo hier gemessen wird.
+  - RIR fragt etwas Zählbares; RPE verlangt zusätzlich eine Übersetzung in eine abstrakte
+    Zahl, und jeder Übersetzungsschritt kostet Genauigkeit.
+  - Genauigkeit hängt stark von der Nähe zum Versagen ab: bei 1 RIR sind Trainierte deutlich
+    genauer als bei 3 oder 5 RIR (mittlerer Fehler bei Trainierten ≈ 0,65 Wdh.). Erfahrene
+    unterschätzen um ca. 1–2 Wiederholungen, Unerfahrene um 4–5 (Steele et al. 2017).
+    Das Trainingsmuster hier (1–2 in Reserve, letzter Satz nahe ans Versagen) liegt genau im
+    genauesten Bereich der Skala – bei „4–5 im Tank" wäre die Datenqualität deutlich schlechter.
+  - Gespeichert wird RIR; RPE ist daraus jederzeit berechenbar (RPE = 10 − RIR).
 - **Sitzungsgefühl 1–5 mit sprachlichen Ankern** (nicht 1–10, nicht nur Zahlen).
   Begründung: Menschen unterscheiden subjektive Zustände zuverlässig in etwa 5–7 Stufen;
   eine feinere Skala liefert Scheingenauigkeit statt Signal. Worte statt Zahlen, weil man
@@ -98,6 +118,26 @@ Zeit löst deshalb eine Plateau-Meldung aus. Gegenmittel:
 - **Antworten auf Warnungen justieren die Schwellen** (siehe Regel 2 oben).
 
 ---
+
+## Was mit welchem Datum passiert
+
+Umsetzung von Regel 4. Jede Zeile beantwortet: Wofür wird es gebraucht, **wo sieht man es**,
+und ab wann liefert es etwas. Ein Feld ohne Zeile in dieser Tabelle wird nicht gebaut.
+
+| Datum | Speist | Sichtbar als | Ab wann |
+|---|---|---|---|
+| **RIR letzter Satz** | %1RM-Schätzung des Satzes | „Letztes Mal: 100 kg × 8 (1 in Reserve)" im Training | 2. Training |
+| | Rekorderkennung mit Kontext | „100 × 5 mit 2 in Reserve – stärker als der alte Rekord am Limit" | sofort |
+| | Kraft-Achse des Fortschritts-Urteils | „Bankdrücken: Kraft steigt seit 6 Wochen" | 4–6 Sitzungen je Übung |
+| | Belastung pro Muskelgruppe | korrekte statt geschätzter Intensität | sofort |
+| **Sitzungsgefühl 1–5** | Abgleich Gefühl ↔ Leistung | „An ‚müde'-Tagen liegst du bei 97 % deiner üblichen Leistung" | 10–15 Sitzungen |
+| | Kontext für schwache Wochen | Unterbelastungs-Warnung unterscheidet „wenig Zeit" von „ausgelaugt" | sofort |
+| | Frühwarnung Überlastung | „3 Wochen ‚ausgelaugt' bei steigender Belastung" | ~3 Wochen |
+| **Antwort auf eine Warnung** | persönliche Schwellen | Warnung kommt später oder gar nicht mehr | nach ~3 Antworten |
+| **Eichsatz-Schätzung** | Kalibrierungskurve | „Du unterschätzt dich um 2,4 Wdh." | 3–5 Eichsätze |
+
+Ehrlich dazu: Die Kalibrierungs-Auswertungen brauchen Datenpunkte und liefern in den ersten
+Wochen nichts. Die RIR-Effekte auf Rekorde, „Letztes Mal" und Intensität wirken sofort.
 
 ## Getroffene Entscheidungen
 

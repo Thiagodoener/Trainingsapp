@@ -3084,8 +3084,11 @@ export default function TrainingApp() {
         .set-line.menu-open {
           z-index: 40;
         }
-        .set-row.is-drop {
-          padding-left: 20px;
+        /* Nur die Nummer ruecke ein, nicht die ganze Zeile - Wdh.-, Kg- und
+           Haken-Spalte bleiben mit den Saetzen darueber auf einer Linie. */
+        .set-row.is-drop .set-kind {
+          justify-content: flex-start;
+          padding-left: 14px;
         }
         /* Die kleine Ecke zeigt, an welchem Arbeitssatz der Drop haengt. */
         .set-row.is-drop::after {

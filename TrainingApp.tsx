@@ -15,6 +15,7 @@ import {
   Timer,
   SkipForward,
   Trophy,
+  Smile,
   StickyNote,
   Pencil,
   Calendar,
@@ -283,6 +284,35 @@ const SET_KINDS = [
 ];
 const setKind = (set) => (set?.warmup ? "warmup" : set?.dropset ? "dropset" : "normal");
 const setKindFlags = (kind) => ({ warmup: kind === "warmup", dropset: kind === "dropset" });
+
+// Wiederholungen in Reserve (RIR) am letzten Satz einer Uebung - siehe
+// KONZEPT.md. Bewusst RIR statt RPE: beides misst dasselbe (die moderne
+// Kraftsport-RPE-Skala ist ueber RIR definiert), aber RIR fragt etwas
+// Zaehlbares und braucht keinen Uebersetzungsschritt in eine abstrakte Zahl.
+// Nach oben gedeckelt, weil oberhalb von ~4 in Reserve niemand mehr
+// zuverlaessig zwischen 4, 5 und 6 unterscheidet.
+const RIR_MAX = 4;
+const RIR_OPTIONS = [0, 1, 2, 3, 4];
+const rirLabel = (rir) => (rir >= RIR_MAX ? `${RIR_MAX}+` : String(rir));
+// "0 in Reserve" heisst: bis zum Muskelversagen.
+function fmtRir(rir) {
+  if (rir == null || !Number.isFinite(Number(rir))) return null;
+  const n = Math.max(0, Math.min(RIR_MAX, Math.round(Number(rir))));
+  return n === 0 ? "bis Versagen" : `${rirLabel(n)} in Reserve`;
+}
+
+// Sitzungsgefuehl: fuenf Stufen mit Worten statt einer 10er-Skala. Worte,
+// weil man Monate spaeter gegen einen Begriff vergleichen kann und nicht
+// gegen die Erinnerung an eine "7" - siehe KONZEPT.md.
+const FEELING_OPTIONS = [
+  [1, "Ausgelaugt"],
+  [2, "Müde"],
+  [3, "Normal"],
+  [4, "Gut"],
+  [5, "Stark"],
+];
+const feelingLabel = (value) =>
+  FEELING_OPTIONS.find(([v]) => v === Number(value))?.[1] || null;
 
 // Ein Dropsatz haengt immer an dem Arbeitssatz davor - ohne einen solchen
 // (erster Satz der Uebung, oder davor stehen nur Aufwaermsaetze) ergibt er
@@ -567,6 +597,7 @@ function getExerciseHistory(logs, exerciseId, excludeSessionId, isTimeBased = fa
 
   let lastSets = null;
   let lastDate = null;
+  let lastRir = null;
   let bestWeight = 0;
   let bestRepsAtBestWeight = 0;
   let lastNote = null;
@@ -605,6 +636,7 @@ function getExerciseHistory(logs, exerciseId, excludeSessionId, isTimeBased = fa
     if (!lastSets) {
       lastSets = doneSets;
       lastDate = log.date;
+      lastRir = Number.isFinite(Number(entry.rir)) ? Number(entry.rir) : null;
     }
 
     comparableSessions += 1;
@@ -641,7 +673,7 @@ function getExerciseHistory(logs, exerciseId, excludeSessionId, isTimeBased = fa
   }
 
   return {
-    lastSets, lastDate, bestWeight, bestRepsAtBestWeight, bestDuration, lastNote,
+    lastSets, lastDate, lastRir, bestWeight, bestRepsAtBestWeight, bestDuration, lastNote,
     best1RM, bestSetVolume, bestSetReps, bestTotalVolume, bestTotalReps, bestTotalDuration,
     comparableSessions,
   };
@@ -690,6 +722,8 @@ function getExerciseTimeline(logs, exerciseId) {
       return {
         date: l.date,
         sets: sets.filter((s) => s && s.done),
+        rir: Number.isFinite(Number(entry.rir)) ? Number(entry.rir) : null,
+        feeling: Number.isFinite(Number(l.feeling)) ? Number(l.feeling) : null,
         note: typeof entry.notes === "string" && entry.notes.trim() ? entry.notes.trim() : null,
       };
     })
@@ -2220,6 +2254,12 @@ export default function TrainingApp() {
   // straight away instead of leaving you to search for it.
   const [historyFocusLogId, setHistoryFocusLogId] = useState(null);
   const [finishSummary, setFinishSummary] = useState(null);
+  // Das Gefuehl wird nach dem Speichern nachgetragen, damit das Beenden des
+  // Trainings nicht an einer zusaetzlichen Frage haengt.
+  const setLogFeeling = async (logId, feeling) => {
+    setFinishSummary((prev) => (prev ? { ...prev, feeling } : prev));
+    await persistLogs(logs.map((l) => (l.id === logId ? { ...l, feeling } : l)));
+  };
   const [backupOpen, setBackupOpen] = useState(false);
   const [backupBusy, setBackupBusy] = useState(false);
   const [backupMessage, setBackupMessage] = useState(null);
@@ -2765,6 +2805,13 @@ export default function TrainingApp() {
           color: #fff;
           font-weight: 500;
         }
+        /* Im Abschluss-Fenster passen die fuenf Gefuehls-Worte nicht in eine
+           Zeile. Umbrechen statt seitlich scrollen: eine Auswahl, die man
+           erst wegschieben muss, wird uebersehen. */
+        .chip-row-wrap {
+          flex-wrap: wrap;
+          overflow-x: visible;
+        }
         .chip-sm {
           padding: 6px 11px;
           font-size: 12px;
@@ -3108,6 +3155,23 @@ export default function TrainingApp() {
           border-bottom: 1.5px solid var(--border-strong);
           border-bottom-left-radius: 6px;
           pointer-events: none;
+        }
+        /* Die RIR-Frage am Ende einer Uebung. Bewusst schmal und ruhig: sie
+           soll auffallen, wenn die Uebung durch ist, aber nicht mit dem
+           "Satz hinzufuegen"-Knopf um Aufmerksamkeit konkurrieren. */
+        .rir-ask {
+          margin: 10px 0 12px;
+          padding-top: 10px;
+          border-top: 1px solid var(--border);
+        }
+        .rir-ask-label {
+          display: block;
+          font-size: 12.5px;
+          color: var(--text-dim);
+          margin-bottom: 8px;
+        }
+        .rir-ask-row {
+          margin-bottom: 0;
         }
         /* Satznummer = Schalter fuer die Satzart. */
         .set-kind {
@@ -4648,6 +4712,8 @@ export default function TrainingApp() {
                   }
                 });
                 setFinishSummary({
+                  logId: cleaned.id,
+                  feeling: null,
                   planName: cleaned.planName,
                   durationMinutes,
                   totalVolume,
@@ -4832,6 +4898,21 @@ export default function TrainingApp() {
               </div>
             </div>
           )}
+
+          <div style={{ marginTop: 14, paddingTop: 12, borderTop: "1px solid var(--border)" }}>
+            <label className="field-label">Wie war das Training?</label>
+            <div className="chip-row chip-row-wrap" style={{ marginTop: 8, marginBottom: 0 }}>
+              {FEELING_OPTIONS.map(([value, label]) => (
+                <span
+                  key={value}
+                  className={`chip chip-sm ${finishSummary.feeling === value ? "active" : ""}`}
+                  onClick={() => setLogFeeling(finishSummary.logId, value)}
+                >
+                  {label}
+                </span>
+              ))}
+            </div>
+          </div>
 
           <button
             className="btn btn-primary btn-block btn-sm"
@@ -7289,6 +7370,14 @@ function ExerciseDetailSheet({
             timeline.map((t, idx) => (
               <div className="card" key={idx}>
                 <span className="tag">{fmtDate(t.date)}</span>
+                {fmtRir(t.rir) && (
+                  <span className="tag" style={{ marginLeft: 6 }}>{fmtRir(t.rir)}</span>
+                )}
+                {feelingLabel(t.feeling) && (
+                  <span className="tag tag-equipment" style={{ marginLeft: 6 }}>
+                    {feelingLabel(t.feeling)}
+                  </span>
+                )}
                 {t.sets.length > 0 && (
                   <div style={{ marginTop: 8, display: "flex", flexWrap: "wrap", gap: 6 }}>
                     {t.sets.map((s, i) => (
@@ -9825,6 +9914,16 @@ function LogView({
     // what the note said on a given day.
     onUpdateExerciseNote?.(exerciseId, notes);
   };
+  const setEntryRir = (exerciseId, rir) => {
+    onUpdateSession({
+      ...session,
+      entries: session.entries.map((e) =>
+        // Nochmal antippen nimmt die Angabe zurueck - eine falsch getippte
+        // Zahl waere sonst nicht mehr korrigierbar.
+        e.exerciseId === exerciseId ? { ...e, rir: e.rir === rir ? null : rir } : e
+      ),
+    });
+  };
   const changeSetKind = (exerciseId, idx, kind) => {
     setOpenSetKind(null);
     setSetKindMenuUp(false);
@@ -10347,6 +10446,7 @@ function LogView({
                       : `${s.weight || 0}kg×${s.reps || 0}`)
                   )
                   .join(", ")}
+                {fmtRir(history.lastRir) ? ` · ${fmtRir(history.lastRir)}` : ""}
               </div>
             )}
 
@@ -10499,6 +10599,29 @@ function LogView({
                     </div>
                   );
                 })}
+              </div>
+            )}
+
+            {/* Die Frage taucht erst auf, wenn die Uebung durch ist - vorher
+                waere sie nur im Weg. Nur eine Angabe pro Uebung, am letzten
+                Satz: 1RM-Schaetzungen sind nur nahe am Versagen belastbar,
+                bei 3-4 in Reserve raet man ohnehin (siehe KONZEPT.md). */}
+            {!isTimeBased && entry.sets.length > 0
+              && entry.sets.every((s) => s.done)
+              && entry.sets.some((s) => s.done && !s.warmup) && (
+              <div className="rir-ask">
+                <span className="rir-ask-label">Wie viele hättest du noch geschafft?</span>
+                <div className="chip-row rir-ask-row">
+                  {RIR_OPTIONS.map((value) => (
+                    <span
+                      key={value}
+                      className={`chip chip-sm ${entry.rir === value ? "active" : ""}`}
+                      onClick={() => setEntryRir(entry.exerciseId, value)}
+                    >
+                      {value === 0 ? "Keine" : rirLabel(value)}
+                    </span>
+                  ))}
+                </div>
               </div>
             )}
 
@@ -12643,6 +12766,11 @@ function HistoryView({
                   <Clock size={12} /> {log.durationMinutes} Min.
                 </span>
               ) : null}
+              {feelingLabel(log.feeling) && (
+                <span title="Wie sich das Training angefühlt hat">
+                  <Smile size={12} /> {feelingLabel(log.feeling)}
+                </span>
+              )}
             </div>
 
             {isOpen && (
@@ -12690,7 +12818,10 @@ function HistoryView({
                         >
                           {ex.name}
                         </span>
-                        <span className="history-set-summary">{summary || "–"}</span>
+                        <span className="history-set-summary">
+                          {summary || "–"}
+                          {fmtRir(entry.rir) ? ` · ${fmtRir(entry.rir)}` : ""}
+                        </span>
                       </div>
                       {/* Die Übungsnotiz steht bewusst nicht hier: sie ist eine
                           dauerhafte Notiz zur Übung und wiederholt sich sonst

@@ -291,15 +291,34 @@ const logEntriesFor = (log, exerciseId) =>
 const logSetsFor = (log, exerciseId) =>
   logEntriesFor(log, exerciseId).flatMap((e) => entrySets(e));
 
+// Bringt ein gespeichertes Training in die Form, die die Trainingsansicht
+// voraussetzt: jeder Eintrag hat eine ID und ein sets-Array. Aeltere Logs
+// und Eintraege aus beschaedigten Sicherungen haben beides nicht - und die
+// Trainingsansicht greift beim Rendern direkt auf entry.sets zu.
 function withEntryIds(session) {
   if (!session || !Array.isArray(session.entries)) return session;
-  if (session.entries.every((e) => e && e.id)) return session;
+  const clean = session.entries.filter(Boolean);
+  const alreadyFine =
+    clean.length === session.entries.length &&
+    clean.every((e) => e.id && Array.isArray(e.sets));
+  if (alreadyFine) return session;
   return {
     ...session,
-    entries: session.entries.map((e) => (e && e.id ? e : { ...e, id: uid() })),
+    entries: clean.map((e) => ({
+      ...e,
+      id: e.id || uid(),
+      sets: Array.isArray(e.sets) ? e.sets.filter(Boolean) : [],
+    })),
   };
 }
 const entrySets = (entry) => (Array.isArray(entry?.sets) ? entry.sets.filter(Boolean) : []);
+
+// Beim Speichern bleiben auch nicht abgehakte Saetze im Log stehen - sie
+// gehoerten zum Plan dieses Trainings. Gemacht wurde aber nur, was abgehakt
+// ist, und genau danach richtet sich jede Auswertung: ohne diesen Filter
+// zaehlt ein vorbelegter, nie ausgefuehrter Satz als geleistete Arbeit.
+const performedSets = (sets) => (Array.isArray(sets) ? sets : []).filter((s) => s && s.done);
+const performedWorkingSets = (sets) => performedSets(sets).filter((s) => !s.warmup);
 
 // Ein Satz ist entweder Aufwaermsatz, Dropsatz oder ein normaler Arbeitssatz.
 // Aufwaermsaetze bleiben ueberall aus der Statistik ausgeschlossen; ein
@@ -1634,7 +1653,94 @@ function SubgroupTag({ group, subgroupId, subgroupIds }) {
 // Main App
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// Fehlernetz
+//
+// Ohne dieses Netz macht ein einziger Renderfehler die App vollstaendig
+// unbenutzbar: React haengt den kompletten Baum aus, zurueck bleibt ein
+// weisser Bildschirm - und weil die Ursache im gespeicherten Datenbestand
+// liegt, kommt sie nach jedem Neuladen wieder. Genau dann sind die
+// Trainingsdaten aber noch da; wichtiger als eine huebsche Fehlerseite ist
+// deshalb, dass man sie von hier aus herausbekommt.
+// ---------------------------------------------------------------------------
+class AppErrorBoundary extends React.Component {
+  constructor(props) {
+    super(props);
+    this.state = { error: null };
+  }
+  static getDerivedStateFromError(error) {
+    return { error };
+  }
+  componentDidCatch(error, info) {
+    console.error("Unerwarteter Fehler in der App", error, info);
+  }
+  async saveBackup() {
+    try {
+      const backup = await buildBackup();
+      const blob = new Blob([JSON.stringify(backup, null, 2)], { type: "application/json" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `iron-log-sicherung-${new Date().toISOString().slice(0, 10)}.json`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 4000);
+    } catch (e) {
+      console.error("Sicherung im Fehlerfall fehlgeschlagen", e);
+    }
+  }
+  render() {
+    if (!this.state.error) return this.props.children;
+    return (
+      <div style={{
+        minHeight: "100vh", background: "#ffffff", color: "#1c1c1e",
+        padding: 24, fontFamily: "system-ui, -apple-system, sans-serif",
+        display: "flex", flexDirection: "column", justifyContent: "center", gap: 14,
+      }}>
+        <div style={{ fontSize: 22, fontWeight: 600 }}>Da ist etwas schiefgelaufen</div>
+        <p style={{ fontSize: 15, lineHeight: 1.5, color: "#6e6e73", margin: 0 }}>
+          Deine Trainingsdaten sind noch da. Lade die App neu – wenn der Fehler
+          bleibt, sichere die Daten zuerst und stelle sie danach wieder her.
+        </p>
+        <code style={{
+          fontSize: 12, background: "#f4f4f5", padding: "10px 12px",
+          borderRadius: 10, wordBreak: "break-word", color: "#6e6e73",
+        }}>
+          {String(this.state.error?.message || this.state.error)}
+        </code>
+        <button
+          onClick={() => window.location.reload()}
+          style={{
+            padding: "13px 16px", borderRadius: 12, border: "none",
+            background: "#b25a26", color: "#fff", fontSize: 16, fontWeight: 600,
+          }}
+        >
+          App neu laden
+        </button>
+        <button
+          onClick={() => this.saveBackup()}
+          style={{
+            padding: "13px 16px", borderRadius: 12, fontSize: 16,
+            border: "1px solid rgba(60,60,67,0.32)", background: "transparent", color: "#1c1c1e",
+          }}
+        >
+          Sicherung herunterladen
+        </button>
+      </div>
+    );
+  }
+}
+
 export default function TrainingApp() {
+  return (
+    <AppErrorBoundary>
+      <TrainingAppInner />
+    </AppErrorBoundary>
+  );
+}
+
+function TrainingAppInner() {
   // Plans is the first thing shown: starting a workout is the most
   // common reason to open the app.
   const [tab, setTab] = useState("dashboard");
@@ -1914,7 +2020,11 @@ export default function TrainingApp() {
     planName: plan.name,
     gymId: gymId || null,
     date: new Date().toISOString(),
-    entries: plan.items.map((it) => {
+    // Defensiv: ein Plan aus einer beschaedigten oder aelteren Sicherung
+    // kann ohne items ankommen. Ein ungeschuetztes .map() darauf reisst die
+    // gesamte App in einen weissen Bildschirm, aus dem es keinen Weg zurueck
+    // gibt - der Plan liegt ja weiter im Speicher.
+    entries: (Array.isArray(plan?.items) ? plan.items : []).map((it) => {
       const targetSets = it.sets || 1;
       // Start from what was actually achieved last time rather than the
       // numbers stored in the plan - the plan holds the starting point, the
@@ -2490,6 +2600,10 @@ export default function TrainingApp() {
           padding-bottom: 132px;
         }
 
+        /* Das versteckte Trainings-Panel (siehe Kommentar am Rendern der
+           Trainingsansicht) darf keinen Platz einnehmen. Explizit, damit
+           keine spaetere display-Regel das hidden-Attribut aushebelt. */
+        .tab-panel[hidden] { display: none !important; }
         .tab-panel {
           /* No "both"/"forwards" fill-mode: leaving a lingering (even
              no-op) transform value on this element after the animation
@@ -4479,6 +4593,230 @@ export default function TrainingApp() {
         className={`content ${session && tab !== "log" ? "with-session-bar" : ""}`}
         onScroll={handleContentScroll}
       >
+        {/* Die Trainingsansicht bleibt montiert, solange ein Training laeuft -
+            auch wenn man zwischendurch in eine andere Ansicht wechselt. Die
+            Automatik (Timer, Toene, automatisches Abhaken) lebt in dieser
+            Komponente; wuerde sie beim Tabwechsel abgebaut, waere ein
+            kurzer Blick in die Statistik das Ende des laufenden Zirkels.
+            Deshalb steht sie ausserhalb des Panels, das beim Tabwechsel
+            per key neu aufgebaut wird. */}
+        {!loading && (session || tab === "log") && (
+          <div className="tab-panel" hidden={tab !== "log"}>
+            <LogView
+              session={session}
+              plans={allPlans}
+              logs={logs}
+              exBy={allExBy}
+              exercises={allExercises}
+              exerciseNotes={exerciseNotes}
+              exerciseSubgroupOverrides={exerciseSubgroupOverrides}
+              onSetExerciseSubgroup={handleSetExerciseSubgroup}
+              onSetExerciseSubgroups={handleSetExerciseSubgroups}
+              exerciseEquipmentOverrides={exerciseEquipmentOverrides}
+              onSetExerciseEquipment={handleSetExerciseEquipment}
+              timeBasedExercises={timeBasedExercises}
+              gymIndependentExercises={gymIndependentExercises}
+              onUpdateExerciseNote={handleUpdateExerciseNote}
+              onRenameExercise={handleRenameExercise}
+              onToggleTimeBased={handleToggleTimeBased}
+              onToggleGymIndependent={handleToggleGymIndependent}
+              onStartFromPlan={(plan) => requestStart(plan)}
+              onUpdateSession={updateSession}
+              onRequestConfirm={askConfirm}
+              gyms={gyms}
+              onFinish={async () => {
+                if (!session) return;
+                // A workout opened for editing keeps its recorded duration -
+                // otherwise fixing one number would rewrite how long it took.
+                const durationMinutes =
+                  session.frozenDurationMinutes != null
+                    ? session.frozenDurationMinutes
+                    : session.startedAt
+                    ? Math.max(1, Math.round((Date.now() - new Date(session.startedAt).getTime()) / 60000))
+                    : null;
+                const cleaned = {
+                  ...session,
+                  // Sets now start pre-filled from the plan's targets, so an
+                  // exercise the user never actually touched would otherwise
+                  // still have "sets" and slip into the saved log. Only keep
+                  // entries where at least one set was actually checked off.
+                  // Also normalize every numeric field here in case a field
+                  // was still focused (never blurred) when the user tapped
+                  // "Training beenden".
+                  entries: session.entries
+                    .filter((e) => e.sets.some((s) => s.done))
+                    .map((e) => ({
+                      ...e,
+                      // Record that this exercise ran on time. The automatic
+                      // mode is a property of the session, which is gone once
+                      // the workout is saved - without this flag the history,
+                      // records and charts would later read it as a weight
+                      // exercise with 0 kg.
+                      targetUseTime:
+                        (session.autoRun && e.autoRun !== false) || !!e.targetUseTime,
+                      // toNum, not Number: weights are held as typed ("62,5"),
+                      // and Number("62,5") is NaN - which would silently store
+                      // the set as 0 kg.
+                      sets: e.sets.map((s) => ({
+                        ...s,
+                        reps: Math.max(0, toNum(s.reps)),
+                        weight: Math.max(0, toNum(s.weight)),
+                        duration: Math.max(0, toNum(s.duration)),
+                      })),
+                    })),
+                  durationMinutes,
+                };
+                if (cleaned.entries.length > 0) {
+                  // Work out the summary against the logs as they were BEFORE
+                  // this workout is added, otherwise every set would compare
+                  // against itself and nothing would ever count as a record.
+                  let totalVolume = 0;
+                  let totalSeconds = 0;
+                  let doneSets = 0;
+                  const records = [];
+                  cleaned.entries.forEach((entry) => {
+                    // Same rule the workout screen uses. Checking only the
+                    // global setting missed every exercise that ran on time
+                    // because of the automatic mode - so no record was ever
+                    // recognised in a HIT workout.
+                    const isTimeBased =
+                      (session.autoRun && entry.autoRun !== false) ||
+                      isTimeBasedInLogs(logs, entry.exerciseId, timeBasedExercises) ||
+                      !!entry.targetUseTime;
+                    const best = getExerciseHistory(
+                      logs, entry.exerciseId, cleaned.id, isTimeBased,
+                      effectiveGymId(entry.exerciseId, cleaned.gymId, gymIndependentExercises)
+                    );
+                    let bestOfEntry = null;
+                    entry.sets.forEach((set) => {
+                      if (!set.done || set.warmup) return;
+                      doneSets += 1;
+                      if (isTimeBased) totalSeconds += toNum(set.duration);
+                      else totalVolume += toNum(set.weight) * toNum(set.reps);
+                      if (isNewPR(set, best, isTimeBased)) {
+                        const label = isTimeBased
+                          ? `${toNum(set.duration)} Sek.`
+                          : `${toNum(set.reps)} × ${fmtDecimal(set.weight)} kg`;
+                        bestOfEntry = label;
+                      }
+                    });
+                    if (bestOfEntry) {
+                      records.push({
+                        name: allExBy[entry.exerciseId]?.name || "Übung",
+                        label: bestOfEntry,
+                      });
+                    }
+                  });
+                  setFinishSummary({
+                    logId: cleaned.id,
+                    feeling: null,
+                    planName: cleaned.planName,
+                    durationMinutes,
+                    totalVolume,
+                    totalSeconds,
+                    doneSets,
+                    exercises: cleaned.entries.length,
+                    gymName: gyms.find((g) => g.id === cleaned.gymId)?.name || null,
+                    records,
+                  });
+                  await persistLogs([...logs, cleaned]);
+                }
+                // If this workout was started from a calendar entry, link the
+                // finished log back to it so the calendar can show results
+                // instead of a "start workout" prompt from now on. If none
+                // exists for today (started directly, never planned), one is
+                // added instead - already marked done, so the calendar shows
+                // what was actually trained instead of staying empty.
+                if (cleaned.entries.length > 0) {
+                  // Either the entry the workout was started from, or - if it
+                  // was started from the plans page - an open entry for the
+                  // same workout on the same day. Without this the calendar
+                  // would show the plan as still open next to the finished
+                  // workout, i.e. the same session twice.
+                  const dayKey = toDateKey(new Date(cleaned.date));
+                  const match =
+                    // Ein bereits verknuepfter Eintrag zuerst: wird ein
+                    // gespeichertes Training noch einmal bearbeitet, gibt es
+                    // ihn schon. Ohne diese Zeile faenden die Suchen darunter
+                    // nichts (die letzte verlangt !ce.logId) und jedes
+                    // Bearbeiten legte den Tag ein weiteres Mal an.
+                    calendarEntries.find((ce) => ce.logId === cleaned.id) ||
+                    (session.calendarEntryId
+                      ? calendarEntries.find((ce) => ce.id === session.calendarEntryId)
+                      : null) ||
+                    calendarEntries.find(
+                      (ce) =>
+                        ce.type === "workout" &&
+                        !ce.logId &&
+                        ce.date === dayKey &&
+                        ce.planId === cleaned.planId
+                    );
+                  if (match) {
+                    await persistCalendarEntries(
+                      calendarEntries.map((ce) =>
+                        // Datum mitziehen: wird ein Training an einem
+                        // anderen Tag bearbeitet, gehoert der Eintrag dorthin.
+                        ce.id === match.id ? { ...ce, date: dayKey, logId: cleaned.id } : ce
+                      )
+                    );
+                  } else {
+                    await persistCalendarEntries([
+                      ...calendarEntries,
+                      { id: uid(), date: dayKey, type: "workout", planId: cleaned.planId ?? null, logId: cleaned.id },
+                    ]);
+                  }
+                }
+                // Targets always track what was actually achieved last time,
+                // so the plan auto-adjusts to real progress instead of
+                // needing constant manual upkeep. For every exercise that
+                // belongs to the plan this session came from, take the last
+                // completed working set's numbers and, if they differ from
+                // the plan's current target, update the plan.
+                if (session.planId) {
+                  const sourcePlan = plans.find((p) => p.id === session.planId);
+                  if (sourcePlan) {
+                    let planChanged = false;
+                    const nextItems = (Array.isArray(sourcePlan.items) ? sourcePlan.items : []).map((item) => {
+                      // Ueber die Plan-Eintrags-ID, nicht ueber die Uebung:
+                      // steht dieselbe Uebung zweimal im Plan, bekaeme sonst
+                      // beide Male der erste Platz seine Zahlen.
+                      const entry =
+                        cleaned.entries.find((e) => item.id && e.planItemId === item.id) ||
+                        cleaned.entries.find((e) => !e.planItemId && e.exerciseId === item.exerciseId);
+                      if (!entry) return item;
+                      const workingSets = entry.sets.filter((s) => s.done && !s.warmup);
+                      const lastSet = workingSets[workingSets.length - 1];
+                      if (!lastSet) return item;
+                      const achievedReps = Math.round(Number(lastSet.reps) || 0);
+                      const achievedWeight = Number(lastSet.weight) || 0;
+                      const achievedDuration = Math.round(Number(lastSet.duration) || 0);
+                      const isTime = !!item.useTime;
+                      const changed = isTime
+                        ? achievedDuration > 0 && achievedDuration !== item.duration
+                        : (achievedReps > 0 && achievedReps !== item.reps) ||
+                          (achievedWeight > 0 && achievedWeight !== item.weight);
+                      if (!changed) return item;
+                      planChanged = true;
+                      return isTime
+                        ? { ...item, duration: achievedDuration }
+                        : { ...item, reps: achievedReps, weight: achievedWeight };
+                    });
+                    if (planChanged) {
+                      await persistPlans(
+                        plans.map((p) => (p.id === sourcePlan.id ? { ...p, items: nextItems } : p))
+                      );
+                    }
+                  }
+                }
+                await clearActiveSession();
+              }}
+              onDiscard={() => askConfirm("Aktives Training wirklich verwerfen? Alle nicht gespeicherten Sätze gehen verloren.", clearActiveSession)}
+              restEndsAt={restEndsAt}
+              onSetRestEndsAt={updateRestEndsAt}
+              onAddCustom={handleAddCustomExercise}
+            />
+          </div>
+        )}
         <div className="tab-panel" key={loading ? "loading" : tab}>
         {loading ? (
           <div className="empty-state">
@@ -4660,209 +4998,8 @@ export default function TrainingApp() {
             />
           )
         ) : tab === "log" ? (
-          <LogView
-            session={session}
-            plans={allPlans}
-            logs={logs}
-            exBy={allExBy}
-            exercises={allExercises}
-            exerciseNotes={exerciseNotes}
-            exerciseSubgroupOverrides={exerciseSubgroupOverrides}
-            onSetExerciseSubgroup={handleSetExerciseSubgroup}
-            onSetExerciseSubgroups={handleSetExerciseSubgroups}
-            exerciseEquipmentOverrides={exerciseEquipmentOverrides}
-            onSetExerciseEquipment={handleSetExerciseEquipment}
-            timeBasedExercises={timeBasedExercises}
-            gymIndependentExercises={gymIndependentExercises}
-            onUpdateExerciseNote={handleUpdateExerciseNote}
-            onRenameExercise={handleRenameExercise}
-            onToggleTimeBased={handleToggleTimeBased}
-            onToggleGymIndependent={handleToggleGymIndependent}
-            onStartFromPlan={(plan) => requestStart(plan)}
-            onUpdateSession={updateSession}
-            onRequestConfirm={askConfirm}
-            gyms={gyms}
-            onFinish={async () => {
-              if (!session) return;
-              // A workout opened for editing keeps its recorded duration -
-              // otherwise fixing one number would rewrite how long it took.
-              const durationMinutes =
-                session.frozenDurationMinutes != null
-                  ? session.frozenDurationMinutes
-                  : session.startedAt
-                  ? Math.max(1, Math.round((Date.now() - new Date(session.startedAt).getTime()) / 60000))
-                  : null;
-              const cleaned = {
-                ...session,
-                // Sets now start pre-filled from the plan's targets, so an
-                // exercise the user never actually touched would otherwise
-                // still have "sets" and slip into the saved log. Only keep
-                // entries where at least one set was actually checked off.
-                // Also normalize every numeric field here in case a field
-                // was still focused (never blurred) when the user tapped
-                // "Training beenden".
-                entries: session.entries
-                  .filter((e) => e.sets.some((s) => s.done))
-                  .map((e) => ({
-                    ...e,
-                    // Record that this exercise ran on time. The automatic
-                    // mode is a property of the session, which is gone once
-                    // the workout is saved - without this flag the history,
-                    // records and charts would later read it as a weight
-                    // exercise with 0 kg.
-                    targetUseTime:
-                      (session.autoRun && e.autoRun !== false) || !!e.targetUseTime,
-                    // toNum, not Number: weights are held as typed ("62,5"),
-                    // and Number("62,5") is NaN - which would silently store
-                    // the set as 0 kg.
-                    sets: e.sets.map((s) => ({
-                      ...s,
-                      reps: Math.max(0, toNum(s.reps)),
-                      weight: Math.max(0, toNum(s.weight)),
-                      duration: Math.max(0, toNum(s.duration)),
-                    })),
-                  })),
-                durationMinutes,
-              };
-              if (cleaned.entries.length > 0) {
-                // Work out the summary against the logs as they were BEFORE
-                // this workout is added, otherwise every set would compare
-                // against itself and nothing would ever count as a record.
-                let totalVolume = 0;
-                let totalSeconds = 0;
-                let doneSets = 0;
-                const records = [];
-                cleaned.entries.forEach((entry) => {
-                  // Same rule the workout screen uses. Checking only the
-                  // global setting missed every exercise that ran on time
-                  // because of the automatic mode - so no record was ever
-                  // recognised in a HIT workout.
-                  const isTimeBased =
-                    (session.autoRun && entry.autoRun !== false) ||
-                    isTimeBasedInLogs(logs, entry.exerciseId, timeBasedExercises) ||
-                    !!entry.targetUseTime;
-                  const best = getExerciseHistory(
-                    logs, entry.exerciseId, cleaned.id, isTimeBased,
-                    effectiveGymId(entry.exerciseId, cleaned.gymId, gymIndependentExercises)
-                  );
-                  let bestOfEntry = null;
-                  entry.sets.forEach((set) => {
-                    if (!set.done || set.warmup) return;
-                    doneSets += 1;
-                    if (isTimeBased) totalSeconds += toNum(set.duration);
-                    else totalVolume += toNum(set.weight) * toNum(set.reps);
-                    if (isNewPR(set, best, isTimeBased)) {
-                      const label = isTimeBased
-                        ? `${toNum(set.duration)} Sek.`
-                        : `${toNum(set.reps)} × ${fmtDecimal(set.weight)} kg`;
-                      bestOfEntry = label;
-                    }
-                  });
-                  if (bestOfEntry) {
-                    records.push({
-                      name: allExBy[entry.exerciseId]?.name || "Übung",
-                      label: bestOfEntry,
-                    });
-                  }
-                });
-                setFinishSummary({
-                  logId: cleaned.id,
-                  feeling: null,
-                  planName: cleaned.planName,
-                  durationMinutes,
-                  totalVolume,
-                  totalSeconds,
-                  doneSets,
-                  exercises: cleaned.entries.length,
-                  gymName: gyms.find((g) => g.id === cleaned.gymId)?.name || null,
-                  records,
-                });
-                await persistLogs([...logs, cleaned]);
-              }
-              // If this workout was started from a calendar entry, link the
-              // finished log back to it so the calendar can show results
-              // instead of a "start workout" prompt from now on. If none
-              // exists for today (started directly, never planned), one is
-              // added instead - already marked done, so the calendar shows
-              // what was actually trained instead of staying empty.
-              if (cleaned.entries.length > 0) {
-                // Either the entry the workout was started from, or - if it
-                // was started from the plans page - an open entry for the
-                // same workout on the same day. Without this the calendar
-                // would show the plan as still open next to the finished
-                // workout, i.e. the same session twice.
-                const dayKey = toDateKey(new Date(cleaned.date));
-                const match =
-                  calendarEntries.find((ce) => ce.id === session.calendarEntryId) ||
-                  calendarEntries.find(
-                    (ce) =>
-                      ce.type === "workout" &&
-                      !ce.logId &&
-                      ce.date === dayKey &&
-                      ce.planId === cleaned.planId
-                  );
-                if (match) {
-                  await persistCalendarEntries(
-                    calendarEntries.map((ce) =>
-                      ce.id === match.id ? { ...ce, logId: cleaned.id } : ce
-                    )
-                  );
-                } else {
-                  await persistCalendarEntries([
-                    ...calendarEntries,
-                    { id: uid(), date: dayKey, type: "workout", planId: cleaned.planId ?? null, logId: cleaned.id },
-                  ]);
-                }
-              }
-              // Targets always track what was actually achieved last time,
-              // so the plan auto-adjusts to real progress instead of
-              // needing constant manual upkeep. For every exercise that
-              // belongs to the plan this session came from, take the last
-              // completed working set's numbers and, if they differ from
-              // the plan's current target, update the plan.
-              if (session.planId) {
-                const sourcePlan = plans.find((p) => p.id === session.planId);
-                if (sourcePlan) {
-                  let planChanged = false;
-                  const nextItems = sourcePlan.items.map((item) => {
-                    // Ueber die Plan-Eintrags-ID, nicht ueber die Uebung:
-                    // steht dieselbe Uebung zweimal im Plan, bekaeme sonst
-                    // beide Male der erste Platz seine Zahlen.
-                    const entry =
-                      cleaned.entries.find((e) => item.id && e.planItemId === item.id) ||
-                      cleaned.entries.find((e) => !e.planItemId && e.exerciseId === item.exerciseId);
-                    if (!entry) return item;
-                    const workingSets = entry.sets.filter((s) => s.done && !s.warmup);
-                    const lastSet = workingSets[workingSets.length - 1];
-                    if (!lastSet) return item;
-                    const achievedReps = Math.round(Number(lastSet.reps) || 0);
-                    const achievedWeight = Number(lastSet.weight) || 0;
-                    const achievedDuration = Math.round(Number(lastSet.duration) || 0);
-                    const isTime = !!item.useTime;
-                    const changed = isTime
-                      ? achievedDuration > 0 && achievedDuration !== item.duration
-                      : (achievedReps > 0 && achievedReps !== item.reps) ||
-                        (achievedWeight > 0 && achievedWeight !== item.weight);
-                    if (!changed) return item;
-                    planChanged = true;
-                    return isTime
-                      ? { ...item, duration: achievedDuration }
-                      : { ...item, reps: achievedReps, weight: achievedWeight };
-                  });
-                  if (planChanged) {
-                    await persistPlans(
-                      plans.map((p) => (p.id === sourcePlan.id ? { ...p, items: nextItems } : p))
-                    );
-                  }
-                }
-              }
-              await clearActiveSession();
-            }}
-            onDiscard={() => askConfirm("Aktives Training wirklich verwerfen? Alle nicht gespeicherten Sätze gehen verloren.", clearActiveSession)}
-            restEndsAt={restEndsAt}
-            onSetRestEndsAt={updateRestEndsAt}
-            onAddCustom={handleAddCustomExercise}
-          />
+          // Die Trainingsansicht wird oben gerendert und bleibt dort montiert.
+          null
         ) : (
           <ProgressView
             focusLogId={historyFocusLogId}
@@ -6073,7 +6210,7 @@ function CalendarView({
                     <div className="history-exercise-list" style={{ marginTop: 8 }}>
                       {logEntries(log).map((e) => {
                         const ex = exBy[e.exerciseId];
-                        const workingSets = entrySets(e).filter((s) => !s.warmup);
+                        const workingSets = performedWorkingSets(entrySets(e));
                         const summary = workingSets
                           .map(
                             (s) =>
@@ -7036,6 +7173,24 @@ function ExercisesView({
   const [creating, setCreating] = useState(false);
   const [selectedExerciseId, setSelectedExerciseId] = useState(null);
 
+  // Eine geloeschte Uebung verschwindet nicht nur aus der Liste: ihre
+  // Saetze stehen weiter in den Logs, werden aber von jeder Auswertung
+  // uebersprungen (die kennt die Uebung nicht mehr). Monate an Verlauf
+  // waeren also ohne Vorwarnung aus der Statistik weg - deshalb sagt die
+  // Rueckfrage, was tatsaechlich daran haengt.
+  const deleteExerciseQuestion = (exercise) => {
+    const trainings = (Array.isArray(logs) ? logs : []).filter(
+      (l) => logEntriesFor(l, exercise.id).length > 0
+    ).length;
+    const base = `Eigene Übung „${exercise.name}“ wirklich löschen?`;
+    if (trainings === 0) return base;
+    return (
+      base +
+      ` Sie steckt in ${trainings} ${trainings === 1 ? "Training" : "Trainings"} –` +
+      " deren Sätze verschwinden danach aus Verlauf und Statistik."
+    );
+  };
+
   // Look the exercise up live so a rename is reflected immediately instead
   // of the overlay being stuck on a stale snapshot.
   const selectedExercise = exercises.find((e) => e.id === selectedExerciseId) || null;
@@ -7160,7 +7315,7 @@ function ExercisesView({
                     className="btn-icon"
                     onClick={(ev) => {
                       ev.stopPropagation();
-                      onRequestConfirm(`Eigene Übung „${e.name}“ wirklich löschen?`, () => onDeleteCustom(e.id));
+                      onRequestConfirm(deleteExerciseQuestion(e), () => onDeleteCustom(e.id));
                     }}
                     title="Eigene Übung löschen"
                   >
@@ -8746,7 +8901,7 @@ function PlanCard({ plan, exBy, onDelete, onEdit, onStart, onLongPress, lastDone
         </div>
       </div>
       <div style={{ margin: "10px 0", color: "var(--text-dim)", fontSize: 13 }}>
-        {plan.items
+        {(Array.isArray(plan.items) ? plan.items : [])
           .map((i) => exBy[i.exerciseId]?.name)
           .filter(Boolean)
           .join(" · ")}
@@ -9610,9 +9765,9 @@ function LogView({
     return !!session?.autoRun;
   };
 
-  // Finds the next set to run. Inside a superset group the exercises take
-  // turns (set 1 of A, set 1 of B, ... then set 2 of A), everything else is
-  // worked through exercise by exercise.
+  // Finds the next set to run. Circuit order walks across all slots; inside
+  // a superset group the linked exercises take turns (set 1 of A, set 1 of B,
+  // then set 2 of A); everything else is worked through exercise by exercise.
   const findNextSet = (fromEntryId, fromSetIdx) => {
     const entries = session?.entries || [];
     const idx = entries.findIndex((e) => e.id === fromEntryId);
@@ -9629,6 +9784,29 @@ function LogView({
       }
       for (let k = 0; k < entries.length; k++) {
         if (entries[k].sets[fromSetIdx + 1]) return { entryId: entries[k].id, setIdx: fromSetIdx + 1 };
+      }
+      return null;
+    }
+
+    // Superset: die verknuepften Uebungen wechseln sich ab - Satz 1 von A,
+    // Satz 1 von B, dann Satz 2 von A. Ohne diesen Zweig liefe die Automatik
+    // erst A komplett durch und danach B, also genau kein Superset.
+    let groupStart = idx;
+    while (groupStart > 0 && entries[groupStart - 1]?.supersetWithNext) groupStart -= 1;
+    let groupEnd = idx;
+    while (groupEnd < entries.length - 1 && entries[groupEnd]?.supersetWithNext) groupEnd += 1;
+    if (groupEnd > groupStart) {
+      // Rest der Runde innerhalb der Gruppe.
+      for (let k = idx + 1; k <= groupEnd; k++) {
+        if (entries[k].sets[fromSetIdx]) return { entryId: entries[k].id, setIdx: fromSetIdx };
+      }
+      // Runde voll - naechster Satz, wieder beim ersten Platz der Gruppe.
+      for (let k = groupStart; k <= groupEnd; k++) {
+        if (entries[k].sets[fromSetIdx + 1]) return { entryId: entries[k].id, setIdx: fromSetIdx + 1 };
+      }
+      // Gruppe fertig - weiter hinter ihr.
+      for (let k = groupEnd + 1; k < entries.length; k++) {
+        if (entries[k].sets[0]) return { entryId: entries[k].id, setIdx: 0 };
       }
       return null;
     }
@@ -9680,6 +9858,15 @@ function LogView({
 
   const restAfter = (entryId, setIdx) => {
     if (nextSetIsDrop(entryId, setIdx)) return 0;
+    // Innerhalb eines Supersets wird ohne Pause zur naechsten Uebung
+    // gewechselt - dieselbe Regel, nach der auch das Abhaken von Hand die
+    // Pausenuhr erst nach dem letzten Platz der Gruppe startet.
+    if ((session?.autoOrder || "circuit") !== "circuit"
+        && supersetGroupInfo[entryId]
+        && supersetGroupInfo[entryId].groupSize > 1
+        && !supersetGroupInfo[entryId].isLast) {
+      return 0;
+    }
     const roundRest = toNum(session?.roundRestSeconds);
     if (finishesRound(entryId, setIdx)) return Math.max(0, roundRest);
     return Math.max(0, getRestDurationFor(entryId));
@@ -9794,23 +9981,33 @@ function LogView({
   // Keeps the screen awake during an automatic run - a locked screen stops
   // iOS from playing the beeps.
   useEffect(() => {
-    const active = !!autoRun;
-    if (active && !wakeLockRef.current && navigator.wakeLock?.request) {
-      navigator.wakeLock.request("screen")
-        .then((lock) => { wakeLockRef.current = lock; })
-        .catch(() => { /* not granted - the run still works, just dimmer */ });
+    if (autoRun) {
+      if (!wakeLockRef.current && navigator.wakeLock?.request) {
+        navigator.wakeLock.request("screen")
+          .then((lock) => { wakeLockRef.current = lock; })
+          .catch(() => { /* not granted - the run still works, just dimmer */ });
+      }
+      return;
     }
-    if (!active && wakeLockRef.current) {
+    if (wakeLockRef.current) {
       wakeLockRef.current.release?.().catch(() => {});
       wakeLockRef.current = null;
     }
-    return () => {
-      if (!active && wakeLockRef.current) {
-        wakeLockRef.current.release?.().catch(() => {});
-        wakeLockRef.current = null;
-      }
-    };
   }, [autoRun]);
+
+  // Freigeben, wenn die Ansicht verschwindet. Der Zweig oben greift dafuer
+  // nicht: beim Abbau ist autoRun noch gesetzt, die Sperre bliebe also
+  // bestehen und der Bildschirm dauerhaft an.
+  useEffect(() => () => {
+    wakeLockRef.current?.release?.().catch(() => {});
+    wakeLockRef.current = null;
+  }, []);
+
+  // Endet das Training (beendet oder verworfen), waehrend die Automatik
+  // laeuft, hat sie nichts mehr, worauf sie zeigen koennte.
+  useEffect(() => {
+    if (!session && autoRunRef.current) stopAuto();
+  }, [session]);
 
   if (!session) {
     return (
@@ -11130,7 +11327,11 @@ function ExerciseCharts({ logs, exerciseId, isTimeBased, theme, gyms = [], gymIn
   // single line that jumps up and down for no real reason. Exercises marked
   // as being the same everywhere (bodyweight, bands) are the exception -
   // there the split would tear one continuous progression into fragments.
-  const relevantLogs = logs.filter((l) => logEntries(l).some((e) => e.exerciseId === selected));
+  // Nur Trainings, in denen wirklich ein Satz dieser Uebung abgehakt wurde -
+  // sonst haenge ein 0-Punkt in der Kurve, wo die Uebung nur geplant war.
+  const relevantLogs = logs.filter(
+    (l) => performedWorkingSets(logSetsFor(l, selected)).length > 0
+  );
   const gymKeys = [...new Set(relevantLogs.map((l) => l.gymId || "none"))];
   const splitByGym = gymKeys.length > 1 && !gymIndependent;
   const gymLabel = (key) =>
@@ -11141,7 +11342,7 @@ function ExerciseCharts({ logs, exerciseId, isTimeBased, theme, gyms = [], gymIn
       // Eine Uebung kann mehrfach im selben Training stehen (Zirkel: A, B, A).
       // Deshalb alle Plaetze zusammennehmen - ein .find() wuerde die Saetze
       // der zweiten Kopie still aus allen Charts entfernen.
-      const workingSets = logSetsFor(l, selected).filter((s) => !s.warmup);
+      const workingSets = performedWorkingSets(logSetsFor(l, selected));
       const maxWeight = selectedIsTimeBased
         ? 0
         : Math.max(0, ...workingSets.map((s) => s.weight || 0));
@@ -11199,7 +11400,7 @@ function ExerciseCharts({ logs, exerciseId, isTimeBased, theme, gyms = [], gymIn
   // and band work has no weight, so volume and 1RM would be flat zero lines -
   // there the rep counts are what actually shows progress.
   const hasAnyWeight = relevantLogs.some((l) =>
-    logSetsFor(l, selected).some((x) => !x.warmup && toNum(x.weight) > 0)
+    performedWorkingSets(logSetsFor(l, selected)).some((x) => toNum(x.weight) > 0)
   );
   const cards = selectedIsTimeBased
     ? [
@@ -12917,7 +13118,7 @@ function HistoryView({
       {sortedLogs.map((log) => {
         const isOpen = expandedLogId === log.id;
         const totalSets = logEntries(log).reduce(
-          (sum, e) => sum + entrySets(e).filter((s) => !s.warmup).length,
+          (sum, e) => sum + performedWorkingSets(entrySets(e)).length,
           0
         );
         return (
@@ -12986,7 +13187,7 @@ function HistoryView({
                   const ex = exBy[entry.exerciseId];
                   if (!ex) return null;
                   const isTimeBased = isTimeBasedInLogs(logs, entry.exerciseId, timeBasedExercises);
-                  const workingSets = entrySets(entry).filter((s) => !s.warmup);
+                  const workingSets = performedWorkingSets(entrySets(entry));
                   const summary = workingSets
                     .map(
                       (s) =>

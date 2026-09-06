@@ -182,6 +182,12 @@ rechnet, muss deshalb **alle** Plätze einer Übung zusammennehmen (`logEntriesF
 für Rekorde, Verlauf und Charts dauerhaft verloren, ohne dass irgendwo ein Fehler auftaucht.
 Genau dieser Fall ist mit einem eigenen Test abgesichert.
 
+**Gezählt wird nur, was abgehakt ist.**
+Beim Speichern bleiben auch nicht abgehakte Sätze im Log stehen – sie gehörten zum Plan dieses
+Trainings. Für jede Auswertung und jede Anzeige zählt aber ausschließlich, was abgehakt wurde
+(`performedSets` / `performedWorkingSets`). Sonst wäre ein vorbelegter, nie ausgeführter Satz
+geleistete Arbeit – und die Statistik würde Trainings behaupten, die nie stattgefunden haben.
+
 **Der Rundenmodus ist keine neue Datenstruktur.**
 Im Zirkel *ist* „Satz N" gleichbedeutend mit „Runde N": Satz 1 aller Übungen ist Runde 1. Die
 Rundenzahl ist deshalb einfach die Satzzahl aller Übungen. Im Plan wird die Runde einmal

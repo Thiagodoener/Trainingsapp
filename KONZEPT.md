@@ -174,6 +174,21 @@ und „Belastung pro Muskelgruppe" zählen sie dagegen voll mit – die Arbeit w
 Jeder Satz wird gegen den besten Einzelsatz derselben Übung normiert, danach über rollierende
 7-Tage-Fenster summiert. Zwei getrennte Kennzahlen (Anzahl vs. Arbeit) sind Absicht.
 
+**Dieselbe Übung darf mehrfach in einem Training stehen.**
+Ein Zirkel ist oft A → B → A → C. Jeder Platz ist ein eigener Eintrag mit eigener ID; die
+Übungs-ID identifiziert also *nicht mehr* eindeutig einen Eintrag. Alles, was im Nachhinein
+rechnet, muss deshalb **alle** Plätze einer Übung zusammennehmen (`logEntriesFor` /
+`logSetsFor`). Ein `.find()` würde die Sätze des zweiten Platzes still verschlucken – sie wären
+für Rekorde, Verlauf und Charts dauerhaft verloren, ohne dass irgendwo ein Fehler auftaucht.
+Genau dieser Fall ist mit einem eigenen Test abgesichert.
+
+**Der Rundenmodus ist keine neue Datenstruktur.**
+Im Zirkel *ist* „Satz N" gleichbedeutend mit „Runde N": Satz 1 aller Übungen ist Runde 1. Die
+Rundenzahl ist deshalb einfach die Satzzahl aller Übungen. Im Plan wird die Runde einmal
+definiert (die Übungsliste) und dazu gesagt, wie oft sie läuft; die Automatik-Leiste zeigt
+„Runde X von Y" statt „Satz X". Sind die Satzzahlen unterschiedlich, steht im Plan „gemischt"
+und die Leiste rechnet mit der längsten Übung.
+
 ---
 
 ## Offene Punkte

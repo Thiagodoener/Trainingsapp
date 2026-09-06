@@ -273,6 +273,32 @@ const toNum = (value) => {
 // entirely, and a bare .map/.forEach on those would take the whole screen
 // down rather than just skipping the damaged record.
 const logEntries = (log) => (Array.isArray(log?.entries) ? log.entries.filter(Boolean) : []);
+
+// Ein Eintrag im Training ist ein *Platz* in der Reihenfolge, nicht "die
+// Uebung". Erst dadurch kann dieselbe Uebung mehrfach vorkommen (Zirkel:
+// A, B, A, C). Alles, was einen bestimmten Eintrag meint, laeuft ueber
+// diese ID; die Uebungs-ID bleibt daneben stehen und beantwortet weiterhin
+// "welche Uebung ist das" (Name, Historie, Statistik).
+// Aeltere Trainings und Logs haben sie noch nicht - die bekommen sie beim
+// Laden nachgereicht.
+// Dieselbe Uebung kann mehrfach in einem Training stehen (Zirkel: A, B, A, C).
+// Alles, was im Nachhinein rechnet, muss deshalb ALLE Plaetze dieser Uebung
+// zusammennehmen. Ein .find() wuerde die zweite Kopie still verschlucken -
+// ihre Saetze waeren fuer Rekorde, Verlauf und Charts dauerhaft verloren,
+// ohne dass irgendwo ein Fehler auftaucht.
+const logEntriesFor = (log, exerciseId) =>
+  logEntries(log).filter((e) => e && e.exerciseId === exerciseId);
+const logSetsFor = (log, exerciseId) =>
+  logEntriesFor(log, exerciseId).flatMap((e) => entrySets(e));
+
+function withEntryIds(session) {
+  if (!session || !Array.isArray(session.entries)) return session;
+  if (session.entries.every((e) => e && e.id)) return session;
+  return {
+    ...session,
+    entries: session.entries.map((e) => (e && e.id ? e : { ...e, id: uid() })),
+  };
+}
 const entrySets = (entry) => (Array.isArray(entry?.sets) ? entry.sets.filter(Boolean) : []);
 
 // Ein Satz ist entweder Aufwaermsatz, Dropsatz oder ein normaler Arbeitssatz.
@@ -617,14 +643,16 @@ function getExerciseHistory(logs, exerciseId, excludeSessionId, isTimeBased = fa
     // Logs written by older versions (or a half-finished save) can be
     // missing `entries` or `sets` entirely, so every access is guarded
     // rather than assuming a fully-formed object.
-    const entries = Array.isArray(log?.entries) ? log.entries : [];
-    const entry = entries.find((e) => e && e.exerciseId === exerciseId);
-    if (!entry) continue;
-    if (lastNote === null && typeof entry.notes === "string" && entry.notes.trim()) {
-      lastNote = entry.notes.trim();
+    const matching = logEntriesFor(log, exerciseId);
+    if (matching.length === 0) continue;
+    if (lastNote === null) {
+      const noted = matching.find((e) => typeof e.notes === "string" && e.notes.trim());
+      if (noted) lastNote = noted.notes.trim();
     }
 
-    const sets = Array.isArray(entry.sets) ? entry.sets : [];
+    // Saetze aller Plaetze dieser Uebung in diesem Training, in der
+    // Reihenfolge, in der sie im Training standen.
+    const sets = matching.flatMap((e) => (Array.isArray(e.sets) ? e.sets : []));
     const doneSets = sets.filter(
       (set) =>
         set &&
@@ -637,7 +665,9 @@ function getExerciseHistory(logs, exerciseId, excludeSessionId, isTimeBased = fa
     if (!lastSets) {
       lastSets = doneSets;
       lastDate = log.date;
-      lastRir = Number.isFinite(Number(entry.rir)) ? Number(entry.rir) : null;
+      // Bei mehreren Plaetzen zaehlt die erste vorhandene Angabe.
+      const rirEntry = matching.find((e) => Number.isFinite(Number(e.rir)));
+      lastRir = rirEntry ? Number(rirEntry.rir) : null;
     }
 
     comparableSessions += 1;
@@ -716,16 +746,17 @@ function getExerciseTimeline(logs, exerciseId) {
     .map((l) => {
       // Same defensive treatment as getExerciseHistory: a log saved by an
       // older version may be missing entries/sets.
-      const entries = Array.isArray(l?.entries) ? l.entries : [];
-      const entry = entries.find((e) => e && e.exerciseId === exerciseId);
-      if (!entry) return null;
-      const sets = Array.isArray(entry.sets) ? entry.sets : [];
+      const matching = logEntriesFor(l, exerciseId);
+      if (matching.length === 0) return null;
+      const sets = matching.flatMap((e) => (Array.isArray(e.sets) ? e.sets : []));
+      const rirEntry = matching.find((e) => Number.isFinite(Number(e.rir)));
+      const noted = matching.find((e) => typeof e.notes === "string" && e.notes.trim());
       return {
         date: l.date,
         sets: sets.filter((s) => s && s.done),
-        rir: Number.isFinite(Number(entry.rir)) ? Number(entry.rir) : null,
+        rir: rirEntry ? Number(rirEntry.rir) : null,
         feeling: Number.isFinite(Number(l.feeling)) ? Number(l.feeling) : null,
-        note: typeof entry.notes === "string" && entry.notes.trim() ? entry.notes.trim() : null,
+        note: noted ? noted.notes.trim() : null,
       };
     })
     .filter((t) => t && (t.sets.length > 0 || t.note))
@@ -866,9 +897,7 @@ function getExerciseBestStats(logs, exerciseId) {
   let best1RM = 0;
   let bestSetVolume = 0;
   (Array.isArray(logs) ? logs : []).forEach((log) => {
-    const entry = logEntries(log).find((e) => e.exerciseId === exerciseId);
-    if (!entry) return;
-    entrySets(entry).forEach((set) => {
+    logSetsFor(log, exerciseId).forEach((set) => {
       if (!set.done || set.warmup) return;
       const weight = Number(set.weight) || 0;
       const reps = Number(set.reps) || 0;
@@ -947,10 +976,9 @@ function calculateTrainingStats(logs, exBy, timeBasedExercises) {
 function getTimePR(logs, exerciseId) {
   let best = 0;
   (Array.isArray(logs) ? logs : []).forEach((log) => {
-    const entries = Array.isArray(log?.entries) ? log.entries : [];
-    const entry = entries.find((e) => e && e.exerciseId === exerciseId);
-    const sets = Array.isArray(entry?.sets) ? entry.sets : [];
-    sets.forEach((s) => {
+    // Alle Plaetze der Uebung, nicht nur den ersten - sonst faellt der
+    // Rekord aus dem zweiten Zirkel-Durchgang unter den Tisch.
+    logSetsFor(log, exerciseId).forEach((s) => {
       if (s && s.done && !s.warmup) best = Math.max(best, Number(s.duration) || 0);
     });
   });
@@ -1734,7 +1762,7 @@ export default function TrainingApp() {
       setGymIndependentExercises(gi);
       setBreathingExercises(Array.isArray(brEx) ? brEx : []);
       setBreathingLogs(Array.isArray(brLogs) ? brLogs : []);
-      setSession(active || null);
+      setSession(active ? withEntryIds(active) : null);
       // A rest that already expired while the app was closed is not restored -
       // it would show a dead "0:00" bar with nothing to count down to.
       setRestEndsAt(active && typeof restEnd === "number" && restEnd > Date.now() ? restEnd : 0);
@@ -1942,6 +1970,10 @@ export default function TrainingApp() {
         ...Array.from({ length: targetSets }, (_, i) => makeSet(false, i)),
       ];
       return {
+        id: uid(),
+        // Woher dieser Platz stammt. Ohne das liesse sich beim Beenden nicht
+        // sagen, welcher von zwei gleichen Plan-Eintraegen gemeint ist.
+        planItemId: it.id || null,
         exerciseId: it.exerciseId,
         targetSets,
         targetReps,
@@ -2237,8 +2269,9 @@ export default function TrainingApp() {
       resumedFrom: log.id,
     };
     await persistLogs(logs.filter((l) => l.id !== log.id));
-    setSession(restored);
-    await saveJSON("active-workout", restored);
+    const withIds = withEntryIds(restored);
+    setSession(withIds);
+    await saveJSON("active-workout", withIds);
     setTab("log");
   };
 
@@ -4792,7 +4825,12 @@ export default function TrainingApp() {
                 if (sourcePlan) {
                   let planChanged = false;
                   const nextItems = sourcePlan.items.map((item) => {
-                    const entry = cleaned.entries.find((e) => e.exerciseId === item.exerciseId);
+                    // Ueber die Plan-Eintrags-ID, nicht ueber die Uebung:
+                    // steht dieselbe Uebung zweimal im Plan, bekaeme sonst
+                    // beide Male der erste Platz seine Zahlen.
+                    const entry =
+                      cleaned.entries.find((e) => item.id && e.planItemId === item.id) ||
+                      cleaned.entries.find((e) => !e.planItemId && e.exerciseId === item.exerciseId);
                     if (!entry) return item;
                     const workingSets = entry.sets.filter((s) => s.done && !s.warmup);
                     const lastSet = workingSets[workingSets.length - 1];
@@ -6044,7 +6082,7 @@ function CalendarView({
                           )
                           .join(", ");
                         return (
-                          <div key={e.exerciseId} className="history-exercise-row">
+                          <div key={e.id || e.exerciseId} className="history-exercise-row">
                             <span>{ex ? ex.name : e.exerciseId}</span>
                             <span className="history-set-summary">{summary || "–"}</span>
                           </div>
@@ -7577,7 +7615,11 @@ function PlanBuilder({
   activeGymId = null,
 }) {
   const [name, setName] = useState(initialPlan?.name || "");
-  const [items, setItems] = useState(initialPlan?.items || []); // {exerciseId, sets, reps}
+  // Plaene aus aelteren Versionen haben noch keine Eintrags-IDs - ohne
+  // Nachreichen haetten alle Eintraege dieselbe (undefined) Identitaet.
+  const [items, setItems] = useState(() =>
+    (initialPlan?.items || []).map((it) => (it && it.id ? it : { ...it, id: uid() }))
+  );
   const [query, setQuery] = useState("");
   const [group, setGroup] = useState("alle");
   const [subgroupFilter, setSubgroupFilter] = useState("alle");
@@ -7612,7 +7654,7 @@ function PlanBuilder({
   const [planAutoSeconds, setPlanAutoSeconds] = useState(initialPlan?.autoSetSeconds ?? 30);
   const [planAutoOrder, setPlanAutoOrder] = useState(initialPlan?.autoOrder || "circuit");
   const [planRoundRest, setPlanRoundRest] = useState(initialPlan?.roundRestSeconds ?? 60);
-  const [restPopupFor, setRestPopupFor] = useState(null); // "plan" | exerciseId
+  const [restPopupFor, setRestPopupFor] = useState(null); // "plan" | Eintrags-ID
   const [itemMenuId, setItemMenuId] = useState(null);
   const [itemMenuUp, setItemMenuUp] = useState(false);
   const itemMenuRef = useMenuFlip(itemMenuId, setItemMenuUp);
@@ -7647,6 +7689,7 @@ function PlanBuilder({
         const working = sets.filter((s) => !s.warmup);
         const first = working[0] || sets[0] || {};
         return {
+          id: uid(),
           exerciseId: e.exerciseId,
           sets: e.targetSets || working.length || sets.length,
           warmupSets: sets.filter((s) => s.warmup).length,
@@ -7669,7 +7712,7 @@ function PlanBuilder({
     dragHandleProps,
   } = useDragReorder({
     items,
-    getId: (it) => it.exerciseId,
+    getId: (it) => it.id,
     onReorder: setItems,
   });
 
@@ -7755,7 +7798,6 @@ function PlanBuilder({
   const activeGroupSubgroups = group !== "alle" ? SUBGROUPS[group] || [] : [];
 
   const addExercise = (exerciseId) => {
-    if (items.some((i) => i.exerciseId === exerciseId)) return;
     // Start from what was last achieved instead of a generic 3x10 - when you
     // build a plan around an exercise you already train, those numbers are
     // the useful starting point.
@@ -7768,6 +7810,9 @@ function PlanBuilder({
     const last = working[0];
     const warmCount = (history?.lastSets || []).filter((set) => set.warmup).length;
     setItems([...items, {
+      // Eigene ID je Platz - dieselbe Uebung darf mehrfach im Plan stehen
+      // (Zirkel: A, B, A, C), deshalb kann die Uebungs-ID das nicht leisten.
+      id: uid(),
       exerciseId,
       sets: working.length > 0 ? working.length : 3,
       warmupSets: warmCount,
@@ -7781,35 +7826,46 @@ function PlanBuilder({
       autoSeconds: null,
     }]);
   };
-  const removeExercise = (exerciseId) => {
-    setItems(items.filter((i) => i.exerciseId !== exerciseId));
-    setExpandedItemId((cur) => (cur === exerciseId ? null : cur));
+  const removeItem = (itemId) => {
+    setItems(items.filter((i) => i.id !== itemId));
+    setExpandedItemId((cur) => (cur === itemId ? null : cur));
   };
-  const toggleExercise = (exerciseId) => {
-    if (items.some((i) => i.exerciseId === exerciseId)) removeExercise(exerciseId);
-    else addExercise(exerciseId);
-  };
-  const toggleSupersetWithNext = (exerciseId) => {
+  const toggleSupersetWithNext = (itemId) => {
     setItems(
       items.map((i) =>
-        i.exerciseId === exerciseId ? { ...i, supersetWithNext: !i.supersetWithNext } : i
+        i.id === itemId ? { ...i, supersetWithNext: !i.supersetWithNext } : i
       )
     );
   };
-  const updateItem = (exerciseId, field, value) => {
+  const updateItem = (itemId, field, value) => {
     // Store exactly what the user typed while they're typing — clamping to
     // a minimum on every keystroke made it impossible to clear a field to
     // type a new number (deleting the digits always snapped straight back
     // to 1). The minimum is enforced once the field is left, in
     // handleItemBlur below.
     setItems(
-      items.map((i) => (i.exerciseId === exerciseId ? { ...i, [field]: value } : i))
+      items.map((i) => (i.id === itemId ? { ...i, [field]: value } : i))
     );
   };
-  const handleItemBlur = (exerciseId, field, min) => {
+  // Rundenmodus: im Zirkel ist "Satz N" gleichbedeutend mit "Runde N" -
+  // Satz 1 aller Uebungen ist Runde 1. Statt die Satzzahl bei jeder Uebung
+  // einzeln einzustellen, wird die Runde einmal definiert (die Uebungsliste)
+  // und dazu gesagt, wie oft sie laufen soll. Eine eigene Datenstruktur
+  // braucht es dafuer nicht: die Rundenzahl ist die Satzzahl aller Uebungen.
+  const roundCount = (() => {
+    if (items.length === 0) return 0;
+    const first = Math.max(1, toNum(items[0].sets));
+    return items.every((i) => Math.max(1, toNum(i.sets)) === first) ? first : 0;
+  })();
+  const setRoundCount = (n) => {
+    const rounds = Math.max(1, Math.round(toNum(n)) || 1);
+    setItems(items.map((i) => ({ ...i, sets: rounds })));
+  };
+
+  const handleItemBlur = (itemId, field, min) => {
     setItems(
       items.map((i) => {
-        if (i.exerciseId !== exerciseId) return i;
+        if (i.id !== itemId) return i;
         const n = Math.max(min, toNum(i[field]));
         const value = n || min;
         // Weight is shown German-style: typing 62,5 should not silently turn
@@ -7821,14 +7877,14 @@ function PlanBuilder({
   };
   // Weight can legitimately be 0 (bodyweight exercises); like updateItem,
   // this only stores what was typed — cleanup happens on blur.
-  const updateItemWeight = (exerciseId, value) => {
+  const updateItemWeight = (itemId, value) => {
     setItems(
-      items.map((i) => (i.exerciseId === exerciseId ? { ...i, weight: value } : i))
+      items.map((i) => (i.id === itemId ? { ...i, weight: value } : i))
     );
   };
-  const toggleItemTime = (exerciseId, useTime) => {
+  const toggleItemTime = (itemId, useTime) => {
     setItems(
-      items.map((i) => (i.exerciseId === exerciseId ? { ...i, useTime } : i))
+      items.map((i) => (i.id === itemId ? { ...i, useTime } : i))
     );
   };
 
@@ -8083,7 +8139,7 @@ function PlanBuilder({
           <div className="empty-state" style={{ padding: "14px 0" }}>Keine Übung gefunden.</div>
         )}
         {visibleFiltered.map((e) => {
-          const added = items.some((i) => i.exerciseId === e.id);
+          const addedCount = items.filter((i) => i.exerciseId === e.id).length;
           return (
             <div className="ex-row" key={e.id}>
               <span
@@ -8092,12 +8148,16 @@ function PlanBuilder({
               >
                 {e.name}
               </span>
+              {addedCount > 0 && (
+                <span className="tag" title="So oft ist die Übung schon im Plan">
+                  {addedCount}×
+                </span>
+              )}
               <button
-                className={`btn btn-sm ${added ? "btn-done" : "btn-ghost"}`}
-                onClick={() => (added ? removeExercise(e.id) : addExercise(e.id))}
+                className="btn btn-sm btn-ghost"
+                onClick={() => addExercise(e.id)}
               >
-                {added ? <Check size={14} /> : <Plus size={14} />}
-                {added ? "Drin" : "Add"}
+                <Plus size={14} /> Add
               </button>
             </div>
           );
@@ -8179,6 +8239,20 @@ function PlanBuilder({
                     {planAutoOrder === "circuit" ? "Zirkel" : "Übung für Übung"}
                   </span>
                 </button>
+                {planAutoOrder === "circuit" && items.length > 0 && (
+                  <button
+                    className="modal-option"
+                    style={{ marginTop: 6 }}
+                    onClick={() => setRestPopupFor("rounds")}
+                  >
+                    <span style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                      <RotateCcw size={15} /> Runden
+                    </span>
+                    <span style={{ color: "var(--accent)" }}>
+                      {roundCount > 0 ? `${roundCount}×` : "gemischt"}
+                    </span>
+                  </button>
+                )}
                 <button
                   className="modal-option"
                   style={{ marginTop: 6 }}
@@ -8194,7 +8268,7 @@ function PlanBuilder({
                 </button>
                 <div style={{ fontSize: 12, color: "var(--text-dim)", marginTop: 8 }}>
                   {planAutoOrder === "circuit"
-                    ? "Satz 1 aller Übungen, dann Satz 2 aller Übungen. Die Satzpause läuft zwischen den Übungen, die Rundenpause nach der letzten Übung einer Runde."
+                    ? "Satz 1 aller Übungen, dann Satz 2 aller Übungen. Die Satzpause läuft zwischen den Übungen, die Rundenpause nach der letzten Übung einer Runde. Über „Runden“ stellst du die Übungsliste einmal zusammen und sagst nur noch, wie oft sie durchlaufen wird."
                     : "Alle Sätze einer Übung am Stück, danach die nächste Übung."}
                 </div>
               </>
@@ -8214,26 +8288,26 @@ function PlanBuilder({
                 const shownSeconds = autoTimed
                   ? (it.autoSeconds != null ? it.autoSeconds : planAutoSeconds)
                   : (it.duration ?? 30);
-                const isDragging = draggingId === it.exerciseId;
-                const isOpen = expandedItemId === it.exerciseId;
+                const isDragging = draggingId === it.id;
+                const isOpen = expandedItemId === it.id;
                 const warm = Math.max(0, toNum(it.warmupSets));
                 return (
-                  <React.Fragment key={it.exerciseId}>
+                  <React.Fragment key={it.id}>
                   <div
-                    ref={(el) => { itemRefs.current[it.exerciseId] = el; }}
-                    className={`plan-item-row builder-item ${isOpen ? "is-open" : ""} ${itemMenuId === it.exerciseId ? "menu-open" : ""} ${isDragging ? "is-dragging" : ""}`}
+                    ref={(el) => { itemRefs.current[it.id] = el; }}
+                    className={`plan-item-row builder-item ${isOpen ? "is-open" : ""} ${itemMenuId === it.id ? "menu-open" : ""} ${isDragging ? "is-dragging" : ""}`}
                   >
                     <div className="builder-item-head">
                       <span
                         className="drag-handle"
                         title="Gedrückt halten, um die Reihenfolge zu ändern"
-                        {...dragHandleProps(it.exerciseId)}
+                        {...dragHandleProps(it.id)}
                       >
                         <GripVertical size={16} />
                       </span>
                       <div
                         className="builder-item-main"
-                        onClick={() => setExpandedItemId(isOpen ? null : it.exerciseId)}
+                        onClick={() => setExpandedItemId(isOpen ? null : it.id)}
                       >
                         <span className="ex-name">{ex.name}</span>
                         <span className="builder-item-summary">
@@ -8244,19 +8318,19 @@ function PlanBuilder({
                           {planAutoRun && it.autoRun === false && " · zählt Wdh."}
                         </span>
                       </div>
-                      <div className={`item-menu-wrap ${itemMenuUp && itemMenuId === it.exerciseId ? "drop-up" : ""}`}>
+                      <div className={`item-menu-wrap ${itemMenuUp && itemMenuId === it.id ? "drop-up" : ""}`}>
                         <button
                           className="btn-icon"
                           onClick={(e) => {
-                            const opening = itemMenuId !== it.exerciseId;
+                            const opening = itemMenuId !== it.id;
                             setItemMenuUp(opening ? shouldDropUp(e.target) : false);
-                            setItemMenuId(opening ? it.exerciseId : null);
+                            setItemMenuId(opening ? it.id : null);
                           }}
                           title="Weitere Optionen"
                         >
                           <MoreVertical size={16} />
                         </button>
-                        {itemMenuId === it.exerciseId && (
+                        {itemMenuId === it.id && (
                           <div
                             ref={itemMenuRef}
                             className="program-menu"
@@ -8265,7 +8339,7 @@ function PlanBuilder({
                             {itemIndex < items.length - 1 && (
                               <button
                                 className="program-menu-item"
-                                onClick={() => { toggleSupersetWithNext(it.exerciseId); setItemMenuId(null); }}
+                                onClick={() => { toggleSupersetWithNext(it.id); setItemMenuId(null); }}
                               >
                                 <Repeat size={14} />
                                 {it.supersetWithNext ? "Superset-Verknüpfung lösen" : "Mit nächster Übung verknüpfen"}
@@ -8275,7 +8349,7 @@ function PlanBuilder({
                               <>
                                 <button
                                   className="program-menu-item"
-                                  onClick={() => { setRestPopupFor(`time:${it.exerciseId}`); setItemMenuId(null); }}
+                                  onClick={() => { setRestPopupFor(`time:${it.id}`); setItemMenuId(null); }}
                                 >
                                   <Clock size={14} />
                                   {it.autoSeconds != null
@@ -8287,7 +8361,7 @@ function PlanBuilder({
                                   onClick={() => {
                                     // false = this exercise counts reps and the
                                     // run waits for the set to be ticked off.
-                                    updateItem(it.exerciseId, "autoRun", it.autoRun === false ? null : false);
+                                    updateItem(it.id, "autoRun", it.autoRun === false ? null : false);
                                     setItemMenuId(null);
                                   }}
                                 >
@@ -8300,7 +8374,7 @@ function PlanBuilder({
                             )}
                             <button
                               className="program-menu-item"
-                              onClick={() => { setRestPopupFor(it.exerciseId); setItemMenuId(null); }}
+                              onClick={() => { setRestPopupFor(it.id); setItemMenuId(null); }}
                             >
                               <Timer size={14} />
                               {it.restSeconds != null
@@ -8313,7 +8387,7 @@ function PlanBuilder({
                             {!planAutoRun && (
                               <button
                                 className="program-menu-item"
-                                onClick={() => { toggleItemTime(it.exerciseId, !itemUsesTime); setItemMenuId(null); }}
+                                onClick={() => { toggleItemTime(it.id, !itemUsesTime); setItemMenuId(null); }}
                               >
                                 <Clock size={14} />
                                 {itemUsesTime ? "Wieder Wiederholungen zählen" : "Zeit pro Satz statt Wiederholungen"}
@@ -8327,7 +8401,7 @@ function PlanBuilder({
                             </button>
                             <button
                               className="program-menu-item danger"
-                              onClick={() => { removeExercise(it.exerciseId); setItemMenuId(null); }}
+                              onClick={() => { removeItem(it.id); setItemMenuId(null); }}
                             >
                               <Trash2 size={14} /> Übung entfernen
                             </button>
@@ -8336,7 +8410,7 @@ function PlanBuilder({
                       </div>
                       <span
                         className="builder-chevron"
-                        onClick={() => setExpandedItemId(isOpen ? null : it.exerciseId)}
+                        onClick={() => setExpandedItemId(isOpen ? null : it.id)}
                       >
                         {isOpen ? <ChevronDown size={15} /> : <ChevronRight size={15} />}
                       </span>
@@ -8355,8 +8429,8 @@ function PlanBuilder({
                                 inputMode="numeric"
                               min="0"
                               value={it.warmupSets ?? 0}
-                              onChange={(e) => updateItem(it.exerciseId, "warmupSets", e.target.value)}
-                              onBlur={() => handleItemBlur(it.exerciseId, "warmupSets", 0)}
+                              onChange={(e) => updateItem(it.id, "warmupSets", e.target.value)}
+                              onBlur={() => handleItemBlur(it.id, "warmupSets", 0)}
                             />
                           </div>
                           <div style={{ flex: 1 }}>
@@ -8366,8 +8440,8 @@ function PlanBuilder({
                                 inputMode="numeric"
                               min="1"
                               value={it.sets}
-                              onChange={(e) => updateItem(it.exerciseId, "sets", e.target.value)}
-                              onBlur={() => handleItemBlur(it.exerciseId, "sets", 1)}
+                              onChange={(e) => updateItem(it.id, "sets", e.target.value)}
+                              onBlur={() => handleItemBlur(it.id, "sets", 1)}
                             />
                           </div>
                           {itemUsesTime ? (
@@ -8383,13 +8457,13 @@ function PlanBuilder({
                                 value={shownSeconds}
                                 onChange={(e) =>
                                   updateItem(
-                                    it.exerciseId,
+                                    it.id,
                                     autoTimed ? "autoSeconds" : "duration",
                                     e.target.value
                                   )
                                 }
                                 onBlur={() =>
-                                  handleItemBlur(it.exerciseId, autoTimed ? "autoSeconds" : "duration", 1)
+                                  handleItemBlur(it.id, autoTimed ? "autoSeconds" : "duration", 1)
                                 }
                               />
                             </div>
@@ -8401,8 +8475,8 @@ function PlanBuilder({
                                 inputMode="numeric"
                                 min="1"
                                 value={it.reps}
-                                onChange={(e) => updateItem(it.exerciseId, "reps", e.target.value)}
-                                onBlur={() => handleItemBlur(it.exerciseId, "reps", 1)}
+                                onChange={(e) => updateItem(it.id, "reps", e.target.value)}
+                                onBlur={() => handleItemBlur(it.id, "reps", 1)}
                               />
                             </div>
                           )}
@@ -8412,8 +8486,8 @@ function PlanBuilder({
                               type="text"
                               inputMode="decimal"
                               value={it.weight ?? 0}
-                              onChange={(e) => updateItemWeight(it.exerciseId, e.target.value)}
-                              onBlur={() => handleItemBlur(it.exerciseId, "weight", 0)}
+                              onChange={(e) => updateItemWeight(it.id, e.target.value)}
+                              onBlur={() => handleItemBlur(it.id, "weight", 0)}
                             />
                           </div>
                         </div>
@@ -8487,30 +8561,36 @@ function PlanBuilder({
           restPopupFor === "plan" ? "planRest"
           : restPopupFor === "roundRest" ? "roundRest"
           : restPopupFor === "autoSeconds" ? "autoSeconds"
+          : restPopupFor === "rounds" ? "rounds"
           : restPopupFor.startsWith("time:") ? "itemTime"
           : "itemRest";
         const itemId = restPopupFor.startsWith("time:") ? restPopupFor.slice(5) : restPopupFor;
-        const item = items.find((i) => i.exerciseId === itemId);
+        const item = items.find((i) => i.id === itemId);
         const titles = {
           planRest: "Pause nach jedem Satz",
           roundRest: planAutoOrder === "circuit" ? "Pause nach jeder Runde" : "Pause nach jeder Übung",
           autoSeconds: "Zeit pro Satz",
           itemRest: "Pause für diese Übung",
           itemTime: "Zeit für diese Übung",
+          rounds: "Runden",
         };
-        const presets = kind === "autoSeconds" || kind === "itemTime"
+        const presets = kind === "rounds"
+          ? [2, 3, 4, 5, 6, 8, 10]
+          : kind === "autoSeconds" || kind === "itemTime"
           ? [15, 20, 30, 40, 45, 60, 90]
           : [0, 15, 30, 45, 60, 90, 120, 180];
         const current =
           kind === "planRest" ? planRest
           : kind === "roundRest" ? planRoundRest
           : kind === "autoSeconds" ? planAutoSeconds
+          : kind === "rounds" ? (roundCount > 0 ? roundCount : null)
           : kind === "itemTime" ? item?.autoSeconds
           : item?.restSeconds;
         const apply = (sec) => {
           if (kind === "planRest") setPlanRest(sec);
           else if (kind === "roundRest") setPlanRoundRest(sec);
           else if (kind === "autoSeconds") setPlanAutoSeconds(sec);
+          else if (kind === "rounds") setRoundCount(sec);
           else if (kind === "itemTime") updateItem(itemId, "autoSeconds", sec);
           else updateItem(itemId, "restSeconds", sec);
         };
@@ -8518,7 +8598,18 @@ function PlanBuilder({
           kind === "itemTime" ? `Wie im Workout (${planAutoSeconds}s)`
           : `Wie im Workout (${planRest === 0 ? "Aus" : `${planRest}s`})`;
         const canInherit = kind === "itemRest" || kind === "itemTime";
-        const minValue = kind === "autoSeconds" || kind === "itemTime" ? 1 : 0;
+        const minValue = kind === "autoSeconds" || kind === "itemTime" || kind === "rounds" ? 1 : 0;
+        // Runden sind Anzahlen, keine Sekunden - Beschriftung und Schrittweite
+        // muessen das widerspiegeln, sonst steht "3 Sekunden" fuer 3 Runden.
+        // Bei gemischten Satzzahlen gibt es keine gemeinsame Rundenzahl - dann
+        // steht im Eingabefeld die groesste, damit nichts still gekuerzt wird.
+        const maxItemSets = Math.max(1, ...items.map((i) => Math.max(1, toNum(i.sets))));
+        const presetLabel = (n) =>
+          kind === "rounds"
+            ? `${n} Runden`
+            : n === 0
+            ? "Aus"
+            : `${n} Sekunden`;
 
         return (
           <Modal title={titles[kind]} onClose={() => setRestPopupFor(null)}>
@@ -8541,19 +8632,24 @@ function PlanBuilder({
                   className={`modal-option ${current === sec ? "active" : ""}`}
                   onClick={() => { apply(sec); setRestPopupFor(null); }}
                 >
-                  {sec === 0 ? "Aus" : `${sec} Sekunden`}
+                  {presetLabel(sec)}
                   {current === sec && <Check size={15} />}
                 </button>
               ))}
             </div>
             <div style={{ marginTop: 12, paddingTop: 12, borderTop: "1px solid var(--border)" }}>
-              <label className="field-label">Eigener Wert (Sekunden)</label>
+              <label className="field-label">
+                {kind === "rounds" ? "Eigener Wert (Runden)" : "Eigener Wert (Sekunden)"}
+              </label>
               <input
                 type="number"
                                 inputMode="numeric"
                 min={minValue}
-                step="5"
-                value={current ?? (kind === "itemTime" ? planAutoSeconds : planRest)}
+                step={kind === "rounds" ? "1" : "5"}
+                value={
+                  current ??
+                  (kind === "rounds" ? maxItemSets : kind === "itemTime" ? planAutoSeconds : planRest)
+                }
                 onChange={(e) => apply(Math.max(minValue, Number(e.target.value) || minValue))}
               />
             </div>
@@ -9281,7 +9377,7 @@ function LogView({
   const restBeepScheduledRef = useRef(hasPendingRestBeep());
   const [openNotes, setOpenNotes] = useState({});
   const [openRestPicker, setOpenRestPicker] = useState({});
-  // Offenes Satzart-Menue: { exerciseId, idx } oder null.
+  // Offenes Satzart-Menue: { entryId, idx } oder null.
   const [openSetKind, setOpenSetKind] = useState(null);
   const [setKindMenuUp, setSetKindMenuUp] = useState(false);
   const setKindMenuRef = useMenuFlip(openSetKind, setSetKindMenuUp);
@@ -9312,7 +9408,10 @@ function LogView({
   // The automatic (HIT/interval) run. Times are stored as an absolute
   // end timestamp rather than a countdown, so a throttled or backgrounded
   // tab still resumes with the correct remaining time.
-  const [autoRun, setAutoRun] = useState(null); // {phase,'work'|'rest', exerciseId, setIdx, endsAt}
+  // {phase: 'work'|'rest'|'waiting', entryId, exerciseId, setIdx, endsAt}
+  // entryId ist die Identitaet (welcher Platz im Zirkel), exerciseId steht
+  // nur fuer Name und Satzlaenge daneben.
+  const [autoRun, setAutoRun] = useState(null);
   const [autoLeft, setAutoLeft] = useState(0);
   // React state updates are async, but the ticker below runs every 200ms.
   // Without a synchronous mirror, a tick that fires between "Stopp" and the
@@ -9339,7 +9438,7 @@ function LogView({
     dragHandleProps: entryDragProps,
   } = useDragReorder({
     items: session ? session.entries : EMPTY_LIST,
-    getId: (e) => e.exerciseId,
+    getId: (e) => e.id,
     onReorder: (entries) => {
       if (!session) return;
       onUpdateSession({ ...session, entries });
@@ -9496,7 +9595,7 @@ function LogView({
       while (j < entries.length - 1 && entries[j].supersetWithNext) j++;
       const groupSize = j - i + 1;
       for (let k = i; k <= j; k++) {
-        info[entries[k].exerciseId] = { groupSize, isFirst: k === i, isLast: k === j };
+        info[entries[k].id] = { groupSize, isFirst: k === i, isLast: k === j };
       }
       i = j + 1;
     }
@@ -9514,28 +9613,31 @@ function LogView({
   // Finds the next set to run. Inside a superset group the exercises take
   // turns (set 1 of A, set 1 of B, ... then set 2 of A), everything else is
   // worked through exercise by exercise.
-  const findNextSet = (fromExerciseId, fromSetIdx) => {
+  const findNextSet = (fromEntryId, fromSetIdx) => {
     const entries = session?.entries || [];
-    const idx = entries.findIndex((e) => e.exerciseId === fromExerciseId);
+    const idx = entries.findIndex((e) => e.id === fromEntryId);
     if (idx === -1) return null;
 
     // Circuit: set 1 of every exercise, then set 2 of every exercise. This
     // is what a HIT workout actually looks like, and it needs no linking.
+    // Dieselbe Uebung darf mehrfach in der Liste stehen - der Zirkel laeuft
+    // ueber die Plaetze, nicht ueber die Uebungen, deshalb ergibt sich
+    // A -> B -> A -> C von selbst aus der Reihenfolge.
     if ((session?.autoOrder || "circuit") === "circuit") {
       for (let k = idx + 1; k < entries.length; k++) {
-        if (entries[k].sets[fromSetIdx]) return { exerciseId: entries[k].exerciseId, setIdx: fromSetIdx };
+        if (entries[k].sets[fromSetIdx]) return { entryId: entries[k].id, setIdx: fromSetIdx };
       }
       for (let k = 0; k < entries.length; k++) {
-        if (entries[k].sets[fromSetIdx + 1]) return { exerciseId: entries[k].exerciseId, setIdx: fromSetIdx + 1 };
+        if (entries[k].sets[fromSetIdx + 1]) return { entryId: entries[k].id, setIdx: fromSetIdx + 1 };
       }
       return null;
     }
 
     // Classic: finish an exercise before moving on.
     const current = entries[idx];
-    if (current.sets[fromSetIdx + 1]) return { exerciseId: current.exerciseId, setIdx: fromSetIdx + 1 };
+    if (current.sets[fromSetIdx + 1]) return { entryId: current.id, setIdx: fromSetIdx + 1 };
     for (let k = idx + 1; k < entries.length; k++) {
-      if (entries[k].sets[0]) return { exerciseId: entries[k].exerciseId, setIdx: 0 };
+      if (entries[k].sets[0]) return { entryId: entries[k].id, setIdx: 0 };
     }
     return null;
   };
@@ -9551,41 +9653,56 @@ function LogView({
     return fromSet > 0 ? fromSet : 30;
   };
 
+  // Im Zirkel ist "Satz 3" in Wahrheit "Runde 3": Satz 1 aller Uebungen ist
+  // Runde 1. Die Rundenzahl ist deshalb nichts Eigenes, was gespeichert
+  // werden muesste - sie ergibt sich aus der laengsten Uebung der Liste.
+  // 0 heisst: kein Zirkel, also von Saetzen statt von Runden sprechen.
+  const roundTotal =
+    (session?.autoOrder || "circuit") === "circuit"
+      ? (session?.entries || []).reduce((m, e) => Math.max(m, entrySets(e).length), 0)
+      : 0;
+
   // True when the set that just finished closes a round (circuit) or an
   // exercise (classic order) - that is when the longer rest applies.
-  const finishesRound = (exerciseId, setIdx) => {
+  const finishesRound = (entryId, setIdx) => {
     const entries = session?.entries || [];
-    const idx = entries.findIndex((e) => e.exerciseId === exerciseId);
+    const idx = entries.findIndex((e) => e.id === entryId);
     if (idx === -1) return false;
     if ((session?.autoOrder || "circuit") === "circuit") return idx === entries.length - 1;
     return setIdx >= (entries[idx]?.sets?.length || 1) - 1;
   };
 
   // Folgt auf diesen Satz direkt ein Dropsatz? Dann faellt die Pause weg.
-  const nextSetIsDrop = (exerciseId, setIdx) => {
-    const sets = (session?.entries || []).find((e) => e.exerciseId === exerciseId)?.sets;
+  const nextSetIsDrop = (entryId, setIdx) => {
+    const sets = (session?.entries || []).find((e) => e.id === entryId)?.sets;
     return !!(Array.isArray(sets) && sets[setIdx + 1]?.dropset);
   };
 
-  const restAfter = (exerciseId, setIdx) => {
-    if (nextSetIsDrop(exerciseId, setIdx)) return 0;
+  const restAfter = (entryId, setIdx) => {
+    if (nextSetIsDrop(entryId, setIdx)) return 0;
     const roundRest = toNum(session?.roundRestSeconds);
-    if (finishesRound(exerciseId, setIdx)) return Math.max(0, roundRest);
-    return Math.max(0, getRestDurationFor(exerciseId));
+    if (finishesRound(entryId, setIdx)) return Math.max(0, roundRest);
+    return Math.max(0, getRestDurationFor(entryId));
   };
 
-  const startAutoAt = (exerciseId, setIdx, force = false) => {
+  const startAutoAt = (entryId, setIdx, force = false) => {
     if (!force && !autoRunRef.current) return;
-    const entry = (session?.entries || []).find((e) => e.exerciseId === exerciseId);
+    const entry = (session?.entries || []).find((e) => e.id === entryId);
     if (!entry) { applyAutoRun(null); return; }
     // Only exercises explicitly switched to reps wait for a manual tick;
     // everything else runs on the workout's set length.
     if (!entryAutoRuns(entry)) {
-      applyAutoRun({ phase: "waiting", exerciseId, setIdx, endsAt: null });
+      applyAutoRun({ phase: "waiting", entryId, exerciseId: entry.exerciseId, setIdx, endsAt: null });
       return;
     }
     const seconds = setDurationFor(entry);
-    applyAutoRun({ phase: "work", exerciseId, setIdx, endsAt: Date.now() + seconds * 1000 });
+    applyAutoRun({
+      phase: "work",
+      entryId,
+      exerciseId: entry.exerciseId,
+      setIdx,
+      endsAt: Date.now() + seconds * 1000,
+    });
   };
 
   const stopAuto = () => {
@@ -9617,7 +9734,7 @@ function LogView({
   const firstUnfinishedSet = () => {
     for (const entry of session?.entries || []) {
       const idx = entry.sets.findIndex((set) => !set.done);
-      if (idx !== -1) return { exerciseId: entry.exerciseId, setIdx: idx };
+      if (idx !== -1) return { entryId: entry.id, setIdx: idx };
     }
     return null;
   };
@@ -9634,29 +9751,29 @@ function LogView({
       if (left > 0) return;
 
       const entries = session?.entries || [];
-      const entry = entries.find((e) => e.exerciseId === autoRun.exerciseId);
+      const entry = entries.find((e) => e.id === autoRun.entryId);
       if (!entry) { stopAuto(); return; }
 
       if (autoRun.phase === "work") {
-        const restSeconds = restAfter(autoRun.exerciseId, autoRun.setIdx);
+        const restSeconds = restAfter(autoRun.entryId, autoRun.setIdx);
         // One beep when a set ends. If a rest follows, its end gets its own
         // beep; without a rest that single beep is all there is.
         // Deliberately a single tone: with no rest configured this is the
         // only signal, and two short beeps would read as two events.
         playBeep({ frequency: 880, duration: 0.32 });
         if (!entry.sets[autoRun.setIdx]?.done) {
-          toggleSetDoneSilently(autoRun.exerciseId, autoRun.setIdx);
+          toggleSetDoneSilently(autoRun.entryId, autoRun.setIdx);
         }
         if (restSeconds > 0) {
           applyAutoRun({
             ...autoRun,
             phase: "rest",
-            isRoundRest: finishesRound(autoRun.exerciseId, autoRun.setIdx),
+            isRoundRest: finishesRound(autoRun.entryId, autoRun.setIdx),
             endsAt: Date.now() + restSeconds * 1000,
           });
         } else {
-          const next = findNextSet(autoRun.exerciseId, autoRun.setIdx);
-          if (next) startAutoAt(next.exerciseId, next.setIdx);
+          const next = findNextSet(autoRun.entryId, autoRun.setIdx);
+          if (next) startAutoAt(next.entryId, next.setIdx);
           else { stopAuto(); playBeep({ frequency: 660, duration: 0.4 }); }
         }
         return;
@@ -9664,8 +9781,8 @@ function LogView({
 
       if (autoRun.phase === "rest") {
         playBell();
-        const next = findNextSet(autoRun.exerciseId, autoRun.setIdx);
-        if (next) startAutoAt(next.exerciseId, next.setIdx);
+        const next = findNextSet(autoRun.entryId, autoRun.setIdx);
+        if (next) startAutoAt(next.entryId, next.setIdx);
         else { stopAuto(); playBeep({ frequency: 660, duration: 0.4 }); }
       }
     };
@@ -9723,8 +9840,8 @@ function LogView({
 
   // Rest can be overridden per exercise (entry.restSeconds); exercises
   // without their own setting fall back to the session-wide default above.
-  const getRestDurationFor = (exerciseId) => {
-    const entry = session.entries.find((e) => e.exerciseId === exerciseId);
+  const getRestDurationFor = (entryId) => {
+    const entry = session.entries.find((e) => e.id === entryId);
     return entry && entry.restSeconds != null ? entry.restSeconds : restDuration;
   };
   // Schedules the rest-end tone on the audio clock right away instead of
@@ -9741,9 +9858,9 @@ function LogView({
     restBeepScheduledRef.current = scheduleRestBeep(seconds);
   };
 
-  const startRest = (exerciseId) => {
+  const startRest = (entryId) => {
     // Bei 0 Sekunden gibt es keine Pause - der Timer bleibt einfach aus.
-    const sec = exerciseId ? getRestDurationFor(exerciseId) : restDuration;
+    const sec = entryId ? getRestDurationFor(entryId) : restDuration;
     restBeepedRef.current = sec <= 0;
     armRestBeep(sec);
     setRestLeft(sec > 0 ? sec : 0);
@@ -9767,11 +9884,11 @@ function LogView({
     onSetRestEndsAt?.(left > 0 ? nextEnd : 0);
   };
 
-  const addSet = (exerciseId, warmup = false) => {
+  const addSet = (entryId, warmup = false) => {
     onUpdateSession({
       ...session,
       entries: session.entries.map((e) =>
-        e.exerciseId === exerciseId
+        e.id === entryId
           ? {
               ...e,
               sets: [
@@ -9789,11 +9906,11 @@ function LogView({
       ),
     });
   };
-  const updateSet = (exerciseId, idx, field, value) => {
+  const updateSet = (entryId, idx, field, value) => {
     onUpdateSession({
       ...session,
       entries: session.entries.map((e) =>
-        e.exerciseId === exerciseId
+        e.id === entryId
           ? {
               ...e,
               sets: e.sets.map((s, i) => (i === idx ? { ...s, [field]: value } : s)),
@@ -9804,11 +9921,11 @@ function LogView({
   };
   // Used by the automatic run: marks a set as done without kicking off the
   // normal rest timer, because the automatic run manages the rest itself.
-  const toggleSetDoneSilently = (exerciseId, idx) => {
+  const toggleSetDoneSilently = (entryId, idx) => {
     onUpdateSession({
       ...session,
       entries: session.entries.map((e) =>
-        e.exerciseId === exerciseId
+        e.id === entryId
           ? { ...e, sets: e.sets.map((set, i) => (i === idx ? { ...set, done: true } : set)) }
           : e
       ),
@@ -9818,11 +9935,11 @@ function LogView({
   // field can be cleared and freely retyped instead of the digit typed
   // right after clearing getting stuck after a leftover "0". Once the
   // field is left, normalize it to a clean, valid number.
-  const sanitizeSetField = (exerciseId, idx, field) => {
+  const sanitizeSetField = (entryId, idx, field) => {
     onUpdateSession({
       ...session,
       entries: session.entries.map((e) =>
-        e.exerciseId === exerciseId
+        e.id === entryId
           ? {
               ...e,
               sets: e.sets.map((s, i) => {
@@ -9837,24 +9954,24 @@ function LogView({
       ),
     });
   };
-  const removeSet = (exerciseId, idx) => {
+  const removeSet = (entryId, idx) => {
     setOpenSetKind(null);
     onUpdateSession({
       ...session,
       entries: session.entries.map((e) =>
-        e.exerciseId === exerciseId
+        e.id === entryId
           ? { ...e, sets: e.sets.filter((_, i) => i !== idx) }
           : e
       ),
     });
   };
   const addExerciseToSession = (exerciseId) => {
-    if (session.entries.some((e) => e.exerciseId === exerciseId)) return;
     onUpdateSession({
       ...session,
       entries: [
         ...session.entries,
         {
+          id: uid(),
           exerciseId,
           targetSets: 3,
           targetReps: 10,
@@ -9870,10 +9987,10 @@ function LogView({
     setCreatingExercise(false);
     resetAddFilters();
   };
-  const removeExerciseFromSession = (exerciseId) => {
+  const removeExerciseFromSession = (entryId) => {
     onUpdateSession({
       ...session,
-      entries: session.entries.filter((e) => e.exerciseId !== exerciseId),
+      entries: session.entries.filter((e) => e.id !== entryId),
     });
   };
   // Swaps an exercise for a different one mid-workout. The target values
@@ -9881,12 +9998,11 @@ function LogView({
   // the workout, but the sets actually logged so far are cleared — they
   // were performed on the old exercise and would otherwise misattribute
   // that weight/reps to the new exercise's history and stats.
-  const replaceExerciseInSession = (oldExerciseId, newExerciseId) => {
-    if (session.entries.some((e) => e.exerciseId === newExerciseId)) return;
+  const replaceExerciseInSession = (entryId, newExerciseId) => {
     onUpdateSession({
       ...session,
       entries: session.entries.map((e) =>
-        e.exerciseId === oldExerciseId
+        e.id === entryId
           ? { ...e, exerciseId: newExerciseId, sets: [], notes: "" }
           : e
       ),
@@ -9894,12 +10010,12 @@ function LogView({
     setReplacingExerciseId(null);
     setAddExerciseQuery("");
   };
-  const toggleSetDone = (exerciseId, idx) => {
+  const toggleSetDone = (entryId, idx) => {
     let nowDone = false;
     onUpdateSession({
       ...session,
       entries: session.entries.map((e) =>
-        e.exerciseId === exerciseId
+        e.id === entryId
           ? {
               ...e,
               sets: e.sets.map((s, i) => {
@@ -9913,20 +10029,20 @@ function LogView({
     });
     // The automatic run parks on rep-based exercises; checking the set off
     // by hand is the signal to carry on.
-    if (autoRun && autoRun.phase === "waiting" && autoRun.exerciseId === exerciseId
+    if (autoRun && autoRun.phase === "waiting" && autoRun.entryId === entryId
         && autoRun.setIdx === idx && nowDone) {
       playBeep({ frequency: 880, duration: 0.22 });
-      const restSeconds = restAfter(exerciseId, idx);
+      const restSeconds = restAfter(entryId, idx);
       if (restSeconds > 0) {
         applyAutoRun({
           ...autoRun,
           phase: "rest",
-          isRoundRest: finishesRound(exerciseId, idx),
+          isRoundRest: finishesRound(entryId, idx),
           endsAt: Date.now() + restSeconds * 1000,
         });
       } else {
-        const next = findNextSet(exerciseId, idx);
-        if (next) startAutoAt(next.exerciseId, next.setIdx);
+        const next = findNextSet(entryId, idx);
+        if (next) startAutoAt(next.entryId, next.setIdx);
         else stopAuto();
       }
       return;
@@ -9934,43 +10050,44 @@ function LogView({
     // Inside a superset, sets are done back-to-back with no rest between
     // the linked exercises — the timer only starts once the last exercise
     // in the group has a set checked off.
-    const isLastInGroup = supersetGroupInfo[exerciseId]?.isLast ?? true;
+    const isLastInGroup = supersetGroupInfo[entryId]?.isLast ?? true;
     // Vor einem Dropsatz gibt es keine Pause: das Gewicht wird sofort
     // reduziert und weitergemacht - genau das macht ihn zum Dropsatz.
-    if (nowDone && isLastInGroup && !nextSetIsDrop(exerciseId, idx)) startRest(exerciseId);
+    if (nowDone && isLastInGroup && !nextSetIsDrop(entryId, idx)) startRest(entryId);
   };
-  const toggleEntryNotes = (exerciseId) => {
-    setOpenNotes((s) => ({ ...s, [exerciseId]: !s[exerciseId] }));
+  const toggleEntryNotes = (entryId) => {
+    setOpenNotes((s) => ({ ...s, [entryId]: !s[entryId] }));
   };
-  const updateEntryNotes = (exerciseId, notes) => {
+  const updateEntryNotes = (entryId, notes) => {
+    const target = session.entries.find((e) => e.id === entryId);
     onUpdateSession({
       ...session,
       entries: session.entries.map((e) =>
-        e.exerciseId === exerciseId ? { ...e, notes } : e
+        e.id === entryId ? { ...e, notes } : e
       ),
     });
     // Written to the exercise as well, so it survives this workout. The copy
     // in the session still goes into the log, which keeps the history of
     // what the note said on a given day.
-    onUpdateExerciseNote?.(exerciseId, notes);
+    if (target) onUpdateExerciseNote?.(target.exerciseId, notes);
   };
-  const setEntryRir = (exerciseId, rir) => {
+  const setEntryRir = (entryId, rir) => {
     onUpdateSession({
       ...session,
       entries: session.entries.map((e) =>
         // Nochmal antippen nimmt die Angabe zurueck - eine falsch getippte
         // Zahl waere sonst nicht mehr korrigierbar.
-        e.exerciseId === exerciseId ? { ...e, rir: e.rir === rir ? null : rir } : e
+        e.id === entryId ? { ...e, rir: e.rir === rir ? null : rir } : e
       ),
     });
   };
-  const changeSetKind = (exerciseId, idx, kind) => {
+  const changeSetKind = (entryId, idx, kind) => {
     setOpenSetKind(null);
     setSetKindMenuUp(false);
     onUpdateSession({
       ...session,
       entries: session.entries.map((e) =>
-        e.exerciseId === exerciseId
+        e.id === entryId
           ? {
               ...e,
               sets: e.sets.map((s, i) => (i === idx ? { ...s, ...setKindFlags(kind) } : s)),
@@ -9986,11 +10103,11 @@ function LogView({
   const setRestDuration = (sec) => {
     onUpdateSession({ ...session, restSeconds: sec });
   };
-  const setEntryRestDuration = (exerciseId, sec) => {
+  const setEntryRestDuration = (entryId, sec) => {
     onUpdateSession({
       ...session,
       entries: session.entries.map((e) =>
-        e.exerciseId === exerciseId ? { ...e, restSeconds: sec } : e
+        e.id === entryId ? { ...e, restSeconds: sec } : e
       ),
     });
   };
@@ -10055,7 +10172,10 @@ function LogView({
               : `${Math.ceil(autoLeft / 1000)}s`}
           </div>
           <div className="auto-run-what">
-            {exBy[autoRun.exerciseId]?.name || "Übung"} · Satz {autoRun.setIdx + 1}
+            {exBy[autoRun.exerciseId]?.name || "Übung"} ·{" "}
+            {roundTotal > 0
+              ? `Runde ${Math.min(autoRun.setIdx + 1, roundTotal)} von ${roundTotal}`
+              : `Satz ${autoRun.setIdx + 1}`}
             {autoRun.phase === "waiting" && " · abhaken zum Fortfahren"}
           </div>
           <div className="rest-actions" style={{ marginTop: 8 }}>
@@ -10081,8 +10201,8 @@ function LogView({
             <button
               className="rest-btn"
               onClick={() => {
-                const next = findNextSet(autoRun.exerciseId, autoRun.setIdx);
-                if (next) startAutoAt(next.exerciseId, next.setIdx);
+                const next = findNextSet(autoRun.entryId, autoRun.setIdx);
+                if (next) startAutoAt(next.entryId, next.setIdx);
                 else stopAuto();
               }}
             >
@@ -10228,18 +10348,18 @@ function LogView({
         const exercisePrs = describeExercisePRs(entry.sets, history, isTimeBased, hasWeightHere);
         const volumeChange = exerciseVolumeChange(entry.sets, history.lastSets, isTimeBased, usesWeight);
         const volumeChangeRounded = volumeChange === null ? null : Math.round(volumeChange);
-        const ssInfo = supersetGroupInfo[entry.exerciseId] || { groupSize: 1, isFirst: true, isLast: true };
+        const ssInfo = supersetGroupInfo[entry.id] || { groupSize: 1, isFirst: true, isLast: true };
         const isSuperset = ssInfo.groupSize > 1;
         return (
-          <React.Fragment key={entry.exerciseId}>
+          <React.Fragment key={entry.id}>
           {isSuperset && ssInfo.isFirst && (
             <div className="superset-label">
               <Repeat size={12} /> Superset ({ssInfo.groupSize} Übungen, keine Pause dazwischen)
             </div>
           )}
           <div
-            ref={(el) => { entryRefs.current[entry.exerciseId] = el; }}
-            className={`card entry-card ${draggingEntryId === entry.exerciseId ? "is-dragging" : ""} ${isSuperset ? "superset-card" : ""} ${isSuperset && !ssInfo.isLast ? "superset-card-linked" : ""}`}
+            ref={(el) => { entryRefs.current[entry.id] = el; }}
+            className={`card entry-card ${draggingEntryId === entry.id ? "is-dragging" : ""} ${isSuperset ? "superset-card" : ""} ${isSuperset && !ssInfo.isLast ? "superset-card-linked" : ""}`}
           >
             <div
               style={{
@@ -10253,7 +10373,7 @@ function LogView({
                 <span
                   className="drag-handle"
                   title="Gedrückt halten und ziehen, um die Reihenfolge zu ändern"
-                  {...entryDragProps(entry.exerciseId)}
+                  {...entryDragProps(entry.id)}
                 >
                   <GripVertical size={16} />
                 </span>
@@ -10293,19 +10413,19 @@ function LogView({
                   </span>
                 )}
               </div>
-              <div className={`entry-menu-wrap ${entryMenuUp && openEntryMenu === entry.exerciseId ? "drop-up" : ""}`}>
+              <div className={`entry-menu-wrap ${entryMenuUp && openEntryMenu === entry.id ? "drop-up" : ""}`}>
                 <button
                   className={`note-toggle ${(entry.restSeconds != null || entry.notes) ? "has-note" : ""}`}
                   onClick={(e) => {
-                    const opening = openEntryMenu !== entry.exerciseId;
+                    const opening = openEntryMenu !== entry.id;
                     setEntryMenuUp(opening ? shouldDropUp(e.target) : false);
-                    setOpenEntryMenu(opening ? entry.exerciseId : null);
+                    setOpenEntryMenu(opening ? entry.id : null);
                   }}
                   title="Optionen für diese Übung"
                 >
                   <MoreVertical size={15} />
                 </button>
-                {openEntryMenu === entry.exerciseId && (
+                {openEntryMenu === entry.id && (
                   <div
                     ref={entryMenuRef}
                     className="program-menu"
@@ -10314,7 +10434,7 @@ function LogView({
                     <button
                       className="program-menu-item"
                       onClick={() => {
-                        toggleEntryNotes(entry.exerciseId);
+                        toggleEntryNotes(entry.id);
                         setOpenEntryMenu(null);
                       }}
                     >
@@ -10324,17 +10444,17 @@ function LogView({
                     <button
                       className="program-menu-item"
                       onClick={() => {
-                        setOpenRestPicker((s) => ({ ...s, [entry.exerciseId]: true }));
+                        setOpenRestPicker((s) => ({ ...s, [entry.id]: true }));
                         setOpenEntryMenu(null);
                       }}
                     >
                       <Timer size={14} />
-                      Pausenzeit{entry.restSeconds != null ? ` · ${getRestDurationFor(entry.exerciseId)}s` : ""}
+                      Pausenzeit{entry.restSeconds != null ? ` · ${getRestDurationFor(entry.id)}s` : ""}
                     </button>
                     <button
                       className="program-menu-item"
                       onClick={() => {
-                        setReplacingExerciseId(entry.exerciseId);
+                        setReplacingExerciseId(entry.id);
                         setOpenEntryMenu(null);
                       }}
                     >
@@ -10347,7 +10467,7 @@ function LogView({
                         setOpenEntryMenu(null);
                         onRequestConfirm(
                           `„${ex.name}“ aus diesem Training entfernen?`,
-                          () => removeExerciseFromSession(entry.exerciseId)
+                          () => removeExerciseFromSession(entry.id)
                         );
                       }}
                     >
@@ -10358,7 +10478,7 @@ function LogView({
               </div>
             </div>
 
-            {replacingExerciseId === entry.exerciseId && (
+            {replacingExerciseId === entry.id && (
               <div style={{ marginTop: 10, paddingTop: 10, borderTop: "1px solid var(--border)" }}>
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
                   <span className="plan-title">Übung ersetzen</span>
@@ -10440,16 +10560,23 @@ function LogView({
                     .filter(addPickerMatches)
                     .slice(0, EXERCISE_PICKER_LIMIT)
                     .map((e) => {
-                      const already = session.entries.some((se) => se.exerciseId === e.id);
+                      // Beim Tauschen wird nicht mehr blockiert, wenn die
+                      // Uebung schon vorkommt - im Zirkel ist genau das
+                      // gewollt. Die Anzahl steht nur als Hinweis daneben.
+                      const addedCount = session.entries.filter((se) => se.exerciseId === e.id).length;
                       return (
                         <div className="ex-row" key={e.id}>
                           <span className="ex-name">{e.name}</span>
+                          {addedCount > 0 && (
+                            <span className="tag" title="So oft ist die Übung schon im Training">
+                              {addedCount}×
+                            </span>
+                          )}
                           <button
-                            className={`btn btn-sm ${already ? "btn-done" : "btn-ghost"}`}
-                            disabled={already}
-                            onClick={() => replaceExerciseInSession(entry.exerciseId, e.id)}
+                            className="btn btn-sm btn-ghost"
+                            onClick={() => replaceExerciseInSession(entry.id, e.id)}
                           >
-                            {already ? "Schon drin" : "Wählen"}
+                            Wählen
                           </button>
                         </div>
                       );
@@ -10458,15 +10585,15 @@ function LogView({
               </div>
             )}
 
-            {openRestPicker[entry.exerciseId] && (
+            {openRestPicker[entry.id] && (
               <div className="chip-row rest-picker-inline" style={{ marginTop: 4, marginBottom: 8 }}>
                 {REST_PRESETS.map((sec) => (
                   <span
                     key={sec}
                     className={`chip ${(entry.restSeconds ?? restDuration) === sec ? "active" : ""}`}
                     onClick={() => {
-                      setEntryRestDuration(entry.exerciseId, sec);
-                      setOpenRestPicker((s) => ({ ...s, [entry.exerciseId]: false }));
+                      setEntryRestDuration(entry.id, sec);
+                      setOpenRestPicker((s) => ({ ...s, [entry.id]: false }));
                     }}
                   >
                     {sec === 0 ? "Aus" : `${sec}s`}
@@ -10476,8 +10603,8 @@ function LogView({
                   <span
                     className="chip"
                     onClick={() => {
-                      setEntryRestDuration(entry.exerciseId, null);
-                      setOpenRestPicker((s) => ({ ...s, [entry.exerciseId]: false }));
+                      setEntryRestDuration(entry.id, null);
+                      setOpenRestPicker((s) => ({ ...s, [entry.id]: false }));
                     }}
                   >
                     Standard nutzen
@@ -10507,13 +10634,13 @@ function LogView({
                 "Notiz bearbeiten") instead of its own button, so the entry
                 stays compact. Once a note has text it keeps showing here
                 permanently - no toggle needed to see it again later. */}
-            {(openNotes[entry.exerciseId] || entry.notes) && (
+            {(openNotes[entry.id] || entry.notes) && (
               <textarea
                 className="session-notes note-inline"
                 placeholder="Notiz zu dieser Übung, z. B. Ausführung, Beschwerden, Griffweite…"
-                autoFocus={openNotes[entry.exerciseId]}
+                autoFocus={openNotes[entry.id]}
                 value={entry.notes || history.lastNote || ""}
-                onChange={(e) => updateEntryNotes(entry.exerciseId, e.target.value)}
+                onChange={(e) => updateEntryNotes(entry.id, e.target.value)}
               />
             )}
 
@@ -10536,7 +10663,7 @@ function LogView({
                   const pr = setPrIndex === idx ? setPrList : null;
                   const kind = setKind(s);
                   const kindMenuOpen =
-                    openSetKind?.exerciseId === entry.exerciseId && openSetKind?.idx === idx;
+                    openSetKind?.entryId === entry.id && openSetKind?.idx === idx;
                   return (
                     <div
                       className={`set-line ${s.dropset ? "is-drop" : ""} ${kindMenuOpen ? "menu-open" : ""}`}
@@ -10544,8 +10671,8 @@ function LogView({
                     >
                     <SwipeableSetRow
                       className={`set-row ${s.done ? "is-done" : ""} ${s.warmup ? "is-warmup" : ""} ${s.dropset ? "is-drop" : ""} ${usesWeight ? "" : "set-row-noweight"}`}
-                      onSwipeRight={() => toggleSetDone(entry.exerciseId, idx)}
-                      onSwipeLeft={() => removeSet(entry.exerciseId, idx)}
+                      onSwipeRight={() => toggleSetDone(entry.id, idx)}
+                      onSwipeLeft={() => removeSet(entry.id, idx)}
                     >
                       {/* Die Nummer ist zugleich der Schalter fuer die Satzart:
                           antippen, dann Aufwaermsatz oder Dropsatz waehlen. */}
@@ -10554,7 +10681,7 @@ function LogView({
                         onClick={() => {
                           setSetKindMenuUp(false);
                           setOpenSetKind(
-                            kindMenuOpen ? null : { exerciseId: entry.exerciseId, idx }
+                            kindMenuOpen ? null : { entryId: entry.id, idx }
                           );
                         }}
                         role="button"
@@ -10571,8 +10698,8 @@ function LogView({
                                 inputMode="numeric"
                           min="0"
                           value={s.duration ?? ""}
-                          onChange={(e) => updateSet(entry.exerciseId, idx, "duration", e.target.value)}
-                          onBlur={() => sanitizeSetField(entry.exerciseId, idx, "duration")}
+                          onChange={(e) => updateSet(entry.id, idx, "duration", e.target.value)}
+                          onBlur={() => sanitizeSetField(entry.id, idx, "duration")}
                         />
                       ) : (
                         <div style={{ position: "relative" }}>
@@ -10581,8 +10708,8 @@ function LogView({
                             min="0"
                             inputMode="numeric"
                             value={s.reps}
-                            onChange={(e) => updateSet(entry.exerciseId, idx, "reps", e.target.value)}
-                            onBlur={() => sanitizeSetField(entry.exerciseId, idx, "reps")}
+                            onChange={(e) => updateSet(entry.id, idx, "reps", e.target.value)}
+                            onBlur={() => sanitizeSetField(entry.id, idx, "reps")}
                           />
                           {pr && !usesWeight && (
                             <span
@@ -10603,8 +10730,8 @@ function LogView({
                           type="text"
                           inputMode="decimal"
                           value={s.weight}
-                          onChange={(e) => updateSet(entry.exerciseId, idx, "weight", e.target.value)}
-                          onBlur={() => sanitizeSetField(entry.exerciseId, idx, "weight")}
+                          onChange={(e) => updateSet(entry.id, idx, "weight", e.target.value)}
+                          onBlur={() => sanitizeSetField(entry.id, idx, "weight")}
                         />
                         {pr && (
                           <span
@@ -10621,7 +10748,7 @@ function LogView({
                       </div>
                       <span
                         className={`set-check ${s.done ? "checked" : ""}`}
-                        onClick={() => toggleSetDone(entry.exerciseId, idx)}
+                        onClick={() => toggleSetDone(entry.id, idx)}
                         role="checkbox"
                         aria-checked={!!s.done}
                       >
@@ -10641,7 +10768,7 @@ function LogView({
                           <button
                             key={id}
                             className={`set-kind-option is-${id}`}
-                            onClick={() => changeSetKind(entry.exerciseId, idx, id)}
+                            onClick={() => changeSetKind(entry.id, idx, id)}
                           >
                             <span className="set-kind-dot" />
                             {label}
@@ -10671,7 +10798,7 @@ function LogView({
                     <span
                       key={value}
                       className={`chip chip-sm ${entry.rir === value ? "active" : ""}`}
-                      onClick={() => setEntryRir(entry.exerciseId, value)}
+                      onClick={() => setEntryRir(entry.id, value)}
                       title={value === 0 ? "Bis zum Muskelversagen" : undefined}
                     >
                       {rirLabel(value)}
@@ -10683,7 +10810,7 @@ function LogView({
 
             <button
               className="btn btn-ghost btn-block btn-sm"
-              onClick={() => addSet(entry.exerciseId)}
+              onClick={() => addSet(entry.id)}
             >
               <Plus size={14} /> Satz hinzufügen
             </button>
@@ -10703,7 +10830,7 @@ function LogView({
               unlockAudio();
               playBeep({ frequency: 660, duration: 0.12, volume: 0.15 });
               const first = firstUnfinishedSet();
-              if (first) startAutoAt(first.exerciseId, first.setIdx, true);
+              if (first) startAutoAt(first.entryId, first.setIdx, true);
             }}
           >
             <Play size={16} /> Automatik starten
@@ -10843,17 +10970,20 @@ function LogView({
                 .filter(addPickerMatches)
                 .slice(0, EXERCISE_PICKER_LIMIT)
                 .map((e) => {
-                  const already = session.entries.some((se) => se.exerciseId === e.id);
+                  const addedCount = session.entries.filter((se) => se.exerciseId === e.id).length;
                   return (
                     <div className="ex-row" key={e.id}>
                       <span className="ex-name">{e.name}</span>
+                      {addedCount > 0 && (
+                        <span className="tag" title="So oft ist die Übung schon im Training">
+                          {addedCount}×
+                        </span>
+                      )}
                       <button
-                        className={`btn btn-sm ${already ? "btn-done" : "btn-ghost"}`}
-                        disabled={already}
+                        className="btn btn-sm btn-ghost"
                         onClick={() => addExerciseToSession(e.id)}
                       >
-                        {already ? <Check size={14} /> : <Plus size={14} />}
-                        {already ? "Drin" : "Add"}
+                        <Plus size={14} /> Add
                       </button>
                     </div>
                   );
@@ -11008,8 +11138,10 @@ function ExerciseCharts({ logs, exerciseId, isTimeBased, theme, gyms = [], gymIn
 
   const chartData = relevantLogs
     .map((l) => {
-      const entry = logEntries(l).find((e) => e.exerciseId === selected);
-      const workingSets = entrySets(entry).filter((s) => !s.warmup);
+      // Eine Uebung kann mehrfach im selben Training stehen (Zirkel: A, B, A).
+      // Deshalb alle Plaetze zusammennehmen - ein .find() wuerde die Saetze
+      // der zweiten Kopie still aus allen Charts entfernen.
+      const workingSets = logSetsFor(l, selected).filter((s) => !s.warmup);
       const maxWeight = selectedIsTimeBased
         ? 0
         : Math.max(0, ...workingSets.map((s) => s.weight || 0));
@@ -11067,8 +11199,7 @@ function ExerciseCharts({ logs, exerciseId, isTimeBased, theme, gyms = [], gymIn
   // and band work has no weight, so volume and 1RM would be flat zero lines -
   // there the rep counts are what actually shows progress.
   const hasAnyWeight = relevantLogs.some((l) =>
-    entrySets(logEntries(l).find((e) => e.exerciseId === selected))
-      .some((x) => !x.warmup && toNum(x.weight) > 0)
+    logSetsFor(l, selected).some((x) => !x.warmup && toNum(x.weight) > 0)
   );
   const cards = selectedIsTimeBased
     ? [
@@ -12866,7 +12997,7 @@ function HistoryView({
                     )
                     .join(", ");
                   return (
-                    <div key={entry.exerciseId}>
+                    <div key={entry.id || entry.exerciseId}>
                       <div className="history-exercise-row">
                         <span
                           className="ex-name-clickable"

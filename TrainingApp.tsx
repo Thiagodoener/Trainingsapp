@@ -10,11 +10,13 @@ import {
   Trash2,
   Search,
   Play,
+  Pause,
   Save,
   Loader2,
   Timer,
   SkipForward,
   Trophy,
+  Smile,
   StickyNote,
   Pencil,
   Calendar,
@@ -32,6 +34,7 @@ import {
   Wind,
   AlertTriangle,
   Minus,
+  Home,
 } from "lucide-react";
 import {
   LineChart,
@@ -181,6 +184,15 @@ function breathingTotalSeconds(exercise) {
   return phases.reduce((sum, p) => sum + toNum(p.seconds), 0) * breathingRounds(exercise);
 }
 
+// Kurzer Doppelpuls für ein normales Phasenende - spürbar auch wenn das
+// Handy auf dem Tisch liegt statt in der Hand, aber bewusst dezenter als das
+// Pausenzeit-Ende (siehe scheduleRestBeep-Umfeld), weil eine Atemübung ein
+// ruhiger Kontext ist.
+const BREATHING_PHASE_VIBRATION = [50, 40, 50];
+// Deutlich kräftiger - markiert das tatsächliche Ende der ganzen Übung
+// (letzte Phase der letzten Runde), nicht nur einen Phasenwechsel.
+const BREATHING_EXERCISE_END_VIBRATION = [150, 100, 150, 100, 150];
+
 // Exercise pickers only render a screenful at a time. Drawing all ~150
 // rows made every tap inside the picker redraw the entire list, which
 // felt like a stutter on each "Add".
@@ -261,7 +273,120 @@ const toNum = (value) => {
 // entirely, and a bare .map/.forEach on those would take the whole screen
 // down rather than just skipping the damaged record.
 const logEntries = (log) => (Array.isArray(log?.entries) ? log.entries.filter(Boolean) : []);
+
+// Ein Eintrag im Training ist ein *Platz* in der Reihenfolge, nicht "die
+// Uebung". Erst dadurch kann dieselbe Uebung mehrfach vorkommen (Zirkel:
+// A, B, A, C). Alles, was einen bestimmten Eintrag meint, laeuft ueber
+// diese ID; die Uebungs-ID bleibt daneben stehen und beantwortet weiterhin
+// "welche Uebung ist das" (Name, Historie, Statistik).
+// Aeltere Trainings und Logs haben sie noch nicht - die bekommen sie beim
+// Laden nachgereicht.
+// Dieselbe Uebung kann mehrfach in einem Training stehen (Zirkel: A, B, A, C).
+// Alles, was im Nachhinein rechnet, muss deshalb ALLE Plaetze dieser Uebung
+// zusammennehmen. Ein .find() wuerde die zweite Kopie still verschlucken -
+// ihre Saetze waeren fuer Rekorde, Verlauf und Charts dauerhaft verloren,
+// ohne dass irgendwo ein Fehler auftaucht.
+const logEntriesFor = (log, exerciseId) =>
+  logEntries(log).filter((e) => e && e.exerciseId === exerciseId);
+const logSetsFor = (log, exerciseId) =>
+  logEntriesFor(log, exerciseId).flatMap((e) => entrySets(e));
+
+// Bringt ein gespeichertes Training in die Form, die die Trainingsansicht
+// voraussetzt: jeder Eintrag hat eine ID und ein sets-Array. Aeltere Logs
+// und Eintraege aus beschaedigten Sicherungen haben beides nicht - und die
+// Trainingsansicht greift beim Rendern direkt auf entry.sets zu.
+function withEntryIds(session) {
+  if (!session || !Array.isArray(session.entries)) return session;
+  const clean = session.entries.filter(Boolean);
+  const alreadyFine =
+    clean.length === session.entries.length &&
+    clean.every((e) => e.id && Array.isArray(e.sets));
+  if (alreadyFine) return session;
+  return {
+    ...session,
+    entries: clean.map((e) => ({
+      ...e,
+      id: e.id || uid(),
+      sets: Array.isArray(e.sets) ? e.sets.filter(Boolean) : [],
+    })),
+  };
+}
 const entrySets = (entry) => (Array.isArray(entry?.sets) ? entry.sets.filter(Boolean) : []);
+
+// Beim Speichern bleiben auch nicht abgehakte Saetze im Log stehen - sie
+// gehoerten zum Plan dieses Trainings. Gemacht wurde aber nur, was abgehakt
+// ist, und genau danach richtet sich jede Auswertung: ohne diesen Filter
+// zaehlt ein vorbelegter, nie ausgefuehrter Satz als geleistete Arbeit.
+const performedSets = (sets) => (Array.isArray(sets) ? sets : []).filter((s) => s && s.done);
+const performedWorkingSets = (sets) => performedSets(sets).filter((s) => !s.warmup);
+
+// Ein Satz ist entweder Aufwaermsatz, Dropsatz oder ein normaler Arbeitssatz.
+// Aufwaermsaetze bleiben ueberall aus der Statistik ausgeschlossen; ein
+// Dropsatz ist echtes Arbeitsvolumen und zaehlt wie jeder andere Satz mit.
+const SET_KINDS = [
+  ["normal", "Normaler Satz"],
+  ["warmup", "Aufwärmsatz"],
+  ["dropset", "Dropsatz"],
+];
+const setKind = (set) => (set?.warmup ? "warmup" : set?.dropset ? "dropset" : "normal");
+const setKindFlags = (kind) => ({ warmup: kind === "warmup", dropset: kind === "dropset" });
+
+// Wiederholungen in Reserve (RIR) am letzten Satz einer Uebung - siehe
+// KONZEPT.md. Bewusst RIR statt RPE: beides misst dasselbe (die moderne
+// Kraftsport-RPE-Skala ist ueber RIR definiert), aber RIR fragt etwas
+// Zaehlbares und braucht keinen Uebersetzungsschritt in eine abstrakte Zahl.
+// Nach oben gedeckelt, weil oberhalb von ~4 in Reserve niemand mehr
+// zuverlaessig zwischen 4, 5 und 6 unterscheidet.
+const RIR_MAX = 4;
+const RIR_OPTIONS = [0, 1, 2, 3, 4];
+const rirLabel = (rir) => (rir >= RIR_MAX ? `${RIR_MAX}+` : String(rir));
+// "0 in Reserve" heisst: bis zum Muskelversagen.
+function fmtRir(rir) {
+  if (rir == null || !Number.isFinite(Number(rir))) return null;
+  const n = Math.max(0, Math.min(RIR_MAX, Math.round(Number(rir))));
+  return n === 0 ? "bis Versagen" : `${rirLabel(n)} in Reserve`;
+}
+
+// Sitzungsgefuehl: fuenf Stufen mit Worten statt einer 10er-Skala. Worte,
+// weil man Monate spaeter gegen einen Begriff vergleichen kann und nicht
+// gegen die Erinnerung an eine "7" - siehe KONZEPT.md.
+const FEELING_OPTIONS = [
+  [1, "Ausgelaugt"],
+  [2, "Müde"],
+  [3, "Normal"],
+  [4, "Gut"],
+  [5, "Stark"],
+];
+const feelingLabel = (value) =>
+  FEELING_OPTIONS.find(([v]) => v === Number(value))?.[1] || null;
+
+// Ein Dropsatz haengt immer an dem Arbeitssatz davor - ohne einen solchen
+// (erster Satz der Uebung, oder davor stehen nur Aufwaermsaetze) ergibt er
+// keinen Sinn und wird gar nicht erst angeboten.
+function canBeDropset(sets, idx) {
+  for (let i = idx - 1; i >= 0; i -= 1) {
+    if (!sets[i]?.warmup) return true;
+  }
+  return false;
+}
+
+// Sichtbare Nummer je Satz: Aufwaermsaetze zeigen "W", Dropsaetze haengen als
+// Unternummer am vorangehenden Arbeitssatz (3.1, 3.2), alles andere zaehlt
+// hoch. Dropsaetze bekommen also keine eigene Satznummer.
+function setNumberLabels(sets) {
+  let working = 0;
+  let drops = 0;
+  return (Array.isArray(sets) ? sets : []).map((s) => {
+    if (s?.warmup) return "W";
+    if (s?.dropset && working > 0) {
+      drops += 1;
+      return `${working}.${drops}`;
+    }
+    working += 1;
+    drops = 0;
+    return String(working);
+  });
+}
 
 // A subgroup assignment always comes from the override map (works the same
 // way for built-in and custom exercises), so there is exactly one place
@@ -518,6 +643,7 @@ function getExerciseHistory(logs, exerciseId, excludeSessionId, isTimeBased = fa
 
   let lastSets = null;
   let lastDate = null;
+  let lastRir = null;
   let bestWeight = 0;
   let bestRepsAtBestWeight = 0;
   let lastNote = null;
@@ -536,14 +662,16 @@ function getExerciseHistory(logs, exerciseId, excludeSessionId, isTimeBased = fa
     // Logs written by older versions (or a half-finished save) can be
     // missing `entries` or `sets` entirely, so every access is guarded
     // rather than assuming a fully-formed object.
-    const entries = Array.isArray(log?.entries) ? log.entries : [];
-    const entry = entries.find((e) => e && e.exerciseId === exerciseId);
-    if (!entry) continue;
-    if (lastNote === null && typeof entry.notes === "string" && entry.notes.trim()) {
-      lastNote = entry.notes.trim();
+    const matching = logEntriesFor(log, exerciseId);
+    if (matching.length === 0) continue;
+    if (lastNote === null) {
+      const noted = matching.find((e) => typeof e.notes === "string" && e.notes.trim());
+      if (noted) lastNote = noted.notes.trim();
     }
 
-    const sets = Array.isArray(entry.sets) ? entry.sets : [];
+    // Saetze aller Plaetze dieser Uebung in diesem Training, in der
+    // Reihenfolge, in der sie im Training standen.
+    const sets = matching.flatMap((e) => (Array.isArray(e.sets) ? e.sets : []));
     const doneSets = sets.filter(
       (set) =>
         set &&
@@ -556,6 +684,9 @@ function getExerciseHistory(logs, exerciseId, excludeSessionId, isTimeBased = fa
     if (!lastSets) {
       lastSets = doneSets;
       lastDate = log.date;
+      // Bei mehreren Plaetzen zaehlt die erste vorhandene Angabe.
+      const rirEntry = matching.find((e) => Number.isFinite(Number(e.rir)));
+      lastRir = rirEntry ? Number(rirEntry.rir) : null;
     }
 
     comparableSessions += 1;
@@ -592,7 +723,7 @@ function getExerciseHistory(logs, exerciseId, excludeSessionId, isTimeBased = fa
   }
 
   return {
-    lastSets, lastDate, bestWeight, bestRepsAtBestWeight, bestDuration, lastNote,
+    lastSets, lastDate, lastRir, bestWeight, bestRepsAtBestWeight, bestDuration, lastNote,
     best1RM, bestSetVolume, bestSetReps, bestTotalVolume, bestTotalReps, bestTotalDuration,
     comparableSessions,
   };
@@ -634,14 +765,17 @@ function getExerciseTimeline(logs, exerciseId) {
     .map((l) => {
       // Same defensive treatment as getExerciseHistory: a log saved by an
       // older version may be missing entries/sets.
-      const entries = Array.isArray(l?.entries) ? l.entries : [];
-      const entry = entries.find((e) => e && e.exerciseId === exerciseId);
-      if (!entry) return null;
-      const sets = Array.isArray(entry.sets) ? entry.sets : [];
+      const matching = logEntriesFor(l, exerciseId);
+      if (matching.length === 0) return null;
+      const sets = matching.flatMap((e) => (Array.isArray(e.sets) ? e.sets : []));
+      const rirEntry = matching.find((e) => Number.isFinite(Number(e.rir)));
+      const noted = matching.find((e) => typeof e.notes === "string" && e.notes.trim());
       return {
         date: l.date,
         sets: sets.filter((s) => s && s.done),
-        note: typeof entry.notes === "string" && entry.notes.trim() ? entry.notes.trim() : null,
+        rir: rirEntry ? Number(rirEntry.rir) : null,
+        feeling: Number.isFinite(Number(l.feeling)) ? Number(l.feeling) : null,
+        note: noted ? noted.notes.trim() : null,
       };
     })
     .filter((t) => t && (t.sets.length > 0 || t.note))
@@ -782,9 +916,7 @@ function getExerciseBestStats(logs, exerciseId) {
   let best1RM = 0;
   let bestSetVolume = 0;
   (Array.isArray(logs) ? logs : []).forEach((log) => {
-    const entry = logEntries(log).find((e) => e.exerciseId === exerciseId);
-    if (!entry) return;
-    entrySets(entry).forEach((set) => {
+    logSetsFor(log, exerciseId).forEach((set) => {
       if (!set.done || set.warmup) return;
       const weight = Number(set.weight) || 0;
       const reps = Number(set.reps) || 0;
@@ -863,10 +995,9 @@ function calculateTrainingStats(logs, exBy, timeBasedExercises) {
 function getTimePR(logs, exerciseId) {
   let best = 0;
   (Array.isArray(logs) ? logs : []).forEach((log) => {
-    const entries = Array.isArray(log?.entries) ? log.entries : [];
-    const entry = entries.find((e) => e && e.exerciseId === exerciseId);
-    const sets = Array.isArray(entry?.sets) ? entry.sets : [];
-    sets.forEach((s) => {
+    // Alle Plaetze der Uebung, nicht nur den ersten - sonst faellt der
+    // Rekord aus dem zweiten Zirkel-Durchgang unter den Tisch.
+    logSetsFor(log, exerciseId).forEach((s) => {
       if (s && s.done && !s.warmup) best = Math.max(best, Number(s.duration) || 0);
     });
   });
@@ -903,9 +1034,11 @@ function getTimePR(logs, exerciseId) {
 
 const LOAD_WEEK_MS = 7 * 86400000;
 
-// Gemeinsame Vergleichszeiträume für "Sätze pro Muskelgruppe" und die
-// Prozent-Ansicht der Übungs-Charts - an einer Stelle definiert, damit beide
-// immer dieselben Chips zeigen.
+// Vergleichszeiträume für die Prozent-Ansicht der Übungs-Charts
+// (buildPercentSeries - Punkt-zu-Punkt-Vergleich "Wert vor X Wochen") und die
+// Atemübungs-Statistik. Bewusst getrennt von MUSCLE_COMPARE_OPTIONS unten:
+// buildPercentSeries kann mit "Gesamt" (Infinity) nichts anfangen, weil es
+// nach einem konkreten Zeitpunkt in der Vergangenheit sucht, keinem Schnitt.
 const WEEK_COMPARE_OPTIONS = [
   [1, "Vorwoche"],
   [3, "3 Wochen"],
@@ -913,6 +1046,39 @@ const WEEK_COMPARE_OPTIONS = [
   [10, "10 Wochen"],
   [20, "20 Wochen"],
 ];
+
+// Zeiträume für "Sätze pro Muskelgruppe" und "Belastung pro Muskelgruppe"
+// (Karten + ihre Modal-Charts) - an einer Stelle definiert, damit beide
+// Karten und beide Modals immer dieselben Chips zeigen. Angelehnt an
+// gängige Periodisierungs-Zeiträume (Mesozyklus/Quartal/Halbjahr/Jahr) statt
+// beliebiger Wochenzahlen. muscleLoadChange kommt mit Infinity ("Gesamt")
+// klar, weil es dort um einen Schnitt über die verfügbare Historie geht,
+// nicht um einen Punkt-zu-Punkt-Vergleich zu einem festen Zeitpunkt.
+const MUSCLE_COMPARE_OPTIONS = [
+  [1, "Vorwoche"],
+  [4, "4 Wochen"],
+  [12, "12 Wochen"],
+  [26, "26 Wochen"],
+  [52, "52 Wochen"],
+  [Infinity, "Gesamt"],
+];
+
+// Wie viele Wochen die Rohdaten-Serie mindestens abdecken muss, damit jeder
+// MUSCLE_COMPARE_OPTIONS-Zeitraum (inkl. "Gesamt") daraus bedient werden
+// kann - die längste feste Option (52) als Minimum, plus die komplette
+// echte Historie, falls die länger zurückreicht.
+function muscleSeriesWeekCount(historyWeeks) {
+  return Math.max(52, historyWeeks + 1);
+}
+
+// Schneidet eine Wochenreihe (alt -> neu) auf die letzten `weeks` Wochen
+// zurecht - für den Zoom im Modal-Chart. Infinity ("Gesamt") liefert die
+// komplette Reihe unverändert.
+function zoomWeekSeries(values, weeks) {
+  if (!Array.isArray(values)) return [];
+  if (!Number.isFinite(weeks)) return values;
+  return values.slice(Math.max(0, values.length - weeks));
+}
 
 // Womit die "Arbeit" eines Satzes gemessen wird, hängt an der Übungsart.
 // Bei Übungen ohne Gewicht wären Kilogramm immer 0, bei Zeit-Übungen gibt es
@@ -1032,6 +1198,12 @@ function getMuscleLoadSeries(
 // Arbeit. weekCount=21, weil der weiteste angebotene Vergleich "vor 20
 // Wochen" ist und dafür 20 Wochen Vorgeschichte plus die aktuelle Woche
 // gebraucht werden.
+// Dropsätze zählen hier nicht als eigener Satz: die Kennzahl bildet
+// unabhängige Trainingsreize mit Erholung dazwischen ab (MEV/MAV/MRV-
+// Logik), und genau die fehlt zwischen einem Satz und seinen Drops - sie
+// sind ein Anhängsel des Satzes, den sie fortsetzen, kein zusätzlicher.
+// Ihre Arbeit fehlt dadurch nicht in der Statistik, sie steht bereits
+// vollständig in Volumen, Wdh.-Summen und "Belastung pro Muskelgruppe".
 function getWeeklySetSeries(logs, exBy, subgroupOverrides, weekCount = 21, nowTs = Date.now()) {
   const safeLogs = Array.isArray(logs) ? logs : [];
   const emptyWeeks = () => new Array(weekCount).fill(0);
@@ -1045,7 +1217,7 @@ function getWeeklySetSeries(logs, exBy, subgroupOverrides, weekCount = 21, nowTs
     logEntries(l).forEach((e) => {
       const ex = exBy[e.exerciseId];
       if (!ex) return;
-      const done = entrySets(e).filter((x) => x.done && !x.warmup).length;
+      const done = entrySets(e).filter((x) => x.done && !x.warmup && !x.dropset).length;
       if (done === 0) return;
       if (!groupWeeks[ex.group]) groupWeeks[ex.group] = emptyWeeks();
       groupWeeks[ex.group][idx] += done;
@@ -1481,10 +1653,97 @@ function SubgroupTag({ group, subgroupId, subgroupIds }) {
 // Main App
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// Fehlernetz
+//
+// Ohne dieses Netz macht ein einziger Renderfehler die App vollstaendig
+// unbenutzbar: React haengt den kompletten Baum aus, zurueck bleibt ein
+// weisser Bildschirm - und weil die Ursache im gespeicherten Datenbestand
+// liegt, kommt sie nach jedem Neuladen wieder. Genau dann sind die
+// Trainingsdaten aber noch da; wichtiger als eine huebsche Fehlerseite ist
+// deshalb, dass man sie von hier aus herausbekommt.
+// ---------------------------------------------------------------------------
+class AppErrorBoundary extends React.Component {
+  constructor(props) {
+    super(props);
+    this.state = { error: null };
+  }
+  static getDerivedStateFromError(error) {
+    return { error };
+  }
+  componentDidCatch(error, info) {
+    console.error("Unerwarteter Fehler in der App", error, info);
+  }
+  async saveBackup() {
+    try {
+      const backup = await buildBackup();
+      const blob = new Blob([JSON.stringify(backup, null, 2)], { type: "application/json" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `iron-log-sicherung-${new Date().toISOString().slice(0, 10)}.json`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 4000);
+    } catch (e) {
+      console.error("Sicherung im Fehlerfall fehlgeschlagen", e);
+    }
+  }
+  render() {
+    if (!this.state.error) return this.props.children;
+    return (
+      <div style={{
+        minHeight: "100vh", background: "#ffffff", color: "#1c1c1e",
+        padding: 24, fontFamily: "system-ui, -apple-system, sans-serif",
+        display: "flex", flexDirection: "column", justifyContent: "center", gap: 14,
+      }}>
+        <div style={{ fontSize: 22, fontWeight: 600 }}>Da ist etwas schiefgelaufen</div>
+        <p style={{ fontSize: 15, lineHeight: 1.5, color: "#6e6e73", margin: 0 }}>
+          Deine Trainingsdaten sind noch da. Lade die App neu – wenn der Fehler
+          bleibt, sichere die Daten zuerst und stelle sie danach wieder her.
+        </p>
+        <code style={{
+          fontSize: 12, background: "#f4f4f5", padding: "10px 12px",
+          borderRadius: 10, wordBreak: "break-word", color: "#6e6e73",
+        }}>
+          {String(this.state.error?.message || this.state.error)}
+        </code>
+        <button
+          onClick={() => window.location.reload()}
+          style={{
+            padding: "13px 16px", borderRadius: 12, border: "none",
+            background: "#b25a26", color: "#fff", fontSize: 16, fontWeight: 600,
+          }}
+        >
+          App neu laden
+        </button>
+        <button
+          onClick={() => this.saveBackup()}
+          style={{
+            padding: "13px 16px", borderRadius: 12, fontSize: 16,
+            border: "1px solid rgba(60,60,67,0.32)", background: "transparent", color: "#1c1c1e",
+          }}
+        >
+          Sicherung herunterladen
+        </button>
+      </div>
+    );
+  }
+}
+
 export default function TrainingApp() {
+  return (
+    <AppErrorBoundary>
+      <TrainingAppInner />
+    </AppErrorBoundary>
+  );
+}
+
+function TrainingAppInner() {
   // Plans is the first thing shown: starting a workout is the most
   // common reason to open the app.
-  const [tab, setTab] = useState("plans");
+  const [tab, setTab] = useState("dashboard");
   const [plans, setPlans] = useState([]);
   const [logs, setLogs] = useState([]);
   // Same exercise, different gym, different weights: a leg press at 60kg in
@@ -1609,7 +1868,7 @@ export default function TrainingApp() {
       setGymIndependentExercises(gi);
       setBreathingExercises(Array.isArray(brEx) ? brEx : []);
       setBreathingLogs(Array.isArray(brLogs) ? brLogs : []);
-      setSession(active || null);
+      setSession(active ? withEntryIds(active) : null);
       // A rest that already expired while the app was closed is not restored -
       // it would show a dead "0:00" bar with nothing to count down to.
       setRestEndsAt(active && typeof restEnd === "number" && restEnd > Date.now() ? restEnd : 0);
@@ -1761,7 +2020,11 @@ export default function TrainingApp() {
     planName: plan.name,
     gymId: gymId || null,
     date: new Date().toISOString(),
-    entries: plan.items.map((it) => {
+    // Defensiv: ein Plan aus einer beschaedigten oder aelteren Sicherung
+    // kann ohne items ankommen. Ein ungeschuetztes .map() darauf reisst die
+    // gesamte App in einen weissen Bildschirm, aus dem es keinen Weg zurueck
+    // gibt - der Plan liegt ja weiter im Speicher.
+    entries: (Array.isArray(plan?.items) ? plan.items : []).map((it) => {
       const targetSets = it.sets || 1;
       // Start from what was actually achieved last time rather than the
       // numbers stored in the plan - the plan holds the starting point, the
@@ -1817,6 +2080,10 @@ export default function TrainingApp() {
         ...Array.from({ length: targetSets }, (_, i) => makeSet(false, i)),
       ];
       return {
+        id: uid(),
+        // Woher dieser Platz stammt. Ohne das liesse sich beim Beenden nicht
+        // sagen, welcher von zwei gleichen Plan-Eintraegen gemeint ist.
+        planItemId: it.id || null,
         exerciseId: it.exerciseId,
         targetSets,
         targetReps,
@@ -1896,6 +2163,18 @@ export default function TrainingApp() {
       if (updated.length === 0) delete next[exerciseId];
       else next[exerciseId] = updated;
     }
+    await persistExerciseSubgroupOverrides(next);
+  };
+  // Sets the complete subgroup list in one call, instead of toggling one at
+  // a time like handleSetExerciseSubgroup above. Needed for a freshly
+  // created exercise with several subgroups chosen at once: calling the
+  // toggle handler once per subgroup would fire multiple synchronous state
+  // updates that all read the same stale exerciseSubgroupOverrides closure,
+  // so every call but the last would be silently lost.
+  const handleSetExerciseSubgroups = async (exerciseId, subgroupIds) => {
+    const next = { ...exerciseSubgroupOverrides };
+    if (!subgroupIds || subgroupIds.length === 0) delete next[exerciseId];
+    else next[exerciseId] = subgroupIds;
     await persistExerciseSubgroupOverrides(next);
   };
   const handleSetExerciseEquipment = async (exerciseId, equipment) => {
@@ -1983,8 +2262,10 @@ export default function TrainingApp() {
   };
   // Abschluss einer Atem-Sitzung: Protokoll schreiben und - wie beim
   // Training - einen offenen Kalendereintrag von heute automatisch abhaken,
-  // egal ob die Übung über den Kalender oder direkt gestartet wurde. Ohne
-  // das stünde dieselbe Sitzung zweimal im Tag.
+  // egal ob die Übung über den Kalender oder direkt gestartet wurde. Gibt es
+  // für heute noch gar keinen Eintrag (Übung direkt gestartet, nie geplant),
+  // wird einer nachgetragen - schon als erledigt markiert, damit der Tag im
+  // Kalender die tatsächlich absolvierte Übung zeigt statt leer zu bleiben.
   const finishBreathingSession = async ({ exercise, calendarEntryId, startedAt, completedRounds, maxHoldSeconds }) => {
     const log = {
       id: uid(),
@@ -2013,6 +2294,11 @@ export default function TrainingApp() {
       await persistCalendarEntries(
         calendarEntries.map((ce) => (ce.id === match.id ? { ...ce, logId: log.id } : ce))
       );
+    } else {
+      await persistCalendarEntries([
+        ...calendarEntries,
+        { id: uid(), date: dayKey, type: "breathing", breathingId: exercise.id, logId: log.id },
+      ]);
     }
     setBreathingSession(null);
   };
@@ -2062,6 +2348,13 @@ export default function TrainingApp() {
     setTheme(next);
     await saveJSON("app-theme", next);
   };
+
+  // Die Statusleiste des iPhones faerbt sich nach diesem Meta-Tag. Ohne
+  // Nachfuehren bliebe oben ein dunkler Streifen ueber der hellen App stehen.
+  useEffect(() => {
+    const meta = document.querySelector('meta[name="theme-color"]');
+    if (meta) meta.setAttribute("content", theme === "dark" ? "#000000" : "#ffffff");
+  }, [theme]);
   // Turns a finished workout back into an editable session. The log is
   // removed from the history for the duration - finishing writes it back,
   // discarding restores nothing, which matches "the workout is running again".
@@ -2086,8 +2379,9 @@ export default function TrainingApp() {
       resumedFrom: log.id,
     };
     await persistLogs(logs.filter((l) => l.id !== log.id));
-    setSession(restored);
-    await saveJSON("active-workout", restored);
+    const withIds = withEntryIds(restored);
+    setSession(withIds);
+    await saveJSON("active-workout", withIds);
     setTab("log");
   };
 
@@ -2104,6 +2398,12 @@ export default function TrainingApp() {
   // straight away instead of leaving you to search for it.
   const [historyFocusLogId, setHistoryFocusLogId] = useState(null);
   const [finishSummary, setFinishSummary] = useState(null);
+  // Das Gefuehl wird nach dem Speichern nachgetragen, damit das Beenden des
+  // Trainings nicht an einer zusaetzlichen Frage haengt.
+  const setLogFeeling = async (logId, feeling) => {
+    setFinishSummary((prev) => (prev ? { ...prev, feeling } : prev));
+    await persistLogs(logs.map((l) => (l.id === logId ? { ...l, feeling } : l)));
+  };
   const [backupOpen, setBackupOpen] = useState(false);
   const [backupBusy, setBackupBusy] = useState(false);
   const [backupMessage, setBackupMessage] = useState(null);
@@ -2195,43 +2495,74 @@ export default function TrainingApp() {
   return (
     <div className={`app-shell ${theme === "light" ? "theme-light" : ""}`}>
       <style>{`
-        @import url('https://fonts.googleapis.com/css2?family=Oswald:wght@500;600;700&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@500;600&display=swap');
+        @import url('https://fonts.googleapis.com/css2?family=Newsreader:opsz,wght@6..72,400;6..72,500;6..72,600&family=Inter:wght@400;500;600;700&display=swap');
 
+        /* Farbwelt: neutrale Flaechen, Trennung durch Haarlinien statt
+           durch Kaesten. Die Akzentfarbe ist ausschliesslich fuer
+           Bedienelemente da (Knoepfe, aktiver Reiter, Links) - Zahlen und
+           Ueberschriften stehen in der normalen Textfarbe, Rot/Gelb bleiben
+           den Belastungssignalen vorbehalten.
+           Hier stehen die Werte des dunklen Modus; der helle Modus (Standard)
+           ueberschreibt sie direkt darunter. */
         :root {
-          --bg: #141317;
-          --surface: #1d1c21;
-          --surface-alt: #26242b;
-          --border: #37343c;
-          --text: #f4f0e6;
-          --text-dim: #9a948d;
-          --accent: #c1652e;
-          --accent-dim: #8f4a22;
-          --brass: #e8c547;
-          --success: #6ea866;
-          --danger: #d85a4f;
-          --shadow-strength: 0.18;
+          --bg: #000000;
+          --surface: #000000;
+          --surface-alt: #161616;
+          /* Schwebende Ebenen (Modal, Sheet, Menue) heben sich vom Grund ab. */
+          --elevated: #1c1c1e;
+          --border: rgba(255,255,255,0.14);
+          --border-strong: rgba(255,255,255,0.30);
+          --text: #f5f5f7;
+          --text-dim: #98989d;
+          --text-faint: #616166;
+          --accent: #dd8442;
+          --accent-dim: #a8632f;
+          --brass: #d3a63f;
+          --success: #79ac6d;
+          --danger: #e0705c;
+          --fill: rgba(255,255,255,0.07);
+          --shadow-strength: 0.5;
+          /* Diagrammfarben: gedaempft und untereinander abgestimmt. */
+          --chart-accent: #dd8442;
+          --chart-gold: #d3a63f;
+          --chart-teal: #6fb0c0;
+          --chart-violet: #a493cf;
+          --chart-green: #85b078;
+          --chart-green-2: #5f8f6a;
         }
-        /* Light mode keeps the same warm accent so the app still feels
-           like itself; only the surfaces and text invert. Shadows are
-           softened because heavy shadows read as dirt on a light UI. */
         .app-shell.theme-light {
-          --bg: #f2efe9;
+          color-scheme: light;
+          --bg: #ffffff;
           --surface: #ffffff;
-          --surface-alt: #eae5dc;
-          --border: #d6cfc3;
-          --text: #23201d;
-          --text-dim: #6d675f;
+          --surface-alt: #f4f4f5;
+          --elevated: #ffffff;
+          --border: rgba(60,60,67,0.15);
+          --border-strong: rgba(60,60,67,0.32);
+          --text: #1c1c1e;
+          --text-dim: #6e6e73;
+          --text-faint: #a3a3a8;
           --accent: #b25a26;
           --accent-dim: #8f4a22;
-          --brass: #a8862a;
-          --success: #4f8049;
-          --danger: #c04437;
-          --shadow-strength: 0.08;
+          --brass: #a67c14;
+          --success: #3f7a4e;
+          --danger: #c0402e;
+          --fill: rgba(60,60,67,0.06);
+          --shadow-strength: 0.10;
+          --chart-accent: #b25a26;
+          --chart-gold: #9a7414;
+          --chart-teal: #41707d;
+          --chart-violet: #6f5f92;
+          --chart-green: #4f7a48;
+          --chart-green-2: #3c6b52;
         }
 
         * { box-sizing: border-box; }
 
         .app-shell {
+          /* Sagt dem Browser, in welchem Modus er seine eigenen Bedienelemente
+             zeichnen soll - sonst bleiben Zahlenfeld-Pfeile und Scrollbalken
+             im dunklen Modus hell. */
+          color-scheme: dark;
           /* Die Seite laeuft wegen viewport-fit=cover bis unter die
              Statusleiste. Unten war der Abstand schon beruecksichtigt, oben
              fehlte er - dadurch lag die Kopfzeile unter Uhrzeit und
@@ -2249,9 +2580,10 @@ export default function TrainingApp() {
           margin: 0 auto;
           display: flex;
           flex-direction: column;
-          border-radius: 20px;
+          /* Kein Rahmen und keine abgerundeten Ecken mehr: die App soll
+             randlos wirken wie eine native App, nicht wie eine Seite in
+             einem Kasten. */
           overflow: hidden;
-          border: 1px solid var(--border);
           position: relative;
         }
 
@@ -2260,9 +2592,18 @@ export default function TrainingApp() {
           min-height: 0;
           overflow-y: auto;
           -webkit-overflow-scrolling: touch;
-          padding: 16px 16px 90px;
+          padding: 8px 20px 90px;
+        }
+        /* Die Trainings-Leiste sitzt über der Navigation und würde sonst den
+           letzten Inhalt der Seite verdecken. */
+        .content.with-session-bar {
+          padding-bottom: 132px;
         }
 
+        /* Das versteckte Trainings-Panel (siehe Kommentar am Rendern der
+           Trainingsansicht) darf keinen Platz einnehmen. Explizit, damit
+           keine spaetere display-Regel das hidden-Attribut aushebelt. */
+        .tab-panel[hidden] { display: none !important; }
         .tab-panel {
           /* No "both"/"forwards" fill-mode: leaving a lingering (even
              no-op) transform value on this element after the animation
@@ -2280,32 +2621,39 @@ export default function TrainingApp() {
           to { opacity: 1; transform: translateY(0); }
         }
 
+        /* Textreiter mit Unterstrich statt Kaesten - dieselbe Sprache wie
+           die Abschnittslinien darunter. */
         .sub-tab-row {
           display: flex;
-          gap: 8px;
+          gap: 24px;
           margin-bottom: 14px;
+          border-bottom: 1px solid var(--border-strong);
         }
         .sub-tab {
-          flex: 1;
+          flex: 0 0 auto;
           display: flex;
           align-items: center;
           justify-content: center;
           gap: 6px;
-          background: var(--surface-alt);
-          border: 1px solid var(--border);
+          background: none;
+          border: none;
+          border-bottom: 2px solid transparent;
+          margin-bottom: -1px;
           color: var(--text-dim);
           font-family: 'Inter', sans-serif;
-          font-size: 12.5px;
-          font-weight: 600;
-          padding: 9px 0;
-          border-radius: 10px;
+          font-size: 12px;
+          font-weight: 500;
+          text-transform: uppercase;
+          letter-spacing: 0.08em;
+          padding: 4px 0 10px;
+          border-radius: 0;
           cursor: pointer;
-          transition: color 120ms ease, background 120ms ease, transform 100ms ease;
+          transition: color 120ms ease, border-color 120ms ease;
         }
         .sub-tab.active {
-          color: var(--accent);
-          background: rgba(193, 101, 46, 0.14);
-          border-color: var(--accent);
+          color: var(--text);
+          background: none;
+          border-bottom-color: var(--accent);
         }
         .sub-tab:active {
           transform: scale(0.97);
@@ -2325,11 +2673,12 @@ export default function TrainingApp() {
           gap: 8px;
         }
         .history-card-date {
-          font-family: 'JetBrains Mono', monospace;
+          font-family: 'Inter', sans-serif;
+          font-variant-numeric: tabular-nums;
           font-size: 11px;
-          color: var(--text-dim);
+          color: var(--text-faint);
           text-transform: uppercase;
-          letter-spacing: 0.4px;
+          letter-spacing: 0.1em;
         }
         .history-card-meta {
           display: flex;
@@ -2363,8 +2712,9 @@ export default function TrainingApp() {
         }
         .history-set-summary {
           color: var(--text-dim);
-          font-family: 'JetBrains Mono', monospace;
-          font-size: 11.5px;
+          font-family: 'Inter', sans-serif;
+          font-variant-numeric: tabular-nums;
+          font-size: 12px;
         }
         .history-session-notes {
           margin-top: 10px;
@@ -2377,21 +2727,20 @@ export default function TrainingApp() {
 
 
         .tag {
-          font-family: 'JetBrains Mono', monospace;
-          font-size: 10px;
-          text-transform: uppercase;
-          letter-spacing: 0.5px;
-          background: var(--surface-alt);
+          font-family: 'Inter', sans-serif;
+          font-size: 11px;
+          letter-spacing: 0.1px;
+          background: var(--fill);
           color: var(--text-dim);
-          padding: 3px 8px;
+          padding: 3px 9px;
           border-radius: 999px;
-          border: 1px solid var(--border);
+          border: none;
         }
         .tag-subgroup {
           background: transparent;
-          border-style: dashed;
-          border-color: var(--accent);
-          color: var(--accent);
+          border: none;
+          color: var(--text-dim);
+          padding-left: 0;
         }
         .tag-equipment {
           background: transparent;
@@ -2408,30 +2757,41 @@ export default function TrainingApp() {
           opacity: 0.7;
         }
 
+        /* Karten sind keine Kaesten mehr, sondern Abschnitte, die eine
+           Haarlinie voneinander trennt. Dadurch faellt eine komplette
+           Rahmenebene weg und die Seite wird deutlich ruhiger. */
         .card {
-          background: var(--surface);
-          border: 1px solid var(--border);
-          border-radius: 16px;
-          padding: 14px;
-          margin-bottom: 10px;
-          box-shadow: 0 2px 10px rgba(0,0,0,var(--shadow-strength));
+          background: transparent;
+          border: none;
+          border-bottom: 1px solid var(--border);
+          border-radius: 0;
+          padding: 14px 0;
+          margin-bottom: 0;
+          box-shadow: none;
+        }
+        /* In Modalen und Sheets liegt der Inhalt schon auf einer eigenen
+           Flaeche - dort braucht die letzte Karte keine Abschlusslinie. */
+        .modal-body > .card:last-child,
+        .exercise-detail-body > .card:last-child {
+          border-bottom: none;
         }
         .chart-card {
-          padding: 16px 12px 14px;
-          border-color: rgba(255,255,255,0.06);
+          padding: 16px 0 14px;
         }
         .chart-card .plan-title {
-          padding-left: 4px;
+          padding-left: 0;
         }
 
         .stat-section-title {
           display: block;
-          margin: 20px 2px 10px;
-          font-size: 12px;
-          font-weight: 600;
-          letter-spacing: 0.06em;
+          margin: 26px 0 0;
+          padding-bottom: 8px;
+          border-bottom: 1px solid var(--border-strong);
+          font-size: 11px;
+          font-weight: 500;
+          letter-spacing: 0.12em;
           text-transform: uppercase;
-          color: var(--text-dim);
+          color: var(--text-faint);
         }
 
         .stat-search-head {
@@ -2452,40 +2812,64 @@ export default function TrainingApp() {
           min-width: 0;
         }
 
+        /* Kennzahlen ohne Kaesten: ein Raster, das nur durch Haarlinien
+           geteilt wird. */
         .stats-grid {
           display: grid;
           grid-template-columns: 1fr 1fr;
-          gap: 10px;
+          gap: 0;
+        }
+        .stats-grid .stat-item:nth-child(odd) {
+          border-right: 1px solid var(--border);
+          padding-right: 16px;
+        }
+        .stats-grid .stat-item:nth-child(even) {
+          padding-left: 18px;
         }
         .stats-grid-secondary {
           grid-template-columns: repeat(3, 1fr);
         }
         .stats-grid-secondary .stat-value {
-          font-size: 20px;
+          font-size: 24px;
+        }
+        /* Im Dreierraster gilt die gerade/ungerade Regel nicht - hier
+           bekommt jede Spalte ausser der letzten die Trennlinie. */
+        .stats-grid-secondary .stat-item:nth-child(odd),
+        .stats-grid-secondary .stat-item:nth-child(even) {
+          border-right: none;
+          padding-left: 12px;
+          padding-right: 12px;
+        }
+        .stats-grid-secondary .stat-item:not(:nth-child(3n)) {
+          border-right: 1px solid var(--border);
+        }
+        .stats-grid-secondary .stat-item:nth-child(3n + 1) {
+          padding-left: 0;
         }
         .stat-hero {
           display: flex;
-          flex-direction: column;
-          gap: 2px;
-          background: linear-gradient(155deg, var(--surface-alt), var(--surface));
-          border: 1px solid var(--border);
-          border-left: 3px solid var(--accent);
-          border-radius: 14px;
-          padding: 18px 18px 16px;
-          margin-bottom: 10px;
+          flex-direction: column-reverse;
+          gap: 6px;
+          background: transparent;
+          border: none;
+          border-bottom: 1px solid var(--border);
+          border-radius: 0;
+          padding: 14px 0 18px;
+          margin-bottom: 0;
         }
         .stat-hero-label {
-          font-size: 12px;
-          text-transform: uppercase;
-          letter-spacing: 0.5px;
+          font-size: 11.5px;
+          letter-spacing: 0.2px;
           color: var(--text-dim);
         }
         .stat-hero-value {
-          font-family: 'Oswald', sans-serif;
-          font-weight: 700;
-          font-size: 42px;
-          line-height: 1.1;
-          color: var(--accent);
+          font-family: 'Newsreader', Georgia, serif;
+          font-weight: 400;
+          font-size: 46px;
+          line-height: 1;
+          letter-spacing: -1px;
+          font-variant-numeric: tabular-nums;
+          color: var(--text);
         }
         .stat-hero-value small {
           font-size: 18px;
@@ -2496,21 +2880,25 @@ export default function TrainingApp() {
         .stat-item {
           display: flex;
           flex-direction: column;
-          gap: 4px;
-          background: var(--surface-alt, rgba(255,255,255,0.04));
-          border: 1px solid var(--border);
-          border-radius: 12px;
-          padding: 14px 14px 12px;
+          gap: 7px;
+          background: transparent;
+          border: none;
+          border-bottom: 1px solid var(--border);
+          border-radius: 0;
+          padding: 16px 0 18px;
         }
         .stat-value {
-          font-family: 'Oswald', sans-serif;
-          font-weight: 600;
-          font-size: 28px;
-          line-height: 1.1;
-          color: var(--accent);
+          font-family: 'Newsreader', Georgia, serif;
+          font-weight: 400;
+          font-size: 32px;
+          line-height: 1;
+          letter-spacing: -0.6px;
+          font-variant-numeric: tabular-nums;
+          color: var(--text);
         }
         .stat-label {
-          font-size: 12.5px;
+          font-size: 11.5px;
+          line-height: 1.45;
           color: var(--text-dim);
         }
 
@@ -2518,11 +2906,13 @@ export default function TrainingApp() {
           display: flex;
           align-items: center;
           gap: 8px;
-          background: var(--surface);
-          border: 1px solid var(--border);
-          border-radius: 12px;
-          padding: 10px 12px;
-          margin-bottom: 14px;
+          background: transparent;
+          border: none;
+          border-bottom: 1px solid var(--border-strong);
+          border-radius: 0;
+          padding: 4px 0 9px;
+          margin-bottom: 12px;
+          color: var(--text-faint);
         }
         .search-box input {
           background: transparent;
@@ -2540,29 +2930,39 @@ export default function TrainingApp() {
           gap: 8px;
           overflow-x: auto;
           padding-bottom: 4px;
-          margin-bottom: 14px;
+          margin-bottom: 12px;
         }
+        /* Randlose Pillen: die Auswahl zeigt sich durch die Fuellung, nicht
+           durch einen zusaetzlichen Rahmen. Gemischte Gross-/Kleinschreibung
+           statt Versalien, damit die Beschriftungen lesbar bleiben. */
         .chip {
           flex-shrink: 0;
-          font-family: 'JetBrains Mono', monospace;
-          font-size: 11px;
-          text-transform: uppercase;
-          letter-spacing: 0.4px;
-          padding: 7px 12px;
+          font-family: 'Inter', sans-serif;
+          font-size: 13px;
+          font-weight: 400;
+          letter-spacing: 0.1px;
+          padding: 7px 13px;
           border-radius: 999px;
-          border: 1px solid var(--border);
-          background: var(--surface);
-          color: var(--text-dim);
+          border: none;
+          background: var(--fill);
+          color: var(--text);
           cursor: pointer;
         }
         .chip.active {
           background: var(--accent);
-          border-color: var(--accent);
-          color: white;
+          color: #fff;
+          font-weight: 500;
+        }
+        /* Im Abschluss-Fenster passen die fuenf Gefuehls-Worte nicht in eine
+           Zeile. Umbrechen statt seitlich scrollen: eine Auswahl, die man
+           erst wegschieben muss, wird uebersehen. */
+        .chip-row-wrap {
+          flex-wrap: wrap;
+          overflow-x: visible;
         }
         .chip-sm {
-          padding: 5px 10px;
-          font-size: 10px;
+          padding: 6px 11px;
+          font-size: 12px;
           display: inline-flex;
           align-items: center;
           gap: 4px;
@@ -2600,44 +3000,54 @@ export default function TrainingApp() {
           overflow: hidden;
           text-overflow: ellipsis;
         }
-        .ex-name { font-weight: 500; font-size: 14.5px; }
+        .ex-name {
+          font-family: 'Newsreader', Georgia, serif;
+          font-weight: 500;
+          font-size: 18px;
+          letter-spacing: -0.1px;
+        }
 
         .btn {
           display: inline-flex;
           align-items: center;
           justify-content: center;
-          gap: 6px;
+          gap: 7px;
           font-family: 'Inter', sans-serif;
           font-weight: 600;
-          font-size: 14px;
-          border-radius: 10px;
+          font-size: 15px;
+          letter-spacing: -0.1px;
+          border-radius: 12px;
           border: none;
-          padding: 11px 16px;
+          padding: 13px 18px;
           cursor: pointer;
         }
+        /* Ein ausgegrauter Knopf soll nicht wie eine verblasste Version
+           des aktiven aussehen, sondern klar unbenutzbar: neutrale Flaeche
+           statt durchscheinender Akzentfarbe. */
         .btn:disabled {
-          opacity: 0.4;
+          background: var(--fill);
+          color: var(--text-faint);
           cursor: not-allowed;
         }
-        .btn-primary { background: var(--accent); color: white; box-shadow: 0 4px 14px rgba(193,101,46,0.35); }
-        .btn-ghost { background: var(--surface-alt); color: var(--text); border: 1px solid var(--border); }
+        .btn-primary { background: var(--accent); color: #fff; }
+        .btn-ghost { background: var(--fill); color: var(--accent); border: none; }
         .btn-block { width: 100%; }
-        .btn-sm { padding: 7px 10px; font-size: 12.5px; }
-        .btn-danger { background: rgba(216,90,79,0.12); color: var(--danger); }
+        .btn-sm { padding: 8px 12px; font-size: 13px; border-radius: 9px; }
+        .btn-danger { background: transparent; color: var(--danger); }
+        /* Bereits hinzugefuegt: ruhig und abgehakt, nicht als Aktion. */
+        .btn-done { background: var(--fill); color: var(--success); }
         .btn-icon {
-          width: 34px; height: 34px; border-radius: 9px;
+          width: 34px; height: 34px; border-radius: 999px;
           display: inline-flex; align-items: center; justify-content: center;
-          background: var(--surface-alt); border: 1px solid var(--border); color: var(--text);
+          background: var(--fill); border: none; color: var(--text);
           cursor: pointer;
         }
 
-        .fab-nav {
+        /* Dock = laufende Trainings-Leiste + Navigation. Die Positionierung
+           sitzt hier, damit beide beim Wegscrollen gemeinsam verschwinden. */
+        .bottom-dock {
           position: absolute;
           bottom: 0; left: 0; right: 0;
-          display: flex;
-          background: var(--surface);
-          border-top: 1px solid var(--border);
-          padding: 8px 6px calc(8px + env(safe-area-inset-bottom));
           transition: transform 0.25s ease;
           transform: translateY(0);
           /* The bar carries a transform, which creates its own stacking
@@ -2646,32 +3056,103 @@ export default function TrainingApp() {
              transformed siblings. */
           z-index: 10;
         }
-        .fab-nav.nav-hidden {
+        .bottom-dock.nav-hidden {
           transform: translateY(100%);
+        }
+        .fab-nav {
+          display: flex;
+          background: var(--bg);
+          border-top: 1px solid var(--border-strong);
+          /* Unten nur der halbe Safe-Area-Abstand: der volle Wert ließ auf
+             dem iPhone einen fingerbreiten leeren Streifen unter den
+             Beschriftungen stehen. Die Hälfte hält die Knöpfe weiterhin
+             klar über dem Home-Indikator, gibt den Rest aber frei. */
+          padding: 8px 4px calc(4px + env(safe-area-inset-bottom) * 0.5);
+        }
+        .session-bar {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          gap: 10px;
+          width: 100%;
+          border: none;
+          border-bottom: 1px solid var(--border);
+          background: var(--accent);
+          color: #fff;
+          font-family: 'Inter', sans-serif;
+          font-size: 13px;
+          padding: 9px 14px;
+          cursor: pointer;
+        }
+        .session-bar-main {
+          display: flex;
+          align-items: center;
+          gap: 8px;
+          min-width: 0;
+        }
+        .session-bar-name {
+          overflow: hidden;
+          text-overflow: ellipsis;
+          white-space: nowrap;
+        }
+        .session-bar-time {
+          font-family: 'Newsreader', Georgia, serif;
+          font-size: 16px;
+          font-variant-numeric: tabular-nums;
+          flex-shrink: 0;
+        }
+        .session-bar-time.is-rest {
+          background: rgba(255,255,255,0.18);
+          border-radius: 6px;
+          padding: 1px 7px;
+        }
+        .dash-signal-row {
+          display: flex;
+          align-items: center;
+          gap: 8px;
+          padding: 7px 0;
+          cursor: pointer;
+        }
+        .dash-signal-label {
+          font-size: 13.5px;
+          color: var(--text);
+          flex-shrink: 0;
+        }
+        .dash-signal-text {
+          font-size: 12.5px;
+          color: var(--text-dim);
+          flex: 1;
+          min-width: 0;
         }
         .nav-btn {
           flex: 1;
           display: flex;
           flex-direction: column;
           align-items: center;
-          gap: 3px;
+          gap: 5px;
           background: none;
           border: none;
-          color: var(--text-dim);
+          color: var(--text-faint);
           font-family: 'Inter', sans-serif;
-          font-size: 10.5px;
+          /* "Fortschritt" ist die laengste Beschriftung und muss in ein
+             Fuenftel der Bildschirmbreite passen, ohne den Rand zu beruehren. */
+          font-size: 9px;
+          text-transform: uppercase;
+          letter-spacing: 0.03em;
           padding: 6px 0;
           cursor: pointer;
           transition: color 120ms ease, transform 100ms ease;
         }
-        .nav-btn.active { color: var(--accent); }
+        .nav-btn.active { color: var(--text); }
+        .nav-btn.active svg { color: var(--accent); }
         .nav-btn:active { transform: scale(0.92); }
 
         .plan-title {
-          font-family: 'Oswald', sans-serif;
-          font-weight: 600;
-          font-size: 16px;
-          letter-spacing: 0.3px;
+          font-family: 'Newsreader', Georgia, serif;
+          font-weight: 500;
+          font-size: 21px;
+          line-height: 1.15;
+          letter-spacing: -0.2px;
         }
 
         /* iOS Safari auto-zooms the page whenever a focused form control
@@ -2679,20 +3160,21 @@ export default function TrainingApp() {
            that jump-and-zoom when tapping a name to rename it. */
         input[type=number], input[type=text] {
           background: var(--surface-alt);
-          border: 1px solid var(--border);
+          border: none;
           color: var(--text);
-          border-radius: 8px;
-          padding: 8px 10px;
-          font-family: 'JetBrains Mono', monospace;
+          border-radius: 9px;
+          padding: 10px 11px;
+          font-family: 'Inter', sans-serif;
+          font-variant-numeric: tabular-nums;
           font-size: 16px;
           width: 100%;
         }
         select, textarea {
           background: var(--surface-alt);
-          border: 1px solid var(--border);
+          border: none;
           color: var(--text);
-          border-radius: 8px;
-          padding: 8px 10px;
+          border-radius: 9px;
+          padding: 10px 11px;
           font-family: 'Inter', sans-serif;
           font-size: 16px;
           width: 100%;
@@ -2718,10 +3200,10 @@ export default function TrainingApp() {
         }
         label.field-label {
           font-size: 11px;
-          color: var(--text-dim);
+          color: var(--text-faint);
           text-transform: uppercase;
-          letter-spacing: 0.4px;
-          margin-bottom: 4px;
+          letter-spacing: 0.1em;
+          margin-bottom: 6px;
           display: block;
         }
 
@@ -2778,16 +3260,139 @@ export default function TrainingApp() {
 
         .set-row {
           display: grid;
-          grid-template-columns: 24px 28px 24px minmax(0, 1fr) minmax(0, 1fr);
+          grid-template-columns: 38px minmax(0, 1fr) minmax(0, 1fr) 30px;
+          gap: 6px;
+          align-items: center;
         }
         /* Band exercises drop the weight column entirely - the reps then get
            the space instead of sitting next to an input that only ever holds 0. */
         .set-row.set-row-noweight {
-          grid-template-columns: 24px 28px 24px minmax(0, 1fr);
-          gap: 6px;
-          align-items: center;
-          margin-bottom: 6px;
+          grid-template-columns: 38px minmax(0, 1fr) 30px;
         }
+        /* Jede Zeile liegt in einem eigenen Kaestchen, damit das Satzart-Menue
+           darunter aufklappen kann, ohne von der naechsten Zeile verdeckt zu
+           werden. */
+        .set-line {
+          position: relative;
+        }
+        .set-line + .set-line {
+          margin-top: 5px;
+        }
+        /* Dropsaetze ruecken eng an den Satz, zu dem sie gehoeren. */
+        .set-line.is-drop {
+          margin-top: 2px;
+        }
+        .set-line.menu-open {
+          z-index: 40;
+        }
+        /* Nur die Nummer ruecke ein, nicht die ganze Zeile - Wdh.-, Kg- und
+           Haken-Spalte bleiben mit den Saetzen darueber auf einer Linie. */
+        .set-row.is-drop .set-kind {
+          justify-content: flex-start;
+          padding-left: 14px;
+        }
+        /* Die kleine Ecke zeigt, an welchem Arbeitssatz der Drop haengt. */
+        .set-row.is-drop::after {
+          content: "";
+          position: absolute;
+          left: 5px;
+          top: -4px;
+          bottom: 50%;
+          width: 9px;
+          border-left: 1.5px solid var(--border-strong);
+          border-bottom: 1.5px solid var(--border-strong);
+          border-bottom-left-radius: 6px;
+          pointer-events: none;
+        }
+        /* Die RIR-Frage am Ende einer Uebung. Bewusst schmal und ruhig: sie
+           soll auffallen, wenn die Uebung durch ist, aber nicht mit dem
+           "Satz hinzufuegen"-Knopf um Aufmerksamkeit konkurrieren. */
+        .rir-ask {
+          display: flex;
+          align-items: center;
+          gap: 12px;
+          margin: 10px 0 12px;
+          padding-top: 10px;
+          border-top: 1px solid var(--border);
+        }
+        .rir-ask-label {
+          flex-shrink: 0;
+          font-size: 11px;
+          font-weight: 500;
+          letter-spacing: 0.1em;
+          text-transform: uppercase;
+          color: var(--text-faint);
+        }
+        .rir-ask-row {
+          margin-bottom: 0;
+        }
+        /* Satznummer = Schalter fuer die Satzart. */
+        .set-kind {
+          height: 30px;
+          border-radius: 8px;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          cursor: pointer;
+          font-family: 'Inter', sans-serif;
+          font-variant-numeric: tabular-nums;
+          font-size: 14px;
+          font-weight: 500;
+          color: var(--text-faint);
+          user-select: none;
+        }
+        .set-kind.is-warmup {
+          font-style: italic;
+        }
+        .set-kind.is-dropset {
+          font-size: 12.5px;
+          color: var(--text-dim);
+        }
+        .set-kind.is-open {
+          background: var(--fill);
+          color: var(--text);
+        }
+        .set-kind-menu {
+          position: absolute;
+          left: 0;
+          top: calc(100% + 4px);
+          z-index: 50;
+          width: 190px;
+          background: var(--elevated);
+          border: 1px solid var(--border);
+          border-radius: 12px;
+          box-shadow: 0 10px 30px rgba(0,0,0,calc(var(--shadow-strength) * 2));
+          padding: 6px;
+          animation: modal-fade 140ms ease-out both;
+        }
+        .set-kind-menu.drop-up {
+          top: auto;
+          bottom: calc(100% + 4px);
+        }
+        .set-kind-option {
+          display: flex;
+          align-items: center;
+          gap: 9px;
+          width: 100%;
+          text-align: left;
+          padding: 11px 10px;
+          border: none;
+          border-radius: 9px;
+          background: transparent;
+          color: var(--text);
+          font-family: 'Inter', sans-serif;
+          font-size: 15px;
+          cursor: pointer;
+        }
+        .set-kind-dot {
+          width: 7px;
+          height: 7px;
+          border-radius: 50%;
+          flex-shrink: 0;
+          background: var(--text-faint);
+        }
+        .set-kind-option.is-warmup .set-kind-dot { background: var(--brass); }
+        .set-kind-option.is-dropset .set-kind-dot { background: var(--accent); }
         .entry-card {
           transition: box-shadow 160ms ease;
         }
@@ -2834,29 +3439,8 @@ export default function TrainingApp() {
              pan would fight the gesture. */
           touch-action: pan-y;
         }
-        .warmup-toggle {
-          width: 22px;
-          height: 22px;
-          border-radius: 6px;
-          border: 1.5px solid var(--border);
-          background: var(--surface-alt);
-          color: var(--text-dim);
-          display: flex;
-          align-items: center;
-          justify-content: center;
-          cursor: pointer;
-          font-family: 'JetBrains Mono', monospace;
-          font-size: 11px;
-          font-weight: 600;
-          flex-shrink: 0;
-        }
-        .warmup-toggle.active {
-          background: var(--brass);
-          border-color: var(--brass);
-          color: var(--bg);
-        }
         .set-row.is-warmup input,
-        .set-row.is-warmup .set-num {
+        .set-row.is-warmup .set-kind {
           opacity: 0.6;
         }
         .program-switcher {
@@ -2868,17 +3452,16 @@ export default function TrainingApp() {
           align-items: center;
           gap: 8px;
           max-width: 100%;
-          background: var(--surface);
-          border: 1px solid var(--border);
-          border-radius: 12px;
-          padding: 9px 12px;
+          background: transparent;
+          border: none;
+          border-radius: 0;
+          padding: 2px 0;
           color: var(--text);
           cursor: pointer;
-          font-family: 'Oswald', sans-serif;
-          font-weight: 600;
-          font-size: 16px;
-          letter-spacing: 0.3px;
-          text-transform: uppercase;
+          font-family: 'Newsreader', Georgia, serif;
+          font-weight: 500;
+          font-size: 30px;
+          letter-spacing: -0.5px;
         }
         .program-trigger-label {
           overflow: hidden;
@@ -2891,7 +3474,7 @@ export default function TrainingApp() {
           left: 0;
           min-width: 240px;
           max-width: calc(100vw - 32px);
-          background: var(--surface);
+          background: var(--elevated);
           border: 1px solid var(--border);
           border-radius: 12px;
           box-shadow: 0 8px 26px rgba(0,0,0,calc(var(--shadow-strength) * 2.2));
@@ -2937,11 +3520,10 @@ export default function TrainingApp() {
           white-space: nowrap;
         }
         .folder-header-title {
-          font-family: 'Oswald', sans-serif;
-          font-weight: 600;
-          font-size: 15px;
-          letter-spacing: 0.3px;
-          text-transform: uppercase;
+          font-family: 'Newsreader', Georgia, serif;
+          font-weight: 500;
+          font-size: 19px;
+          letter-spacing: -0.1px;
           flex: 1 1 auto;
           min-width: 0;
           overflow: hidden;
@@ -2956,7 +3538,8 @@ export default function TrainingApp() {
           text-overflow: ellipsis;
         }
         .muscle-week-value {
-          font-family: 'Oswald', sans-serif;
+          font-family: 'Inter', sans-serif;
+          font-variant-numeric: tabular-nums;
           font-size: 13px;
           text-align: right;
           color: var(--text);
@@ -3028,7 +3611,7 @@ export default function TrainingApp() {
           overflow: visible;
         }
         .sparkline polyline {
-          stroke: var(--accent);
+          stroke: var(--text-dim);
         }
         .sparkline-empty line {
           stroke: var(--border);
@@ -3036,7 +3619,8 @@ export default function TrainingApp() {
           stroke-dasharray: 2 2;
         }
         .load-change {
-          font-family: 'Oswald', sans-serif;
+          font-family: 'Inter', sans-serif;
+          font-variant-numeric: tabular-nums;
           font-size: 12.5px;
           text-align: right;
           white-space: nowrap;
@@ -3114,7 +3698,7 @@ export default function TrainingApp() {
           width: 100%;
           max-height: 100%;
           animation: modal-rise 200ms ease-out both;
-          background: var(--surface);
+          background: var(--elevated);
           border: 1px solid var(--border);
           border-radius: 16px;
           box-shadow: 0 18px 48px rgba(0,0,0,0.45);
@@ -3131,9 +3715,10 @@ export default function TrainingApp() {
           flex-shrink: 0;
         }
         .modal-title {
-          font-family: 'Oswald', sans-serif;
-          font-weight: 600;
-          font-size: 16px;
+          font-family: 'Newsreader', Georgia, serif;
+          font-weight: 500;
+          font-size: 21px;
+          letter-spacing: -0.2px;
           color: var(--text);
         }
         .modal-body {
@@ -3155,18 +3740,19 @@ export default function TrainingApp() {
           gap: 10px;
           width: 100%;
           text-align: left;
-          padding: 11px 12px;
+          padding: 12px 12px;
           border-radius: 10px;
-          border: 1px solid var(--border);
-          background: var(--surface-alt);
+          border: none;
+          background: var(--fill);
           color: var(--text);
           font-family: 'Inter', sans-serif;
-          font-size: 14px;
+          font-size: 15px;
           cursor: pointer;
         }
         .modal-option.active {
-          border-color: var(--accent);
-          color: var(--accent);
+          background: var(--accent);
+          color: #fff;
+          font-weight: 500;
         }
         .move-overlay {
           /* Lag vorher absolut im scrollenden Inhaltsbereich und wurde von
@@ -3189,8 +3775,9 @@ export default function TrainingApp() {
         .ex-name-clickable {
           cursor: pointer;
           text-decoration: underline;
-          text-decoration-color: var(--border);
-          text-underline-offset: 3px;
+          text-decoration-color: color-mix(in srgb, var(--text-faint) 45%, transparent);
+          text-decoration-thickness: 1px;
+          text-underline-offset: 4px;
         }
         .quick-toggle-row {
           display: flex;
@@ -3222,7 +3809,7 @@ export default function TrainingApp() {
              meant the tabs sat just above the navigation bar and everything
              below had to be scrolled into view first. */
           min-height: min(72dvh, calc(100dvh - env(safe-area-inset-top) - 24px));
-          background: var(--surface);
+          background: var(--elevated);
           border-top: 1px solid var(--border);
           border-radius: 18px 18px 0 0;
           padding: 18px 16px calc(22px + env(safe-area-inset-bottom));
@@ -3256,15 +3843,16 @@ export default function TrainingApp() {
           overflow-y: auto;
           -webkit-overflow-scrolling: touch;
           overscroll-behavior: contain;
-          background: var(--surface);
+          background: var(--elevated);
           border-top: 1px solid var(--border);
           border-radius: 18px 18px 0 0;
           padding: 18px 16px calc(22px + env(safe-area-inset-bottom));
         }
         .move-sheet-title {
-          font-family: 'Oswald', sans-serif;
-          font-weight: 600;
-          font-size: 16px;
+          font-family: 'Newsreader', Georgia, serif;
+          font-weight: 500;
+          font-size: 21px;
+          letter-spacing: -0.2px;
           margin-bottom: 12px;
         }
         .move-sheet-options {
@@ -3278,20 +3866,21 @@ export default function TrainingApp() {
           display: flex;
           align-items: center;
           gap: 10px;
-          background: var(--surface-alt);
-          border: 1px solid var(--border);
+          background: var(--fill);
+          border: none;
           color: var(--text);
           border-radius: 10px;
-          padding: 11px 14px;
+          padding: 12px 14px;
           font-family: 'Inter', sans-serif;
-          font-size: 14px;
-          font-weight: 500;
+          font-size: 15px;
+          font-weight: 400;
           cursor: pointer;
           text-align: left;
         }
         .move-option.active {
-          border-color: var(--accent);
-          background: rgba(193,101,46,0.14);
+          background: var(--accent);
+          color: #fff;
+          font-weight: 500;
         }
         .color-swatch {
           width: 24px;
@@ -3319,9 +3908,9 @@ export default function TrainingApp() {
         .note-toggle {
           width: 26px;
           height: 26px;
-          border-radius: 8px;
-          border: 1px solid var(--border);
-          background: var(--surface-alt);
+          border-radius: 999px;
+          border: none;
+          background: var(--fill);
           color: var(--text-dim);
           display: flex;
           align-items: center;
@@ -3344,10 +3933,11 @@ export default function TrainingApp() {
           gap: 5px;
           padding: 5px 10px;
           border-radius: 999px;
-          font-family: 'JetBrains Mono', monospace;
-          font-size: 12px;
+          font-family: 'Inter', sans-serif;
+          font-variant-numeric: tabular-nums;
+          font-size: 12.5px;
           color: var(--text-dim);
-          background: var(--surface);
+          background: var(--surface-alt);
           border: 1px solid var(--border);
           /* Deliberately understated: small, muted and slightly see-through
              so it reads as a status line, not as a notification. */
@@ -3360,10 +3950,11 @@ export default function TrainingApp() {
           display: flex;
           align-items: center;
           gap: 5px;
-          font-family: 'JetBrains Mono', monospace;
+          font-family: 'Inter', sans-serif;
+          font-variant-numeric: tabular-nums;
           font-size: 12px;
           color: var(--text-dim);
-          background: var(--surface-alt);
+          background: var(--fill);
           border-radius: 8px;
           padding: 5px 9px;
           height: fit-content;
@@ -3380,7 +3971,7 @@ export default function TrainingApp() {
           right: 0;
           width: 260px;
           max-width: calc(100vw - 48px);
-          background: var(--surface);
+          background: var(--elevated);
           border: 1px solid var(--border);
           border-radius: 12px;
           box-shadow: 0 8px 26px rgba(0,0,0,calc(var(--shadow-strength) * 2.2));
@@ -3414,17 +4005,19 @@ export default function TrainingApp() {
           padding: 2px;
         }
         .set-num {
-          font-family: 'JetBrains Mono', monospace;
-          font-size: 12px;
-          color: var(--text-dim);
+          font-family: 'Inter', sans-serif;
+          font-variant-numeric: tabular-nums;
+          font-size: 13px;
+          color: var(--text-faint);
           text-align: center;
         }
         .set-check {
-          width: 22px;
-          height: 22px;
-          border-radius: 6px;
-          border: 1.5px solid var(--border);
-          background: var(--surface-alt);
+          width: 24px;
+          height: 24px;
+          justify-self: end;
+          border-radius: 999px;
+          border: 1.5px solid var(--border-strong);
+          background: transparent;
           display: flex;
           align-items: center;
           justify-content: center;
@@ -3440,12 +4033,13 @@ export default function TrainingApp() {
         }
 
         .last-performance {
-          font-size: 12px;
+          font-size: 12.5px;
           color: var(--text-dim);
-          font-family: 'JetBrains Mono', monospace;
-          background: var(--surface-alt);
+          font-family: 'Inter', sans-serif;
+          font-variant-numeric: tabular-nums;
+          background: var(--fill);
           border-radius: 8px;
-          padding: 6px 10px;
+          padding: 7px 10px;
           margin-top: 2px;
         }
         .superset-link-toggle {
@@ -3472,26 +4066,20 @@ export default function TrainingApp() {
           display: flex;
           align-items: center;
           gap: 5px;
-          font-family: 'JetBrains Mono', monospace;
+          font-family: 'Inter', sans-serif;
           font-size: 10.5px;
           text-transform: uppercase;
-          letter-spacing: 0.4px;
-          color: var(--accent);
-          margin: 10px 2px 4px;
+          letter-spacing: 0.1em;
+          color: var(--text-faint);
+          margin: 10px 0 4px;
         }
         .superset-card {
-          border-color: var(--accent);
           position: relative;
+          border-left: 2px solid var(--accent);
+          padding-left: 12px;
         }
         .superset-card-linked {
-          margin-bottom: 2px;
-          border-bottom-left-radius: 4px;
-          border-bottom-right-radius: 4px;
-          border-bottom-width: 0;
-        }
-        .superset-card + .superset-card {
-          border-top-left-radius: 4px;
-          border-top-right-radius: 4px;
+          border-bottom-color: transparent;
         }
         /* Collapsed exercise cards in the plan builder: a whole workout
            fits on one screen instead of scrolling through five tall cards. */
@@ -3618,18 +4206,25 @@ export default function TrainingApp() {
         .volume-change-badge {
           margin-left: 4px;
           flex-shrink: 0;
-          font-family: 'Oswald', sans-serif;
+          font-family: 'Inter', sans-serif;
+          font-variant-numeric: tabular-nums;
           font-size: 12px;
           font-weight: 600;
           padding: 2px 7px;
           border-radius: 999px;
-          background: var(--surface-alt);
+          background: var(--fill);
         }
         .volume-change-up { color: var(--success); }
         .volume-change-down { color: var(--danger); }
         .volume-change-neutral { color: var(--text-dim); }
 
+        /* Bleibt beim Scrollen oben stehen, wie der manuelle Pausen-Timer -
+           sonst verschwindet die Automatik samt Restzeit und Pause-Knopf
+           sobald man an ihr vorbeiscrollt. */
         .auto-run-bar {
+          position: sticky;
+          top: 0;
+          z-index: 5;
           background: var(--surface);
           border: 1px solid var(--accent);
           border-radius: 14px;
@@ -3638,18 +4233,20 @@ export default function TrainingApp() {
           text-align: center;
         }
         .auto-run-phase {
-          font-family: 'Oswald', sans-serif;
-          font-size: 12px;
-          letter-spacing: 0.08em;
+          font-family: 'Inter', sans-serif;
+          font-size: 11px;
+          letter-spacing: 0.12em;
           text-transform: uppercase;
-          color: var(--text-dim);
+          color: var(--text-faint);
         }
         .auto-run-time {
-          font-family: 'Oswald', sans-serif;
-          font-size: 44px;
-          font-weight: 600;
-          line-height: 1.05;
-          color: var(--accent);
+          font-family: 'Newsreader', Georgia, serif;
+          font-variant-numeric: tabular-nums;
+          font-size: 50px;
+          font-weight: 400;
+          line-height: 1;
+          letter-spacing: -1.4px;
+          color: var(--text);
         }
         .auto-run-what {
           font-size: 12.5px;
@@ -3664,33 +4261,45 @@ export default function TrainingApp() {
           align-items: center;
           justify-content: space-between;
           gap: 10px;
-          background: var(--accent);
-          color: white;
-          border-radius: 14px;
-          padding: 12px 14px;
+          background: var(--bg);
+          color: var(--text);
+          border-top: 1px solid var(--border-strong);
+          border-bottom: 1px solid var(--border);
+          border-radius: 0;
+          padding: 12px 0;
           margin-bottom: 12px;
         }
         .rest-timer .rest-label {
           display: flex;
           align-items: center;
           gap: 8px;
-          font-family: 'JetBrains Mono', monospace;
-          font-size: 22px;
-          font-weight: 600;
+          font-family: 'Newsreader', Georgia, serif;
+          font-variant-numeric: tabular-nums;
+          font-size: 26px;
+          font-weight: 400;
         }
         .rest-timer .rest-actions {
           display: flex;
           gap: 6px;
         }
+        /* Dieselbe Klasse steckt auch in der Automatik-Leiste, dort fehlte
+           bisher die Zeilen-Anordnung - die Knoepfe stapelten sich einzeln
+           untereinander. Jetzt bei Bedarf zwei Zeilen statt vier. */
+        .auto-run-bar .rest-actions {
+          display: flex;
+          flex-wrap: wrap;
+          justify-content: center;
+          gap: 6px;
+        }
         .rest-btn {
-          background: rgba(255,255,255,0.18);
+          background: var(--fill);
           border: none;
-          color: white;
+          color: var(--accent);
           border-radius: 8px;
-          padding: 6px 9px;
-          font-size: 12px;
+          padding: 7px 10px;
+          font-size: 13px;
           font-family: 'Inter', sans-serif;
-          font-weight: 600;
+          font-weight: 500;
           display: flex;
           align-items: center;
           gap: 4px;
@@ -3704,11 +4313,12 @@ export default function TrainingApp() {
    heraus ausgeloest wurde. Fixed statt absolute, damit sie nicht vom
    scrollenden Inhaltsbereich beschnitten wird. */
         .confirm-overlay{position:fixed;top:0;right:0;bottom:0;left:0;background:rgba(0,0,0,.55);display:flex;align-items:center;justify-content:center;z-index:400;padding:calc(24px + env(safe-area-inset-top)) 24px calc(24px + env(safe-area-inset-bottom))}
-        .confirm-card{background:var(--surface);border:1px solid var(--border);border-radius:14px;padding:18px;max-width:320px;width:100%}
+        .confirm-card{background:var(--elevated);border:1px solid var(--border);border-radius:14px;padding:18px;max-width:320px;width:100%}
         .confirm-card p{margin:0 0 16px;font-size:14px;line-height:1.5}
         .confirm-actions{display:flex;gap:8px}
+        .confirm-actions .btn{background:transparent}
         .toast-snackbar{position:fixed;left:50%;bottom:82px;transform:translateX(-50%);z-index:35;background:var(--surface-alt);border:1px solid var(--border);border-radius:12px;padding:10px 14px;box-shadow:0 8px 30px rgba(0,0,0,.3);font-size:13px;max-width:90%;text-align:center}
-        @media (max-width:600px){.content{padding-left:10px!important;padding-right:10px!important}.card{padding:12px!important}.set-row{grid-template-columns:24px 28px 28px 1fr 1fr!important;gap:5px!important}.set-row input{min-width:0}.meta-grid{grid-template-columns:1fr 1fr}.stat-value{font-size:23px!important}.fab-nav{left:8px!important;right:8px!important;bottom:8px!important}.nav-btn{min-width:0!important}.plan-title{font-size:17px}.btn{min-height:40px}.btn-icon{min-width:36px;min-height:36px}}
+        @media (max-width:600px){.content{padding-left:18px!important;padding-right:18px!important}.card{padding:14px 0!important}.set-row{grid-template-columns:36px 1fr 1fr 30px!important;gap:6px!important}.set-row.set-row-noweight{grid-template-columns:36px 1fr 30px!important}.set-row input{min-width:0}.meta-grid{grid-template-columns:1fr 1fr}.stat-value{font-size:28px}.bottom-dock{left:0!important;right:0!important;bottom:0!important}.nav-btn{min-width:0!important}.plan-title{font-size:19px}.btn{min-height:44px}.btn-icon{min-width:36px;min-height:36px}}
         @media (prefers-reduced-motion:reduce){*{scroll-behavior:auto!important;transition:none!important;animation:none!important}}
 
         .cal-header {
@@ -3718,11 +4328,11 @@ export default function TrainingApp() {
           margin-bottom: 10px;
         }
         .cal-month-label {
-          font-family: 'Oswald', sans-serif;
-          font-weight: 600;
-          font-size: 16px;
+          font-family: 'Newsreader', Georgia, serif;
+          font-weight: 500;
+          font-size: 26px;
+          letter-spacing: -0.4px;
           text-transform: capitalize;
-          letter-spacing: 0.3px;
           cursor: pointer;
         }
         .cal-category-row {
@@ -3756,11 +4366,12 @@ export default function TrainingApp() {
           gap: 3px;
         }
         .cal-day {
-          background: var(--surface);
-          border: 1px solid var(--border);
-          border-radius: 8px;
-          padding: 3px 3px 4px;
-          min-height: 40px;
+          background: transparent;
+          border: none;
+          border-top: 1px solid var(--border);
+          border-radius: 0;
+          padding: 4px 2px 6px;
+          min-height: 46px;
           cursor: pointer;
           display: flex;
           flex-direction: column;
@@ -3778,15 +4389,15 @@ export default function TrainingApp() {
           opacity: 0.35;
         }
         .cal-day.is-today {
-          border-color: var(--accent);
+          border-top-color: var(--accent);
         }
         .cal-day.is-selected {
-          background: var(--surface-alt);
-          box-shadow: inset 0 0 0 1px var(--accent);
+          background: var(--fill);
         }
         .cal-day-num {
-          font-family: 'JetBrains Mono', monospace;
-          font-size: 10.5px;
+          font-family: 'Inter', sans-serif;
+          font-variant-numeric: tabular-nums;
+          font-size: 11px;
           color: var(--text-dim);
           padding-left: 1px;
         }
@@ -3848,17 +4459,24 @@ export default function TrainingApp() {
           padding: 10px 4px 4px;
         }
         .cal-detail-item {
-          background: var(--surface-alt);
-          border: 1px solid var(--border);
-          border-radius: 10px;
-          padding: 10px 12px;
+          background: transparent;
+          border: none;
+          border-bottom: 1px solid var(--border);
+          border-radius: 0;
+          padding: 12px 0;
         }
         /* Anything already done gets a green left edge, so a day reads as
            "what happened" versus "what is still planned" without having to
            compare the individual rows. The class was used before this rule
            existed and simply did nothing. */
         .cal-detail-done {
-          border-left: 3px solid var(--success);
+          border-left: 2px solid var(--success);
+          padding-left: 10px;
+        }
+        /* Der letzte Eintrag des Tages braucht keine eigene Abschlusslinie -
+           die des umgebenden Abschnitts steht direkt darunter. */
+        .cal-detail-item:last-child {
+          border-bottom: none;
         }
 
         /* --- Atemübung: geführte Sitzung ---------------------------------
@@ -3880,8 +4498,10 @@ export default function TrainingApp() {
           gap: 10px;
         }
         .breathing-title {
-          font-family: 'Oswald', sans-serif;
-          font-size: 18px;
+          font-family: 'Newsreader', Georgia, serif;
+          font-weight: 500;
+          font-size: 22px;
+          letter-spacing: -0.2px;
           color: var(--text);
         }
         .breathing-round {
@@ -3944,14 +4564,17 @@ export default function TrainingApp() {
         }
         .breathing-phase {
           text-align: center;
-          font-family: 'Oswald', sans-serif;
-          font-size: 22px;
+          font-family: 'Newsreader', Georgia, serif;
+          font-weight: 500;
+          font-size: 25px;
           color: var(--text);
         }
         .breathing-time {
           text-align: center;
-          font-family: 'JetBrains Mono', monospace;
-          font-size: 40px;
+          font-family: 'Newsreader', Georgia, serif;
+          font-variant-numeric: tabular-nums;
+          font-size: 48px;
+          letter-spacing: -1px;
           color: ${BREATHING_COLOR};
           margin: 2px 0 18px;
         }
@@ -3966,13 +4589,255 @@ export default function TrainingApp() {
         }
       `}</style>
 
-      <div className="content" onScroll={handleContentScroll}>
+      <div
+        className={`content ${session && tab !== "log" ? "with-session-bar" : ""}`}
+        onScroll={handleContentScroll}
+      >
+        {/* Die Trainingsansicht bleibt montiert, solange ein Training laeuft -
+            auch wenn man zwischendurch in eine andere Ansicht wechselt. Die
+            Automatik (Timer, Toene, automatisches Abhaken) lebt in dieser
+            Komponente; wuerde sie beim Tabwechsel abgebaut, waere ein
+            kurzer Blick in die Statistik das Ende des laufenden Zirkels.
+            Deshalb steht sie ausserhalb des Panels, das beim Tabwechsel
+            per key neu aufgebaut wird. */}
+        {!loading && (session || tab === "log") && (
+          <div className="tab-panel" hidden={tab !== "log"}>
+            <LogView
+              session={session}
+              plans={allPlans}
+              logs={logs}
+              exBy={allExBy}
+              exercises={allExercises}
+              exerciseNotes={exerciseNotes}
+              exerciseSubgroupOverrides={exerciseSubgroupOverrides}
+              onSetExerciseSubgroup={handleSetExerciseSubgroup}
+              onSetExerciseSubgroups={handleSetExerciseSubgroups}
+              exerciseEquipmentOverrides={exerciseEquipmentOverrides}
+              onSetExerciseEquipment={handleSetExerciseEquipment}
+              timeBasedExercises={timeBasedExercises}
+              gymIndependentExercises={gymIndependentExercises}
+              onUpdateExerciseNote={handleUpdateExerciseNote}
+              onRenameExercise={handleRenameExercise}
+              onToggleTimeBased={handleToggleTimeBased}
+              onToggleGymIndependent={handleToggleGymIndependent}
+              onStartFromPlan={(plan) => requestStart(plan)}
+              onUpdateSession={updateSession}
+              onRequestConfirm={askConfirm}
+              gyms={gyms}
+              onFinish={async () => {
+                if (!session) return;
+                // A workout opened for editing keeps its recorded duration -
+                // otherwise fixing one number would rewrite how long it took.
+                const durationMinutes =
+                  session.frozenDurationMinutes != null
+                    ? session.frozenDurationMinutes
+                    : session.startedAt
+                    ? Math.max(1, Math.round((Date.now() - new Date(session.startedAt).getTime()) / 60000))
+                    : null;
+                const cleaned = {
+                  ...session,
+                  // Sets now start pre-filled from the plan's targets, so an
+                  // exercise the user never actually touched would otherwise
+                  // still have "sets" and slip into the saved log. Only keep
+                  // entries where at least one set was actually checked off.
+                  // Also normalize every numeric field here in case a field
+                  // was still focused (never blurred) when the user tapped
+                  // "Training beenden".
+                  entries: session.entries
+                    .filter((e) => e.sets.some((s) => s.done))
+                    .map((e) => ({
+                      ...e,
+                      // Record that this exercise ran on time. The automatic
+                      // mode is a property of the session, which is gone once
+                      // the workout is saved - without this flag the history,
+                      // records and charts would later read it as a weight
+                      // exercise with 0 kg.
+                      targetUseTime:
+                        (session.autoRun && e.autoRun !== false) || !!e.targetUseTime,
+                      // toNum, not Number: weights are held as typed ("62,5"),
+                      // and Number("62,5") is NaN - which would silently store
+                      // the set as 0 kg.
+                      sets: e.sets.map((s) => ({
+                        ...s,
+                        reps: Math.max(0, toNum(s.reps)),
+                        weight: Math.max(0, toNum(s.weight)),
+                        duration: Math.max(0, toNum(s.duration)),
+                      })),
+                    })),
+                  durationMinutes,
+                };
+                if (cleaned.entries.length > 0) {
+                  // Work out the summary against the logs as they were BEFORE
+                  // this workout is added, otherwise every set would compare
+                  // against itself and nothing would ever count as a record.
+                  let totalVolume = 0;
+                  let totalSeconds = 0;
+                  let doneSets = 0;
+                  const records = [];
+                  cleaned.entries.forEach((entry) => {
+                    // Same rule the workout screen uses. Checking only the
+                    // global setting missed every exercise that ran on time
+                    // because of the automatic mode - so no record was ever
+                    // recognised in a HIT workout.
+                    const isTimeBased =
+                      (session.autoRun && entry.autoRun !== false) ||
+                      isTimeBasedInLogs(logs, entry.exerciseId, timeBasedExercises) ||
+                      !!entry.targetUseTime;
+                    const best = getExerciseHistory(
+                      logs, entry.exerciseId, cleaned.id, isTimeBased,
+                      effectiveGymId(entry.exerciseId, cleaned.gymId, gymIndependentExercises)
+                    );
+                    let bestOfEntry = null;
+                    entry.sets.forEach((set) => {
+                      if (!set.done || set.warmup) return;
+                      doneSets += 1;
+                      if (isTimeBased) totalSeconds += toNum(set.duration);
+                      else totalVolume += toNum(set.weight) * toNum(set.reps);
+                      if (isNewPR(set, best, isTimeBased)) {
+                        const label = isTimeBased
+                          ? `${toNum(set.duration)} Sek.`
+                          : `${toNum(set.reps)} × ${fmtDecimal(set.weight)} kg`;
+                        bestOfEntry = label;
+                      }
+                    });
+                    if (bestOfEntry) {
+                      records.push({
+                        name: allExBy[entry.exerciseId]?.name || "Übung",
+                        label: bestOfEntry,
+                      });
+                    }
+                  });
+                  setFinishSummary({
+                    logId: cleaned.id,
+                    feeling: null,
+                    planName: cleaned.planName,
+                    durationMinutes,
+                    totalVolume,
+                    totalSeconds,
+                    doneSets,
+                    exercises: cleaned.entries.length,
+                    gymName: gyms.find((g) => g.id === cleaned.gymId)?.name || null,
+                    records,
+                  });
+                  await persistLogs([...logs, cleaned]);
+                }
+                // If this workout was started from a calendar entry, link the
+                // finished log back to it so the calendar can show results
+                // instead of a "start workout" prompt from now on. If none
+                // exists for today (started directly, never planned), one is
+                // added instead - already marked done, so the calendar shows
+                // what was actually trained instead of staying empty.
+                if (cleaned.entries.length > 0) {
+                  // Either the entry the workout was started from, or - if it
+                  // was started from the plans page - an open entry for the
+                  // same workout on the same day. Without this the calendar
+                  // would show the plan as still open next to the finished
+                  // workout, i.e. the same session twice.
+                  const dayKey = toDateKey(new Date(cleaned.date));
+                  const match =
+                    // Ein bereits verknuepfter Eintrag zuerst: wird ein
+                    // gespeichertes Training noch einmal bearbeitet, gibt es
+                    // ihn schon. Ohne diese Zeile faenden die Suchen darunter
+                    // nichts (die letzte verlangt !ce.logId) und jedes
+                    // Bearbeiten legte den Tag ein weiteres Mal an.
+                    calendarEntries.find((ce) => ce.logId === cleaned.id) ||
+                    (session.calendarEntryId
+                      ? calendarEntries.find((ce) => ce.id === session.calendarEntryId)
+                      : null) ||
+                    calendarEntries.find(
+                      (ce) =>
+                        ce.type === "workout" &&
+                        !ce.logId &&
+                        ce.date === dayKey &&
+                        ce.planId === cleaned.planId
+                    );
+                  if (match) {
+                    await persistCalendarEntries(
+                      calendarEntries.map((ce) =>
+                        // Datum mitziehen: wird ein Training an einem
+                        // anderen Tag bearbeitet, gehoert der Eintrag dorthin.
+                        ce.id === match.id ? { ...ce, date: dayKey, logId: cleaned.id } : ce
+                      )
+                    );
+                  } else {
+                    await persistCalendarEntries([
+                      ...calendarEntries,
+                      { id: uid(), date: dayKey, type: "workout", planId: cleaned.planId ?? null, logId: cleaned.id },
+                    ]);
+                  }
+                }
+                // Targets always track what was actually achieved last time,
+                // so the plan auto-adjusts to real progress instead of
+                // needing constant manual upkeep. For every exercise that
+                // belongs to the plan this session came from, take the last
+                // completed working set's numbers and, if they differ from
+                // the plan's current target, update the plan.
+                if (session.planId) {
+                  const sourcePlan = plans.find((p) => p.id === session.planId);
+                  if (sourcePlan) {
+                    let planChanged = false;
+                    const nextItems = (Array.isArray(sourcePlan.items) ? sourcePlan.items : []).map((item) => {
+                      // Ueber die Plan-Eintrags-ID, nicht ueber die Uebung:
+                      // steht dieselbe Uebung zweimal im Plan, bekaeme sonst
+                      // beide Male der erste Platz seine Zahlen.
+                      const entry =
+                        cleaned.entries.find((e) => item.id && e.planItemId === item.id) ||
+                        cleaned.entries.find((e) => !e.planItemId && e.exerciseId === item.exerciseId);
+                      if (!entry) return item;
+                      const workingSets = entry.sets.filter((s) => s.done && !s.warmup);
+                      const lastSet = workingSets[workingSets.length - 1];
+                      if (!lastSet) return item;
+                      const achievedReps = Math.round(Number(lastSet.reps) || 0);
+                      const achievedWeight = Number(lastSet.weight) || 0;
+                      const achievedDuration = Math.round(Number(lastSet.duration) || 0);
+                      const isTime = !!item.useTime;
+                      const changed = isTime
+                        ? achievedDuration > 0 && achievedDuration !== item.duration
+                        : (achievedReps > 0 && achievedReps !== item.reps) ||
+                          (achievedWeight > 0 && achievedWeight !== item.weight);
+                      if (!changed) return item;
+                      planChanged = true;
+                      return isTime
+                        ? { ...item, duration: achievedDuration }
+                        : { ...item, reps: achievedReps, weight: achievedWeight };
+                    });
+                    if (planChanged) {
+                      await persistPlans(
+                        plans.map((p) => (p.id === sourcePlan.id ? { ...p, items: nextItems } : p))
+                      );
+                    }
+                  }
+                }
+                await clearActiveSession();
+              }}
+              onDiscard={() => askConfirm("Aktives Training wirklich verwerfen? Alle nicht gespeicherten Sätze gehen verloren.", clearActiveSession)}
+              restEndsAt={restEndsAt}
+              onSetRestEndsAt={updateRestEndsAt}
+              onAddCustom={handleAddCustomExercise}
+            />
+          </div>
+        )}
         <div className="tab-panel" key={loading ? "loading" : tab}>
         {loading ? (
           <div className="empty-state">
             <Loader2 className="animate-spin" size={22} />
             <p>Lade deine Daten…</p>
           </div>
+        ) : tab === "dashboard" ? (
+          <DashboardView
+            plans={allPlans}
+            logs={logs}
+            exBy={allExBy}
+            calendarEntries={calendarEntries}
+            breathingExercises={breathingExercises}
+            breathingLogs={breathingLogs}
+            exerciseSubgroupOverrides={exerciseSubgroupOverrides}
+            timeBasedExercises={timeBasedExercises}
+            gymIndependentExercises={gymIndependentExercises}
+            onStartWorkout={(plan, entryId) => startScheduledWorkout(plan, entryId)}
+            onStartBreathing={(exercise, entryId) => startBreathingSession(exercise, entryId)}
+            onOpenProgress={() => setTab("progress")}
+          />
         ) : tab === "calendar" ? (
           <CalendarView
             onOpenLog={(log) => { setTab("progress"); setHistoryFocusLogId(log.id); }}
@@ -4002,6 +4867,7 @@ export default function TrainingApp() {
             exerciseNotes={exerciseNotes}
             exerciseSubgroupOverrides={exerciseSubgroupOverrides}
             onSetExerciseSubgroup={handleSetExerciseSubgroup}
+            onSetExerciseSubgroups={handleSetExerciseSubgroups}
             exerciseEquipmentOverrides={exerciseEquipmentOverrides}
             onSetExerciseEquipment={handleSetExerciseEquipment}
             onAddCustom={handleAddCustomExercise}
@@ -4029,6 +4895,7 @@ export default function TrainingApp() {
               exerciseNotes={exerciseNotes}
               exerciseSubgroupOverrides={exerciseSubgroupOverrides}
               onSetExerciseSubgroup={handleSetExerciseSubgroup}
+              onSetExerciseSubgroups={handleSetExerciseSubgroups}
               exerciseEquipmentOverrides={exerciseEquipmentOverrides}
               onSetExerciseEquipment={handleSetExerciseEquipment}
               onAddCustom={handleAddCustomExercise}
@@ -4131,193 +4998,8 @@ export default function TrainingApp() {
             />
           )
         ) : tab === "log" ? (
-          <LogView
-            session={session}
-            plans={allPlans}
-            logs={logs}
-            exBy={allExBy}
-            exercises={allExercises}
-            exerciseNotes={exerciseNotes}
-            exerciseSubgroupOverrides={exerciseSubgroupOverrides}
-            onSetExerciseSubgroup={handleSetExerciseSubgroup}
-            exerciseEquipmentOverrides={exerciseEquipmentOverrides}
-            onSetExerciseEquipment={handleSetExerciseEquipment}
-            timeBasedExercises={timeBasedExercises}
-            gymIndependentExercises={gymIndependentExercises}
-            onUpdateExerciseNote={handleUpdateExerciseNote}
-            onRenameExercise={handleRenameExercise}
-            onToggleTimeBased={handleToggleTimeBased}
-            onToggleGymIndependent={handleToggleGymIndependent}
-            onStartFromPlan={(plan) => requestStart(plan)}
-            onUpdateSession={updateSession}
-            onRequestConfirm={askConfirm}
-            gyms={gyms}
-            onFinish={async () => {
-              if (!session) return;
-              // A workout opened for editing keeps its recorded duration -
-              // otherwise fixing one number would rewrite how long it took.
-              const durationMinutes =
-                session.frozenDurationMinutes != null
-                  ? session.frozenDurationMinutes
-                  : session.startedAt
-                  ? Math.max(1, Math.round((Date.now() - new Date(session.startedAt).getTime()) / 60000))
-                  : null;
-              const cleaned = {
-                ...session,
-                // Sets now start pre-filled from the plan's targets, so an
-                // exercise the user never actually touched would otherwise
-                // still have "sets" and slip into the saved log. Only keep
-                // entries where at least one set was actually checked off.
-                // Also normalize every numeric field here in case a field
-                // was still focused (never blurred) when the user tapped
-                // "Training beenden".
-                entries: session.entries
-                  .filter((e) => e.sets.some((s) => s.done))
-                  .map((e) => ({
-                    ...e,
-                    // Record that this exercise ran on time. The automatic
-                    // mode is a property of the session, which is gone once
-                    // the workout is saved - without this flag the history,
-                    // records and charts would later read it as a weight
-                    // exercise with 0 kg.
-                    targetUseTime:
-                      (session.autoRun && e.autoRun !== false) || !!e.targetUseTime,
-                    // toNum, not Number: weights are held as typed ("62,5"),
-                    // and Number("62,5") is NaN - which would silently store
-                    // the set as 0 kg.
-                    sets: e.sets.map((s) => ({
-                      ...s,
-                      reps: Math.max(0, toNum(s.reps)),
-                      weight: Math.max(0, toNum(s.weight)),
-                      duration: Math.max(0, toNum(s.duration)),
-                    })),
-                  })),
-                durationMinutes,
-              };
-              if (cleaned.entries.length > 0) {
-                // Work out the summary against the logs as they were BEFORE
-                // this workout is added, otherwise every set would compare
-                // against itself and nothing would ever count as a record.
-                let totalVolume = 0;
-                let totalSeconds = 0;
-                let doneSets = 0;
-                const records = [];
-                cleaned.entries.forEach((entry) => {
-                  // Same rule the workout screen uses. Checking only the
-                  // global setting missed every exercise that ran on time
-                  // because of the automatic mode - so no record was ever
-                  // recognised in a HIT workout.
-                  const isTimeBased =
-                    (session.autoRun && entry.autoRun !== false) ||
-                    isTimeBasedInLogs(logs, entry.exerciseId, timeBasedExercises) ||
-                    !!entry.targetUseTime;
-                  const best = getExerciseHistory(
-                    logs, entry.exerciseId, cleaned.id, isTimeBased,
-                    effectiveGymId(entry.exerciseId, cleaned.gymId, gymIndependentExercises)
-                  );
-                  let bestOfEntry = null;
-                  entry.sets.forEach((set) => {
-                    if (!set.done || set.warmup) return;
-                    doneSets += 1;
-                    if (isTimeBased) totalSeconds += toNum(set.duration);
-                    else totalVolume += toNum(set.weight) * toNum(set.reps);
-                    if (isNewPR(set, best, isTimeBased)) {
-                      const label = isTimeBased
-                        ? `${toNum(set.duration)} Sek.`
-                        : `${toNum(set.reps)} × ${fmtDecimal(set.weight)} kg`;
-                      bestOfEntry = label;
-                    }
-                  });
-                  if (bestOfEntry) {
-                    records.push({
-                      name: allExBy[entry.exerciseId]?.name || "Übung",
-                      label: bestOfEntry,
-                    });
-                  }
-                });
-                setFinishSummary({
-                  planName: cleaned.planName,
-                  durationMinutes,
-                  totalVolume,
-                  totalSeconds,
-                  doneSets,
-                  exercises: cleaned.entries.length,
-                  gymName: gyms.find((g) => g.id === cleaned.gymId)?.name || null,
-                  records,
-                });
-                await persistLogs([...logs, cleaned]);
-              }
-              // If this workout was started from a calendar entry, link the
-              // finished log back to it so the calendar can show results
-              // instead of a "start workout" prompt from now on.
-              if (cleaned.entries.length > 0) {
-                // Either the entry the workout was started from, or - if it
-                // was started from the plans page - an open entry for the
-                // same workout on the same day. Without this the calendar
-                // would show the plan as still open next to the finished
-                // workout, i.e. the same session twice.
-                const dayKey = toDateKey(new Date(cleaned.date));
-                const match =
-                  calendarEntries.find((ce) => ce.id === session.calendarEntryId) ||
-                  calendarEntries.find(
-                    (ce) =>
-                      ce.type === "workout" &&
-                      !ce.logId &&
-                      ce.date === dayKey &&
-                      ce.planId === cleaned.planId
-                  );
-                if (match) {
-                  await persistCalendarEntries(
-                    calendarEntries.map((ce) =>
-                      ce.id === match.id ? { ...ce, logId: cleaned.id } : ce
-                    )
-                  );
-                }
-              }
-              // Targets always track what was actually achieved last time,
-              // so the plan auto-adjusts to real progress instead of
-              // needing constant manual upkeep. For every exercise that
-              // belongs to the plan this session came from, take the last
-              // completed working set's numbers and, if they differ from
-              // the plan's current target, update the plan.
-              if (session.planId) {
-                const sourcePlan = plans.find((p) => p.id === session.planId);
-                if (sourcePlan) {
-                  let planChanged = false;
-                  const nextItems = sourcePlan.items.map((item) => {
-                    const entry = cleaned.entries.find((e) => e.exerciseId === item.exerciseId);
-                    if (!entry) return item;
-                    const workingSets = entry.sets.filter((s) => s.done && !s.warmup);
-                    const lastSet = workingSets[workingSets.length - 1];
-                    if (!lastSet) return item;
-                    const achievedReps = Math.round(Number(lastSet.reps) || 0);
-                    const achievedWeight = Number(lastSet.weight) || 0;
-                    const achievedDuration = Math.round(Number(lastSet.duration) || 0);
-                    const isTime = !!item.useTime;
-                    const changed = isTime
-                      ? achievedDuration > 0 && achievedDuration !== item.duration
-                      : (achievedReps > 0 && achievedReps !== item.reps) ||
-                        (achievedWeight > 0 && achievedWeight !== item.weight);
-                    if (!changed) return item;
-                    planChanged = true;
-                    return isTime
-                      ? { ...item, duration: achievedDuration }
-                      : { ...item, reps: achievedReps, weight: achievedWeight };
-                  });
-                  if (planChanged) {
-                    await persistPlans(
-                      plans.map((p) => (p.id === sourcePlan.id ? { ...p, items: nextItems } : p))
-                    );
-                  }
-                }
-              }
-              await clearActiveSession();
-            }}
-            onDiscard={() => askConfirm("Aktives Training wirklich verwerfen? Alle nicht gespeicherten Sätze gehen verloren.", clearActiveSession)}
-            restEndsAt={restEndsAt}
-            onSetRestEndsAt={updateRestEndsAt}
-            onAddCustom={handleAddCustomExercise}
-          />
+          // Die Trainingsansicht wird oben gerendert und bleibt dort montiert.
+          null
         ) : (
           <ProgressView
             focusLogId={historyFocusLogId}
@@ -4412,6 +5094,21 @@ export default function TrainingApp() {
               </div>
             </div>
           )}
+
+          <div style={{ marginTop: 14, paddingTop: 12, borderTop: "1px solid var(--border)" }}>
+            <label className="field-label">Wie war das Training?</label>
+            <div className="chip-row chip-row-wrap" style={{ marginTop: 8, marginBottom: 0 }}>
+              {FEELING_OPTIONS.map(([value, label]) => (
+                <span
+                  key={value}
+                  className={`chip chip-sm ${finishSummary.feeling === value ? "active" : ""}`}
+                  onClick={() => setLogFeeling(finishSummary.logId, value)}
+                >
+                  {label}
+                </span>
+              ))}
+            </div>
+          </div>
 
           <button
             className="btn btn-primary btn-block btn-sm"
@@ -4727,48 +5424,383 @@ export default function TrainingApp() {
         </div>
       )}
 
-      <nav className={`fab-nav ${navHidden ? "nav-hidden" : ""}`}>
-        <button
-          className={`nav-btn ${tab === "calendar" ? "active" : ""}`}
-          onClick={() => setTab("calendar")}
-        >
-          <Calendar size={19} />
-          Kalender
-        </button>
-        <button
-          className={`nav-btn ${tab === "plans" ? "active" : ""}`}
-          onClick={() => {
-            setBuilding(false);
-            setTab("plans");
-          }}
-        >
-          <ClipboardList size={19} />
-          Pläne
-        </button>
-        <button
-          className={`nav-btn ${tab === "exercises" ? "active" : ""}`}
-          onClick={() => setTab("exercises")}
-        >
-          <Dumbbell size={19} />
-          Übungen
-        </button>
-        {session && (
-          <button
-            className={`nav-btn ${tab === "log" ? "active" : ""}`}
-            onClick={() => setTab("log")}
-          >
-            <Play size={19} />
-            Training
-          </button>
+      {/* Leiste und Navigation sitzen in einem gemeinsamen Dock: so
+          verschieben sie sich beim Ausblenden zusammen, statt getrennt
+          übereinander wegzurutschen. */}
+      <div className={`bottom-dock ${navHidden ? "nav-hidden" : ""}`}>
+        {session && tab !== "log" && (
+          <ActiveSessionBar
+            session={session}
+            restEndsAt={restEndsAt}
+            onOpen={() => setTab("log")}
+          />
         )}
-        <button
-          className={`nav-btn ${tab === "progress" ? "active" : ""}`}
-          onClick={() => setTab("progress")}
-        >
-          <TrendingUp size={19} />
-          Fortschritt
-        </button>
-      </nav>
+        <nav className="fab-nav">
+          <button
+            className={`nav-btn ${tab === "dashboard" ? "active" : ""}`}
+            onClick={() => setTab("dashboard")}
+          >
+            <Home size={19} />
+            Start
+          </button>
+          <button
+            className={`nav-btn ${tab === "calendar" ? "active" : ""}`}
+            onClick={() => setTab("calendar")}
+          >
+            <Calendar size={19} />
+            Kalender
+          </button>
+          <button
+            className={`nav-btn ${tab === "plans" ? "active" : ""}`}
+            onClick={() => {
+              setBuilding(false);
+              setTab("plans");
+            }}
+          >
+            <ClipboardList size={19} />
+            Pläne
+          </button>
+          <button
+            className={`nav-btn ${tab === "exercises" ? "active" : ""}`}
+            onClick={() => setTab("exercises")}
+          >
+            <Dumbbell size={19} />
+            Übungen
+          </button>
+          <button
+            className={`nav-btn ${tab === "progress" ? "active" : ""}`}
+            onClick={() => setTab("progress")}
+          >
+            <TrendingUp size={19} />
+            Fortschritt
+          </button>
+        </nav>
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Dashboard (Start)
+// ---------------------------------------------------------------------------
+
+// Schmale Leiste über der Navigation, solange ein Training läuft und man
+// gerade woanders ist. Ersetzt den früheren "Training"-Reiter als Rückweg -
+// und zeigt zusätzlich die laufende Satzpause, die vorher nur innerhalb der
+// Trainingsansicht sichtbar war. Eigene Komponente mit eigenem Sekundentakt,
+// damit nicht die ganze App im Sekundenrhythmus neu rendert.
+function ActiveSessionBar({ session, restEndsAt, onOpen }) {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const id = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(id);
+  }, []);
+  const restLeft = restEndsAt > now ? Math.round((restEndsAt - now) / 1000) : 0;
+  const startedAt = session?.startedAt ? new Date(session.startedAt).getTime() : null;
+  const elapsed = startedAt ? Math.max(0, Math.floor((now - startedAt) / 1000)) : 0;
+  const fmtClock = (s) => `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
+  return (
+    <button className="session-bar" onClick={onOpen}>
+      <span className="session-bar-main">
+        <Play size={14} />
+        <span className="session-bar-name">{session.planName || "Freies Training"}</span>
+      </span>
+      <span className={`session-bar-time ${restLeft > 0 ? "is-rest" : ""}`}>
+        {restLeft > 0 ? `Pause ${fmtClock(restLeft)}` : fmtClock(elapsed)}
+      </span>
+    </button>
+  );
+}
+
+// Zählt die Rekorde eines einzelnen Trainings nach - dieselbe Regel wie die
+// Abschluss-Zusammenfassung: verglichen wird gegen die Historie OHNE dieses
+// Training, sonst schlüge jeder Satz seinen eigenen Wert.
+function countLogPRs(log, logs, exBy, timeBasedExercises, gymIndependentExercises) {
+  let prs = 0;
+  logEntries(log).forEach((entry) => {
+    if (!exBy[entry.exerciseId]) return;
+    const isTime =
+      isTimeBasedInLogs(logs, entry.exerciseId, timeBasedExercises) || !!entry.targetUseTime;
+    const history = getExerciseHistory(
+      logs, entry.exerciseId, log.id, isTime,
+      effectiveGymId(entry.exerciseId, log.gymId, gymIndependentExercises)
+    );
+    if (entrySets(entry).some((s) => s.done && !s.warmup && isNewPR(s, history, isTime))) prs += 1;
+  });
+  return prs;
+}
+
+function DashboardView({
+  plans,
+  logs,
+  exBy,
+  calendarEntries,
+  breathingExercises,
+  breathingLogs,
+  exerciseSubgroupOverrides,
+  timeBasedExercises,
+  gymIndependentExercises,
+  onStartWorkout,
+  onStartBreathing,
+  onOpenProgress,
+}) {
+  const todayKey = toDateKey(new Date());
+
+  // Nur was heute noch offen ist - schon Erledigtes steht im Kalender und
+  // im Verlauf, hier wäre es nur Ballast.
+  const todayOpen = useMemo(
+    () => calendarEntries.filter((ce) => ce.date === todayKey && !ce.logId && ce.type !== "action"),
+    [calendarEntries, todayKey]
+  );
+
+  // Belastungssignale: dieselbe Auswertung wie im Fortschritt-Tab, hier aber
+  // auf die auffälligen Gruppen eingedampft.
+  const loadHistoryWeeks = useMemo(() => logsHistoryWeeks(logs), [logs]);
+  const signals = useMemo(() => {
+    const series = getMuscleLoadSeries(
+      logs, exBy, exerciseSubgroupOverrides, timeBasedExercises,
+      muscleSeriesWeekCount(loadHistoryWeeks)
+    );
+    return series
+      .map((g) => ({
+        id: g.id,
+        label: g.label,
+        signal: detectLoadSignal(g.values, loadHistoryWeeks),
+        change: muscleLoadChange(g.values, 4, loadHistoryWeeks),
+      }))
+      .filter((g) => g.signal);
+  }, [logs, exBy, exerciseSubgroupOverrides, timeBasedExercises, loadHistoryWeeks]);
+
+  const lastLog = useMemo(() => {
+    let best = null;
+    logs.forEach((l) => {
+      const ts = new Date(l?.date).getTime();
+      if (!Number.isFinite(ts)) return;
+      if (!best || ts > new Date(best.date).getTime()) best = l;
+    });
+    return best;
+  }, [logs]);
+
+  const lastLogInfo = useMemo(() => {
+    if (!lastLog) return null;
+    const doneSets = logEntries(lastLog).reduce(
+      (sum, e) => sum + entrySets(e).filter((s) => s.done && !s.warmup).length, 0
+    );
+    return {
+      name: lastLog.planName || lastLog.name || "Freies Training",
+      date: lastLog.date,
+      minutes: toNum(lastLog.durationMinutes),
+      doneSets,
+      prs: countLogPRs(lastLog, logs, exBy, timeBasedExercises, gymIndependentExercises),
+    };
+  }, [lastLog, logs, exBy, timeBasedExercises, gymIndependentExercises]);
+
+  // Die vier Kacheln. Alle rollierend über 7 Tage gerechnet, wie überall
+  // sonst in der App - nicht nach Kalenderwoche, damit "diese Woche" am
+  // Montagmorgen nicht plötzlich bei null steht.
+  const tiles = useMemo(() => {
+    const now = Date.now();
+    const week = 7 * 86400000;
+    const workingSets = (l) =>
+      logEntries(l).flatMap((e) => entrySets(e).filter((s) => s.done && !s.warmup));
+    const volumeOf = (list) =>
+      list.reduce((sum, l) => sum + workingSets(l).reduce(
+        (s, x) => s + toNum(x.weight) * toNum(x.reps), 0
+      ), 0);
+
+    const inWindow = (from, to) => logs.filter((l) => {
+      const ts = new Date(l?.date).getTime();
+      return Number.isFinite(ts) && ts > now - from && ts <= now - to;
+    });
+    const thisWeek = inWindow(week, 0);
+    const lastWeek = inWindow(2 * week, week);
+    const volume = volumeOf(thisWeek);
+    const prevVolume = volumeOf(lastWeek);
+    const volumeChange = prevVolume > 0 ? Math.round(((volume - prevVolume) / prevVolume) * 100) : null;
+
+    const daysSince = lastLog
+      ? Math.max(0, Math.floor((now - new Date(lastLog.date).getTime()) / 86400000))
+      : null;
+
+    // Vernachlässigt heißt: seit dem längsten Zeitraum nicht mehr trainiert.
+    // Nie trainierte Gruppen bleiben außen vor - die sind meist Absicht und
+    // stünden sonst dauerhaft und unveränderlich in der Kachel.
+    const lastByGroup = {};
+    logs.forEach((l) => {
+      const ts = new Date(l?.date).getTime();
+      if (!Number.isFinite(ts)) return;
+      logEntries(l).forEach((e) => {
+        const g = exBy[e.exerciseId]?.group;
+        if (!g) return;
+        if (!entrySets(e).some((s) => s.done && !s.warmup)) return;
+        if (!lastByGroup[g] || ts > lastByGroup[g]) lastByGroup[g] = ts;
+      });
+    });
+    let neglected = null;
+    Object.entries(lastByGroup).forEach(([g, ts]) => {
+      const days = Math.floor((now - ts) / 86400000);
+      if (!neglected || days > neglected.days) {
+        neglected = { days, label: MUSCLE_GROUPS.find((m) => m.id === g)?.label || g };
+      }
+    });
+
+    return { daysSince, count: thisWeek.length, volume, volumeChange, neglected };
+  }, [logs, exBy, lastLog]);
+
+  const planById = useMemo(() => {
+    const map = {};
+    plans.forEach((p) => { map[p.id] = p; });
+    return map;
+  }, [plans]);
+  const breathingById = useMemo(() => {
+    const map = {};
+    breathingExercises.forEach((b) => { map[b.id] = b; });
+    return map;
+  }, [breathingExercises]);
+
+  // Geschätzte Dauer aus den bisherigen Durchläufen desselben Plans - eine
+  // gemittelte Erfahrung sagt mehr als jede Formel aus Sätzen mal Pausenzeit.
+  const planMinutes = (planId) => {
+    const durations = logs
+      .filter((l) => l.planId === planId && toNum(l.durationMinutes) > 0)
+      .map((l) => toNum(l.durationMinutes));
+    if (durations.length === 0) return null;
+    return Math.round(durations.reduce((a, b) => a + b, 0) / durations.length);
+  };
+
+  const planGroups = (plan) => {
+    const seen = [];
+    (Array.isArray(plan?.items) ? plan.items : []).forEach((it) => {
+      const g = exBy[it.exerciseId]?.group;
+      if (g && !seen.includes(g)) seen.push(g);
+    });
+    return seen.map((g) => MUSCLE_GROUPS.find((m) => m.id === g)?.label || g);
+  };
+
+  return (
+    <div>
+      {todayOpen.length > 0 && (
+        <>
+          <span className="stat-section-title">Heute</span>
+          {todayOpen.map((ce, idx) => {
+            if (ce.type === "breathing") {
+              const ex = breathingById[ce.breathingId];
+              if (!ex) return null;
+              const total = breathingTotalSeconds(ex);
+              return (
+                <div className="card" key={ce.id}>
+                  <div className="plan-title">
+                    <Wind size={15} style={{ marginRight: 6, verticalAlign: -2 }} />
+                    {ex.name}
+                  </div>
+                  <div style={{ margin: "6px 0 10px", color: "var(--text-dim)", fontSize: 13 }}>
+                    {breathingPhases(ex).length} Phasen · {breathingRounds(ex)} Runden
+                    {total == null ? " · offene Dauer" : ` · ca. ${Math.max(1, Math.round(total / 60))} Min.`}
+                  </div>
+                  <button
+                    className={`btn ${idx === 0 ? "btn-primary" : "btn-ghost"} btn-block`}
+                    onClick={() => onStartBreathing(ex, ce.id)}
+                  >
+                    <Play size={15} /> Starten
+                  </button>
+                </div>
+              );
+            }
+            const plan = planById[ce.planId];
+            if (!plan) return null;
+            const groups = planGroups(plan);
+            const minutes = planMinutes(plan.id);
+            return (
+              <div className="card" key={ce.id}>
+                <div className="plan-title">{plan.name}</div>
+                <div style={{ margin: "6px 0 10px", color: "var(--text-dim)", fontSize: 13 }}>
+                  {groups.length > 0 && <>{groups.join(" · ")}<br /></>}
+                  {(plan.items || []).length} Übungen
+                  {minutes ? ` · ca. ${minutes} Min.` : ""}
+                </div>
+                <button
+                  className={`btn ${idx === 0 ? "btn-primary" : "btn-ghost"} btn-block`}
+                  onClick={() => onStartWorkout(plan, ce.id)}
+                >
+                  <Play size={15} /> Training starten
+                </button>
+              </div>
+            );
+          })}
+        </>
+      )}
+
+      {lastLog && (
+        <div className="stats-grid" style={{ marginBottom: 4 }}>
+          <div className="stat-item">
+            <span className="stat-value">{tiles.daysSince}</span>
+            <span className="stat-label">
+              {tiles.daysSince === 0 ? "Heute trainiert" : "Tage seit Training"}
+            </span>
+          </div>
+          <div className="stat-item">
+            <span className="stat-value">{tiles.count}</span>
+            <span className="stat-label">Trainings (7 Tage)</span>
+          </div>
+          <div className="stat-item">
+            <span className="stat-value">{Math.round(tiles.volume).toLocaleString("de-DE")}</span>
+            <span className="stat-label">
+              kg Volumen
+              {tiles.volumeChange != null && (
+                <> · {tiles.volumeChange > 0 ? "+" : ""}{tiles.volumeChange} % ggü. Vorwoche</>
+              )}
+            </span>
+          </div>
+          {tiles.neglected && (
+            <div className="stat-item">
+              <span className="stat-value">{tiles.neglected.days}</span>
+              <span className="stat-label">Tage ohne {tiles.neglected.label}</span>
+            </div>
+          )}
+        </div>
+      )}
+
+      <span className="stat-section-title">Belastung</span>
+      <div className="card">
+        {signals.length === 0 ? (
+          <div style={{ color: "var(--text-dim)", fontSize: 13 }}>
+            Keine Auffälligkeiten.
+          </div>
+        ) : (
+          signals.map((g) => (
+            <div className="dash-signal-row" key={g.id} onClick={onOpenProgress}>
+              <LoadSignalBadge signal={g.signal} />
+              <span className="dash-signal-label">{g.label}</span>
+              <span className="dash-signal-text">
+                {g.signal.type === "plateau"
+                  ? "seit Wochen keine Steigerung"
+                  : `${g.change != null && g.change > 0 ? "+" : ""}${g.change != null ? Math.round(g.change) : "?"} % ggü. 4-Wochen-Schnitt`}
+              </span>
+              <ChevronRight size={14} color="var(--text-dim)" />
+            </div>
+          ))
+        )}
+      </div>
+
+      {lastLogInfo && (
+        <>
+          <span className="stat-section-title">Letztes Training</span>
+          <div className="card">
+            <div className="plan-title">{lastLogInfo.name}</div>
+            <div style={{ marginTop: 6, color: "var(--text-dim)", fontSize: 13 }}>
+              {timeAgoShort(lastLogInfo.date)}
+              {lastLogInfo.minutes > 0 ? ` · ${lastLogInfo.minutes} Min.` : ""}
+              {` · ${lastLogInfo.doneSets} Sätze`}
+            </div>
+            {lastLogInfo.prs > 0 && (
+              <div style={{ marginTop: 6, color: "var(--brass)", fontSize: 13, display: "flex", alignItems: "center", gap: 6 }}>
+                <Trophy size={14} /> {lastLogInfo.prs} {lastLogInfo.prs === 1 ? "Rekord" : "Rekorde"}
+              </div>
+            )}
+          </div>
+        </>
+      )}
+
     </div>
   );
 }
@@ -5178,12 +6210,16 @@ function CalendarView({
                     <div className="history-exercise-list" style={{ marginTop: 8 }}>
                       {logEntries(log).map((e) => {
                         const ex = exBy[e.exerciseId];
-                        const workingSets = entrySets(e).filter((s) => !s.warmup);
+                        const workingSets = performedWorkingSets(entrySets(e));
                         const summary = workingSets
-                          .map((s) => (s.duration ? `${s.duration}s` : `${s.weight || 0}kg×${s.reps || 0}`))
+                          .map(
+                            (s) =>
+                              (s.dropset ? "↓" : "") +
+                              (s.duration ? `${s.duration}s` : `${s.weight || 0}kg×${s.reps || 0}`)
+                          )
                           .join(", ");
                         return (
-                          <div key={e.exerciseId} className="history-exercise-row">
+                          <div key={e.id || e.exerciseId} className="history-exercise-row">
                             <span>{ex ? ex.name : e.exerciseId}</span>
                             <span className="history-set-summary">{summary || "–"}</span>
                           </div>
@@ -5197,7 +6233,7 @@ function CalendarView({
                     </div>
                   ) : plan ? (
                     <button
-                      className="btn btn-primary btn-block btn-sm"
+                      className="btn btn-ghost btn-block btn-sm"
                       style={{ marginTop: 10 }}
                       onClick={() => onStartScheduledWorkout(plan, entry.id)}
                     >
@@ -5241,7 +6277,7 @@ function CalendarView({
                     </div>
                   ) : br ? (
                     <button
-                      className="btn btn-primary btn-block btn-sm"
+                      className="btn btn-ghost btn-block btn-sm"
                       style={{ marginTop: 10 }}
                       onClick={() => onStartScheduledBreathing?.(br, entry.id)}
                     >
@@ -5960,10 +6996,14 @@ function SwipeableSetRow({ className, onSwipeRight, onSwipeLeft, children }) {
 // what they're doing (building a workout) just to add a missing exercise.
 // ---------------------------------------------------------------------------
 
-function NewExerciseForm({ exercises, onAddCustom, onSetExerciseSubgroup, onDone }) {
+function NewExerciseForm({ exercises, onAddCustom, onSetExerciseSubgroups, onDone }) {
   const [newName, setNewName] = useState("");
   const [newGroup, setNewGroup] = useState(MUSCLE_GROUPS[0].id);
-  const [newSubgroup, setNewSubgroup] = useState(null);
+  // Mehrere Untergruppen möglich, wie beim Bearbeiten einer bestehenden
+  // Übung ("Untergruppen wählen" in der Detailansicht) - vorher konnte man
+  // beim Neuanlegen nur eine einzige wählen, obwohl das Datenmodell und der
+  // Bearbeiten-Dialog längst mehrere erlauben.
+  const [newSubgroups, setNewSubgroups] = useState([]);
   const [newEquipment, setNewEquipment] = useState("Körpergewicht");
   const [newDescription, setNewDescription] = useState("");
   const [newVideo, setNewVideo] = useState("");
@@ -5997,7 +7037,7 @@ function NewExerciseForm({ exercises, onAddCustom, onSetExerciseSubgroup, onDone
     }
     const newExercise = { id, name: trimmed, group: newGroup, custom: true, meta: { equipment: newEquipment, primary: MUSCLE_GROUPS.find((g) => g.id === newGroup)?.label || newGroup, secondary: "–", description: newDescription.trim() || `${trimmed} – eigene Übung.`, video: newVideo.trim() } };
     onAddCustom(newExercise);
-    if (newSubgroup) onSetExerciseSubgroup(id, newSubgroup);
+    if (newSubgroups.length > 0) onSetExerciseSubgroups(id, newSubgroups);
     // The parent's exercise list hasn't re-rendered with the new entry yet
     // (state update is still pending), so hand the fresh object back
     // directly instead of making the caller look it up.
@@ -6026,7 +7066,7 @@ function NewExerciseForm({ exercises, onAddCustom, onSetExerciseSubgroup, onDone
             <span
               key={g.id}
               className={`chip ${newGroup === g.id ? "active" : ""}`}
-              onClick={() => { setNewGroup(g.id); setNewSubgroup(null); }}
+              onClick={() => { setNewGroup(g.id); setNewSubgroups([]); }}
             >
               {g.label}
             </span>
@@ -6035,19 +7075,23 @@ function NewExerciseForm({ exercises, onAddCustom, onSetExerciseSubgroup, onDone
       </div>
       {(SUBGROUPS[newGroup] || []).length > 0 && (
         <div style={{ marginTop: 10 }}>
-          <label className="field-label">Untergruppe (optional)</label>
+          <label className="field-label">Untergruppen (optional)</label>
           <div className="chip-row" style={{ marginTop: 6 }}>
             <span
-              className={`chip chip-sm ${!newSubgroup ? "active" : ""}`}
-              onClick={() => setNewSubgroup(null)}
+              className={`chip chip-sm ${newSubgroups.length === 0 ? "active" : ""}`}
+              onClick={() => setNewSubgroups([])}
             >
               Keine
             </span>
             {SUBGROUPS[newGroup].map((sg) => (
               <span
                 key={sg.id}
-                className={`chip chip-sm ${newSubgroup === sg.id ? "active" : ""}`}
-                onClick={() => setNewSubgroup(sg.id)}
+                className={`chip chip-sm ${newSubgroups.includes(sg.id) ? "active" : ""}`}
+                onClick={() =>
+                  setNewSubgroups((prev) =>
+                    prev.includes(sg.id) ? prev.filter((id) => id !== sg.id) : [...prev, sg.id]
+                  )
+                }
               >
                 {sg.label}
               </span>
@@ -6057,9 +7101,17 @@ function NewExerciseForm({ exercises, onAddCustom, onSetExerciseSubgroup, onDone
       )}
       <div style={{ marginTop: 10 }}>
         <label className="field-label">Equipment</label>
-        <select value={newEquipment} onChange={(e) => setNewEquipment(e.target.value)}>
-          {EQUIPMENT_OPTIONS.map((x) => <option key={x}>{x}</option>)}
-        </select>
+        <div className="chip-row" style={{ marginTop: 6 }}>
+          {EQUIPMENT_OPTIONS.map((opt) => (
+            <span
+              key={opt}
+              className={`chip ${newEquipment === opt ? "active" : ""}`}
+              onClick={() => setNewEquipment(opt)}
+            >
+              {opt}
+            </span>
+          ))}
+        </div>
       </div>
       <div style={{ marginTop: 10 }}>
         <label className="field-label">Beschreibung</label>
@@ -6100,6 +7152,7 @@ function ExercisesView({
   exerciseNotes,
   exerciseSubgroupOverrides,
   onSetExerciseSubgroup,
+  onSetExerciseSubgroups,
   exerciseEquipmentOverrides,
   onSetExerciseEquipment,
   onAddCustom,
@@ -6119,6 +7172,24 @@ function ExercisesView({
   const [equipmentFilter, setEquipmentFilter] = useState("alle");
   const [creating, setCreating] = useState(false);
   const [selectedExerciseId, setSelectedExerciseId] = useState(null);
+
+  // Eine geloeschte Uebung verschwindet nicht nur aus der Liste: ihre
+  // Saetze stehen weiter in den Logs, werden aber von jeder Auswertung
+  // uebersprungen (die kennt die Uebung nicht mehr). Monate an Verlauf
+  // waeren also ohne Vorwarnung aus der Statistik weg - deshalb sagt die
+  // Rueckfrage, was tatsaechlich daran haengt.
+  const deleteExerciseQuestion = (exercise) => {
+    const trainings = (Array.isArray(logs) ? logs : []).filter(
+      (l) => logEntriesFor(l, exercise.id).length > 0
+    ).length;
+    const base = `Eigene Übung „${exercise.name}“ wirklich löschen?`;
+    if (trainings === 0) return base;
+    return (
+      base +
+      ` Sie steckt in ${trainings} ${trainings === 1 ? "Training" : "Trainings"} –` +
+      " deren Sätze verschwinden danach aus Verlauf und Statistik."
+    );
+  };
 
   // Look the exercise up live so a rename is reflected immediately instead
   // of the overlay being stuck on a stale snapshot.
@@ -6209,7 +7280,7 @@ function ExercisesView({
         <NewExerciseForm
           exercises={exercises}
           onAddCustom={onAddCustom}
-          onSetExerciseSubgroup={onSetExerciseSubgroup}
+          onSetExerciseSubgroups={onSetExerciseSubgroups}
           onDone={() => setCreating(false)}
         />
       ) : (
@@ -6234,27 +7305,17 @@ function ExercisesView({
             >
               <span className="ex-name">{e.name}</span>
               <div style={{ display: "flex", alignItems: "center", gap: 8, flexShrink: 0 }}>
-                {/* Tags wrap onto a second line instead of squeezing the name
-                    down to nothing when an exercise has two subgroups. */}
-                <div
-                  style={{
-                    display: "flex",
-                    flexWrap: "wrap",
-                    alignItems: "center",
-                    justifyContent: "flex-end",
-                    gap: 6,
-                    maxWidth: "48vw",
-                  }}
-                >
-                  <MuscleTag exercise={e} subgroupOverrides={exerciseSubgroupOverrides} />
-                  <span className="tag tag-equipment">{getExerciseEquipment(e, exerciseEquipmentOverrides)}</span>
-                </div>
+                {/* Untergruppen stehen bewusst nicht mehr hier - bei mehreren
+                    zugewiesenen Untergruppen wurde die Zeile zu voll und
+                    quetschte den Namen zusammen. Die Übungs-Detailansicht
+                    (ein Tap entfernt) zeigt und bearbeitet sie weiterhin. */}
+                <span className="tag tag-equipment">{getExerciseEquipment(e, exerciseEquipmentOverrides)}</span>
                 {e.custom && (
                   <button
                     className="btn-icon"
                     onClick={(ev) => {
                       ev.stopPropagation();
-                      onRequestConfirm(`Eigene Übung „${e.name}“ wirklich löschen?`, () => onDeleteCustom(e.id));
+                      onRequestConfirm(deleteExerciseQuestion(e), () => onDeleteCustom(e.id));
                     }}
                     title="Eigene Übung löschen"
                   >
@@ -6523,11 +7584,20 @@ function ExerciseDetailSheet({
             timeline.map((t, idx) => (
               <div className="card" key={idx}>
                 <span className="tag">{fmtDate(t.date)}</span>
+                {fmtRir(t.rir) && (
+                  <span className="tag" style={{ marginLeft: 6 }}>{fmtRir(t.rir)}</span>
+                )}
+                {feelingLabel(t.feeling) && (
+                  <span className="tag tag-equipment" style={{ marginLeft: 6 }}>
+                    {feelingLabel(t.feeling)}
+                  </span>
+                )}
                 {t.sets.length > 0 && (
                   <div style={{ marginTop: 8, display: "flex", flexWrap: "wrap", gap: 6 }}>
                     {t.sets.map((s, i) => (
                       <span key={i} className="tag" style={s.warmup ? { opacity: 0.6 } : undefined}>
                         {s.warmup ? "W · " : ""}
+                        {s.dropset ? "↓ " : ""}
                         {timeBasedExercises[exercise.id]
                           ? `${s.duration || 0}s`
                           : `${s.weight || 0}kg×${s.reps || 0}`}
@@ -6683,6 +7753,7 @@ function PlanBuilder({
   exerciseNotes,
   exerciseSubgroupOverrides,
   onSetExerciseSubgroup,
+  onSetExerciseSubgroups,
   exerciseEquipmentOverrides,
   onSetExerciseEquipment,
   onAddCustom,
@@ -6699,7 +7770,11 @@ function PlanBuilder({
   activeGymId = null,
 }) {
   const [name, setName] = useState(initialPlan?.name || "");
-  const [items, setItems] = useState(initialPlan?.items || []); // {exerciseId, sets, reps}
+  // Plaene aus aelteren Versionen haben noch keine Eintrags-IDs - ohne
+  // Nachreichen haetten alle Eintraege dieselbe (undefined) Identitaet.
+  const [items, setItems] = useState(() =>
+    (initialPlan?.items || []).map((it) => (it && it.id ? it : { ...it, id: uid() }))
+  );
   const [query, setQuery] = useState("");
   const [group, setGroup] = useState("alle");
   const [subgroupFilter, setSubgroupFilter] = useState("alle");
@@ -6734,7 +7809,7 @@ function PlanBuilder({
   const [planAutoSeconds, setPlanAutoSeconds] = useState(initialPlan?.autoSetSeconds ?? 30);
   const [planAutoOrder, setPlanAutoOrder] = useState(initialPlan?.autoOrder || "circuit");
   const [planRoundRest, setPlanRoundRest] = useState(initialPlan?.roundRestSeconds ?? 60);
-  const [restPopupFor, setRestPopupFor] = useState(null); // "plan" | exerciseId
+  const [restPopupFor, setRestPopupFor] = useState(null); // "plan" | Eintrags-ID
   const [itemMenuId, setItemMenuId] = useState(null);
   const [itemMenuUp, setItemMenuUp] = useState(false);
   const itemMenuRef = useMenuFlip(itemMenuId, setItemMenuUp);
@@ -6769,6 +7844,7 @@ function PlanBuilder({
         const working = sets.filter((s) => !s.warmup);
         const first = working[0] || sets[0] || {};
         return {
+          id: uid(),
           exerciseId: e.exerciseId,
           sets: e.targetSets || working.length || sets.length,
           warmupSets: sets.filter((s) => s.warmup).length,
@@ -6791,7 +7867,7 @@ function PlanBuilder({
     dragHandleProps,
   } = useDragReorder({
     items,
-    getId: (it) => it.exerciseId,
+    getId: (it) => it.id,
     onReorder: setItems,
   });
 
@@ -6877,7 +7953,6 @@ function PlanBuilder({
   const activeGroupSubgroups = group !== "alle" ? SUBGROUPS[group] || [] : [];
 
   const addExercise = (exerciseId) => {
-    if (items.some((i) => i.exerciseId === exerciseId)) return;
     // Start from what was last achieved instead of a generic 3x10 - when you
     // build a plan around an exercise you already train, those numbers are
     // the useful starting point.
@@ -6890,6 +7965,9 @@ function PlanBuilder({
     const last = working[0];
     const warmCount = (history?.lastSets || []).filter((set) => set.warmup).length;
     setItems([...items, {
+      // Eigene ID je Platz - dieselbe Uebung darf mehrfach im Plan stehen
+      // (Zirkel: A, B, A, C), deshalb kann die Uebungs-ID das nicht leisten.
+      id: uid(),
       exerciseId,
       sets: working.length > 0 ? working.length : 3,
       warmupSets: warmCount,
@@ -6903,35 +7981,46 @@ function PlanBuilder({
       autoSeconds: null,
     }]);
   };
-  const removeExercise = (exerciseId) => {
-    setItems(items.filter((i) => i.exerciseId !== exerciseId));
-    setExpandedItemId((cur) => (cur === exerciseId ? null : cur));
+  const removeItem = (itemId) => {
+    setItems(items.filter((i) => i.id !== itemId));
+    setExpandedItemId((cur) => (cur === itemId ? null : cur));
   };
-  const toggleExercise = (exerciseId) => {
-    if (items.some((i) => i.exerciseId === exerciseId)) removeExercise(exerciseId);
-    else addExercise(exerciseId);
-  };
-  const toggleSupersetWithNext = (exerciseId) => {
+  const toggleSupersetWithNext = (itemId) => {
     setItems(
       items.map((i) =>
-        i.exerciseId === exerciseId ? { ...i, supersetWithNext: !i.supersetWithNext } : i
+        i.id === itemId ? { ...i, supersetWithNext: !i.supersetWithNext } : i
       )
     );
   };
-  const updateItem = (exerciseId, field, value) => {
+  const updateItem = (itemId, field, value) => {
     // Store exactly what the user typed while they're typing — clamping to
     // a minimum on every keystroke made it impossible to clear a field to
     // type a new number (deleting the digits always snapped straight back
     // to 1). The minimum is enforced once the field is left, in
     // handleItemBlur below.
     setItems(
-      items.map((i) => (i.exerciseId === exerciseId ? { ...i, [field]: value } : i))
+      items.map((i) => (i.id === itemId ? { ...i, [field]: value } : i))
     );
   };
-  const handleItemBlur = (exerciseId, field, min) => {
+  // Rundenmodus: im Zirkel ist "Satz N" gleichbedeutend mit "Runde N" -
+  // Satz 1 aller Uebungen ist Runde 1. Statt die Satzzahl bei jeder Uebung
+  // einzeln einzustellen, wird die Runde einmal definiert (die Uebungsliste)
+  // und dazu gesagt, wie oft sie laufen soll. Eine eigene Datenstruktur
+  // braucht es dafuer nicht: die Rundenzahl ist die Satzzahl aller Uebungen.
+  const roundCount = (() => {
+    if (items.length === 0) return 0;
+    const first = Math.max(1, toNum(items[0].sets));
+    return items.every((i) => Math.max(1, toNum(i.sets)) === first) ? first : 0;
+  })();
+  const setRoundCount = (n) => {
+    const rounds = Math.max(1, Math.round(toNum(n)) || 1);
+    setItems(items.map((i) => ({ ...i, sets: rounds })));
+  };
+
+  const handleItemBlur = (itemId, field, min) => {
     setItems(
       items.map((i) => {
-        if (i.exerciseId !== exerciseId) return i;
+        if (i.id !== itemId) return i;
         const n = Math.max(min, toNum(i[field]));
         const value = n || min;
         // Weight is shown German-style: typing 62,5 should not silently turn
@@ -6943,14 +8032,14 @@ function PlanBuilder({
   };
   // Weight can legitimately be 0 (bodyweight exercises); like updateItem,
   // this only stores what was typed — cleanup happens on blur.
-  const updateItemWeight = (exerciseId, value) => {
+  const updateItemWeight = (itemId, value) => {
     setItems(
-      items.map((i) => (i.exerciseId === exerciseId ? { ...i, weight: value } : i))
+      items.map((i) => (i.id === itemId ? { ...i, weight: value } : i))
     );
   };
-  const toggleItemTime = (exerciseId, useTime) => {
+  const toggleItemTime = (itemId, useTime) => {
     setItems(
-      items.map((i) => (i.exerciseId === exerciseId ? { ...i, useTime } : i))
+      items.map((i) => (i.id === itemId ? { ...i, useTime } : i))
     );
   };
 
@@ -7023,7 +8112,7 @@ function PlanBuilder({
           <NewExerciseForm
             exercises={exercises}
             onAddCustom={onAddCustom}
-            onSetExerciseSubgroup={onSetExerciseSubgroup}
+            onSetExerciseSubgroups={onSetExerciseSubgroups}
             onDone={(newExercise) => {
               setCreatingExercise(false);
               // Jump straight to it in the picker below so it can be added
@@ -7205,7 +8294,7 @@ function PlanBuilder({
           <div className="empty-state" style={{ padding: "14px 0" }}>Keine Übung gefunden.</div>
         )}
         {visibleFiltered.map((e) => {
-          const added = items.some((i) => i.exerciseId === e.id);
+          const addedCount = items.filter((i) => i.exerciseId === e.id).length;
           return (
             <div className="ex-row" key={e.id}>
               <span
@@ -7214,12 +8303,16 @@ function PlanBuilder({
               >
                 {e.name}
               </span>
+              {addedCount > 0 && (
+                <span className="tag" title="So oft ist die Übung schon im Plan">
+                  {addedCount}×
+                </span>
+              )}
               <button
-                className={`btn btn-sm ${added ? "btn-ghost" : "btn-primary"}`}
-                onClick={() => (added ? removeExercise(e.id) : addExercise(e.id))}
+                className="btn btn-sm btn-ghost"
+                onClick={() => addExercise(e.id)}
               >
-                {added ? <Check size={14} /> : <Plus size={14} />}
-                {added ? "Drin" : "Add"}
+                <Plus size={14} /> Add
               </button>
             </div>
           );
@@ -7301,6 +8394,20 @@ function PlanBuilder({
                     {planAutoOrder === "circuit" ? "Zirkel" : "Übung für Übung"}
                   </span>
                 </button>
+                {planAutoOrder === "circuit" && items.length > 0 && (
+                  <button
+                    className="modal-option"
+                    style={{ marginTop: 6 }}
+                    onClick={() => setRestPopupFor("rounds")}
+                  >
+                    <span style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                      <RotateCcw size={15} /> Runden
+                    </span>
+                    <span style={{ color: "var(--accent)" }}>
+                      {roundCount > 0 ? `${roundCount}×` : "gemischt"}
+                    </span>
+                  </button>
+                )}
                 <button
                   className="modal-option"
                   style={{ marginTop: 6 }}
@@ -7316,7 +8423,7 @@ function PlanBuilder({
                 </button>
                 <div style={{ fontSize: 12, color: "var(--text-dim)", marginTop: 8 }}>
                   {planAutoOrder === "circuit"
-                    ? "Satz 1 aller Übungen, dann Satz 2 aller Übungen. Die Satzpause läuft zwischen den Übungen, die Rundenpause nach der letzten Übung einer Runde."
+                    ? "Satz 1 aller Übungen, dann Satz 2 aller Übungen. Die Satzpause läuft zwischen den Übungen, die Rundenpause nach der letzten Übung einer Runde. Über „Runden“ stellst du die Übungsliste einmal zusammen und sagst nur noch, wie oft sie durchlaufen wird."
                     : "Alle Sätze einer Übung am Stück, danach die nächste Übung."}
                 </div>
               </>
@@ -7336,26 +8443,26 @@ function PlanBuilder({
                 const shownSeconds = autoTimed
                   ? (it.autoSeconds != null ? it.autoSeconds : planAutoSeconds)
                   : (it.duration ?? 30);
-                const isDragging = draggingId === it.exerciseId;
-                const isOpen = expandedItemId === it.exerciseId;
+                const isDragging = draggingId === it.id;
+                const isOpen = expandedItemId === it.id;
                 const warm = Math.max(0, toNum(it.warmupSets));
                 return (
-                  <React.Fragment key={it.exerciseId}>
+                  <React.Fragment key={it.id}>
                   <div
-                    ref={(el) => { itemRefs.current[it.exerciseId] = el; }}
-                    className={`plan-item-row builder-item ${isOpen ? "is-open" : ""} ${itemMenuId === it.exerciseId ? "menu-open" : ""} ${isDragging ? "is-dragging" : ""}`}
+                    ref={(el) => { itemRefs.current[it.id] = el; }}
+                    className={`plan-item-row builder-item ${isOpen ? "is-open" : ""} ${itemMenuId === it.id ? "menu-open" : ""} ${isDragging ? "is-dragging" : ""}`}
                   >
                     <div className="builder-item-head">
                       <span
                         className="drag-handle"
                         title="Gedrückt halten, um die Reihenfolge zu ändern"
-                        {...dragHandleProps(it.exerciseId)}
+                        {...dragHandleProps(it.id)}
                       >
                         <GripVertical size={16} />
                       </span>
                       <div
                         className="builder-item-main"
-                        onClick={() => setExpandedItemId(isOpen ? null : it.exerciseId)}
+                        onClick={() => setExpandedItemId(isOpen ? null : it.id)}
                       >
                         <span className="ex-name">{ex.name}</span>
                         <span className="builder-item-summary">
@@ -7366,19 +8473,19 @@ function PlanBuilder({
                           {planAutoRun && it.autoRun === false && " · zählt Wdh."}
                         </span>
                       </div>
-                      <div className={`item-menu-wrap ${itemMenuUp && itemMenuId === it.exerciseId ? "drop-up" : ""}`}>
+                      <div className={`item-menu-wrap ${itemMenuUp && itemMenuId === it.id ? "drop-up" : ""}`}>
                         <button
                           className="btn-icon"
                           onClick={(e) => {
-                            const opening = itemMenuId !== it.exerciseId;
+                            const opening = itemMenuId !== it.id;
                             setItemMenuUp(opening ? shouldDropUp(e.target) : false);
-                            setItemMenuId(opening ? it.exerciseId : null);
+                            setItemMenuId(opening ? it.id : null);
                           }}
                           title="Weitere Optionen"
                         >
                           <MoreVertical size={16} />
                         </button>
-                        {itemMenuId === it.exerciseId && (
+                        {itemMenuId === it.id && (
                           <div
                             ref={itemMenuRef}
                             className="program-menu"
@@ -7387,7 +8494,7 @@ function PlanBuilder({
                             {itemIndex < items.length - 1 && (
                               <button
                                 className="program-menu-item"
-                                onClick={() => { toggleSupersetWithNext(it.exerciseId); setItemMenuId(null); }}
+                                onClick={() => { toggleSupersetWithNext(it.id); setItemMenuId(null); }}
                               >
                                 <Repeat size={14} />
                                 {it.supersetWithNext ? "Superset-Verknüpfung lösen" : "Mit nächster Übung verknüpfen"}
@@ -7397,7 +8504,7 @@ function PlanBuilder({
                               <>
                                 <button
                                   className="program-menu-item"
-                                  onClick={() => { setRestPopupFor(`time:${it.exerciseId}`); setItemMenuId(null); }}
+                                  onClick={() => { setRestPopupFor(`time:${it.id}`); setItemMenuId(null); }}
                                 >
                                   <Clock size={14} />
                                   {it.autoSeconds != null
@@ -7409,7 +8516,7 @@ function PlanBuilder({
                                   onClick={() => {
                                     // false = this exercise counts reps and the
                                     // run waits for the set to be ticked off.
-                                    updateItem(it.exerciseId, "autoRun", it.autoRun === false ? null : false);
+                                    updateItem(it.id, "autoRun", it.autoRun === false ? null : false);
                                     setItemMenuId(null);
                                   }}
                                 >
@@ -7422,7 +8529,7 @@ function PlanBuilder({
                             )}
                             <button
                               className="program-menu-item"
-                              onClick={() => { setRestPopupFor(it.exerciseId); setItemMenuId(null); }}
+                              onClick={() => { setRestPopupFor(it.id); setItemMenuId(null); }}
                             >
                               <Timer size={14} />
                               {it.restSeconds != null
@@ -7435,7 +8542,7 @@ function PlanBuilder({
                             {!planAutoRun && (
                               <button
                                 className="program-menu-item"
-                                onClick={() => { toggleItemTime(it.exerciseId, !itemUsesTime); setItemMenuId(null); }}
+                                onClick={() => { toggleItemTime(it.id, !itemUsesTime); setItemMenuId(null); }}
                               >
                                 <Clock size={14} />
                                 {itemUsesTime ? "Wieder Wiederholungen zählen" : "Zeit pro Satz statt Wiederholungen"}
@@ -7449,7 +8556,7 @@ function PlanBuilder({
                             </button>
                             <button
                               className="program-menu-item danger"
-                              onClick={() => { removeExercise(it.exerciseId); setItemMenuId(null); }}
+                              onClick={() => { removeItem(it.id); setItemMenuId(null); }}
                             >
                               <Trash2 size={14} /> Übung entfernen
                             </button>
@@ -7458,7 +8565,7 @@ function PlanBuilder({
                       </div>
                       <span
                         className="builder-chevron"
-                        onClick={() => setExpandedItemId(isOpen ? null : it.exerciseId)}
+                        onClick={() => setExpandedItemId(isOpen ? null : it.id)}
                       >
                         {isOpen ? <ChevronDown size={15} /> : <ChevronRight size={15} />}
                       </span>
@@ -7477,8 +8584,8 @@ function PlanBuilder({
                                 inputMode="numeric"
                               min="0"
                               value={it.warmupSets ?? 0}
-                              onChange={(e) => updateItem(it.exerciseId, "warmupSets", e.target.value)}
-                              onBlur={() => handleItemBlur(it.exerciseId, "warmupSets", 0)}
+                              onChange={(e) => updateItem(it.id, "warmupSets", e.target.value)}
+                              onBlur={() => handleItemBlur(it.id, "warmupSets", 0)}
                             />
                           </div>
                           <div style={{ flex: 1 }}>
@@ -7488,8 +8595,8 @@ function PlanBuilder({
                                 inputMode="numeric"
                               min="1"
                               value={it.sets}
-                              onChange={(e) => updateItem(it.exerciseId, "sets", e.target.value)}
-                              onBlur={() => handleItemBlur(it.exerciseId, "sets", 1)}
+                              onChange={(e) => updateItem(it.id, "sets", e.target.value)}
+                              onBlur={() => handleItemBlur(it.id, "sets", 1)}
                             />
                           </div>
                           {itemUsesTime ? (
@@ -7505,13 +8612,13 @@ function PlanBuilder({
                                 value={shownSeconds}
                                 onChange={(e) =>
                                   updateItem(
-                                    it.exerciseId,
+                                    it.id,
                                     autoTimed ? "autoSeconds" : "duration",
                                     e.target.value
                                   )
                                 }
                                 onBlur={() =>
-                                  handleItemBlur(it.exerciseId, autoTimed ? "autoSeconds" : "duration", 1)
+                                  handleItemBlur(it.id, autoTimed ? "autoSeconds" : "duration", 1)
                                 }
                               />
                             </div>
@@ -7523,8 +8630,8 @@ function PlanBuilder({
                                 inputMode="numeric"
                                 min="1"
                                 value={it.reps}
-                                onChange={(e) => updateItem(it.exerciseId, "reps", e.target.value)}
-                                onBlur={() => handleItemBlur(it.exerciseId, "reps", 1)}
+                                onChange={(e) => updateItem(it.id, "reps", e.target.value)}
+                                onBlur={() => handleItemBlur(it.id, "reps", 1)}
                               />
                             </div>
                           )}
@@ -7534,8 +8641,8 @@ function PlanBuilder({
                               type="text"
                               inputMode="decimal"
                               value={it.weight ?? 0}
-                              onChange={(e) => updateItemWeight(it.exerciseId, e.target.value)}
-                              onBlur={() => handleItemBlur(it.exerciseId, "weight", 0)}
+                              onChange={(e) => updateItemWeight(it.id, e.target.value)}
+                              onBlur={() => handleItemBlur(it.id, "weight", 0)}
                             />
                           </div>
                         </div>
@@ -7609,30 +8716,36 @@ function PlanBuilder({
           restPopupFor === "plan" ? "planRest"
           : restPopupFor === "roundRest" ? "roundRest"
           : restPopupFor === "autoSeconds" ? "autoSeconds"
+          : restPopupFor === "rounds" ? "rounds"
           : restPopupFor.startsWith("time:") ? "itemTime"
           : "itemRest";
         const itemId = restPopupFor.startsWith("time:") ? restPopupFor.slice(5) : restPopupFor;
-        const item = items.find((i) => i.exerciseId === itemId);
+        const item = items.find((i) => i.id === itemId);
         const titles = {
           planRest: "Pause nach jedem Satz",
           roundRest: planAutoOrder === "circuit" ? "Pause nach jeder Runde" : "Pause nach jeder Übung",
           autoSeconds: "Zeit pro Satz",
           itemRest: "Pause für diese Übung",
           itemTime: "Zeit für diese Übung",
+          rounds: "Runden",
         };
-        const presets = kind === "autoSeconds" || kind === "itemTime"
+        const presets = kind === "rounds"
+          ? [2, 3, 4, 5, 6, 8, 10]
+          : kind === "autoSeconds" || kind === "itemTime"
           ? [15, 20, 30, 40, 45, 60, 90]
           : [0, 15, 30, 45, 60, 90, 120, 180];
         const current =
           kind === "planRest" ? planRest
           : kind === "roundRest" ? planRoundRest
           : kind === "autoSeconds" ? planAutoSeconds
+          : kind === "rounds" ? (roundCount > 0 ? roundCount : null)
           : kind === "itemTime" ? item?.autoSeconds
           : item?.restSeconds;
         const apply = (sec) => {
           if (kind === "planRest") setPlanRest(sec);
           else if (kind === "roundRest") setPlanRoundRest(sec);
           else if (kind === "autoSeconds") setPlanAutoSeconds(sec);
+          else if (kind === "rounds") setRoundCount(sec);
           else if (kind === "itemTime") updateItem(itemId, "autoSeconds", sec);
           else updateItem(itemId, "restSeconds", sec);
         };
@@ -7640,7 +8753,18 @@ function PlanBuilder({
           kind === "itemTime" ? `Wie im Workout (${planAutoSeconds}s)`
           : `Wie im Workout (${planRest === 0 ? "Aus" : `${planRest}s`})`;
         const canInherit = kind === "itemRest" || kind === "itemTime";
-        const minValue = kind === "autoSeconds" || kind === "itemTime" ? 1 : 0;
+        const minValue = kind === "autoSeconds" || kind === "itemTime" || kind === "rounds" ? 1 : 0;
+        // Runden sind Anzahlen, keine Sekunden - Beschriftung und Schrittweite
+        // muessen das widerspiegeln, sonst steht "3 Sekunden" fuer 3 Runden.
+        // Bei gemischten Satzzahlen gibt es keine gemeinsame Rundenzahl - dann
+        // steht im Eingabefeld die groesste, damit nichts still gekuerzt wird.
+        const maxItemSets = Math.max(1, ...items.map((i) => Math.max(1, toNum(i.sets))));
+        const presetLabel = (n) =>
+          kind === "rounds"
+            ? `${n} Runden`
+            : n === 0
+            ? "Aus"
+            : `${n} Sekunden`;
 
         return (
           <Modal title={titles[kind]} onClose={() => setRestPopupFor(null)}>
@@ -7663,19 +8787,24 @@ function PlanBuilder({
                   className={`modal-option ${current === sec ? "active" : ""}`}
                   onClick={() => { apply(sec); setRestPopupFor(null); }}
                 >
-                  {sec === 0 ? "Aus" : `${sec} Sekunden`}
+                  {presetLabel(sec)}
                   {current === sec && <Check size={15} />}
                 </button>
               ))}
             </div>
             <div style={{ marginTop: 12, paddingTop: 12, borderTop: "1px solid var(--border)" }}>
-              <label className="field-label">Eigener Wert (Sekunden)</label>
+              <label className="field-label">
+                {kind === "rounds" ? "Eigener Wert (Runden)" : "Eigener Wert (Sekunden)"}
+              </label>
               <input
                 type="number"
                                 inputMode="numeric"
                 min={minValue}
-                step="5"
-                value={current ?? (kind === "itemTime" ? planAutoSeconds : planRest)}
+                step={kind === "rounds" ? "1" : "5"}
+                value={
+                  current ??
+                  (kind === "rounds" ? maxItemSets : kind === "itemTime" ? planAutoSeconds : planRest)
+                }
                 onChange={(e) => apply(Math.max(minValue, Number(e.target.value) || minValue))}
               />
             </div>
@@ -7772,7 +8901,7 @@ function PlanCard({ plan, exBy, onDelete, onEdit, onStart, onLongPress, lastDone
         </div>
       </div>
       <div style={{ margin: "10px 0", color: "var(--text-dim)", fontSize: 13 }}>
-        {plan.items
+        {(Array.isArray(plan.items) ? plan.items : [])
           .map((i) => exBy[i.exerciseId]?.name)
           .filter(Boolean)
           .join(" · ")}
@@ -8363,6 +9492,7 @@ function LogView({
   exerciseNotes,
   exerciseSubgroupOverrides,
   onSetExerciseSubgroup,
+  onSetExerciseSubgroups,
   exerciseEquipmentOverrides,
   onSetExerciseEquipment,
   timeBasedExercises,
@@ -8402,6 +9532,10 @@ function LogView({
   const restBeepScheduledRef = useRef(hasPendingRestBeep());
   const [openNotes, setOpenNotes] = useState({});
   const [openRestPicker, setOpenRestPicker] = useState({});
+  // Offenes Satzart-Menue: { entryId, idx } oder null.
+  const [openSetKind, setOpenSetKind] = useState(null);
+  const [setKindMenuUp, setSetKindMenuUp] = useState(false);
+  const setKindMenuRef = useMenuFlip(openSetKind, setSetKindMenuUp);
   const [elapsedSec, setElapsedSec] = useState(0);
   const [selectedExerciseId, setSelectedExerciseId] = useState(null);
   const selectedExercise = exercises.find((e) => e.id === selectedExerciseId) || null;
@@ -8429,7 +9563,10 @@ function LogView({
   // The automatic (HIT/interval) run. Times are stored as an absolute
   // end timestamp rather than a countdown, so a throttled or backgrounded
   // tab still resumes with the correct remaining time.
-  const [autoRun, setAutoRun] = useState(null); // {phase,'work'|'rest', exerciseId, setIdx, endsAt}
+  // {phase: 'work'|'rest'|'waiting', entryId, exerciseId, setIdx, endsAt}
+  // entryId ist die Identitaet (welcher Platz im Zirkel), exerciseId steht
+  // nur fuer Name und Satzlaenge daneben.
+  const [autoRun, setAutoRun] = useState(null);
   const [autoLeft, setAutoLeft] = useState(0);
   // React state updates are async, but the ticker below runs every 200ms.
   // Without a synchronous mirror, a tick that fires between "Stopp" and the
@@ -8456,7 +9593,7 @@ function LogView({
     dragHandleProps: entryDragProps,
   } = useDragReorder({
     items: session ? session.entries : EMPTY_LIST,
-    getId: (e) => e.exerciseId,
+    getId: (e) => e.id,
     onReorder: (entries) => {
       if (!session) return;
       onUpdateSession({ ...session, entries });
@@ -8507,6 +9644,20 @@ function LogView({
     document.addEventListener("mousedown", closeOnOutsideClick);
     return () => document.removeEventListener("mousedown", closeOnOutsideClick);
   }, [openRestPicker]);
+
+  // Satzart-Menue: schliesst beim Tippen irgendwo daneben. Der oeffnende
+  // Klick trifft die Nummer selbst, kann also nicht sein eigenes Menue
+  // wieder zuklappen.
+  useEffect(() => {
+    if (!openSetKind) return;
+    const closeOnOutsideClick = (e) => {
+      if (!e.target.closest?.(".set-kind") && !e.target.closest?.(".set-kind-menu")) {
+        setOpenSetKind(null);
+      }
+    };
+    document.addEventListener("click", closeOnOutsideClick);
+    return () => document.removeEventListener("click", closeOnOutsideClick);
+  }, [openSetKind]);
 
   useEffect(() => {
     if (!settingsMenuOpen) return;
@@ -8599,7 +9750,7 @@ function LogView({
       while (j < entries.length - 1 && entries[j].supersetWithNext) j++;
       const groupSize = j - i + 1;
       for (let k = i; k <= j; k++) {
-        info[entries[k].exerciseId] = { groupSize, isFirst: k === i, isLast: k === j };
+        info[entries[k].id] = { groupSize, isFirst: k === i, isLast: k === j };
       }
       i = j + 1;
     }
@@ -8614,31 +9765,57 @@ function LogView({
     return !!session?.autoRun;
   };
 
-  // Finds the next set to run. Inside a superset group the exercises take
-  // turns (set 1 of A, set 1 of B, ... then set 2 of A), everything else is
-  // worked through exercise by exercise.
-  const findNextSet = (fromExerciseId, fromSetIdx) => {
+  // Finds the next set to run. Circuit order walks across all slots; inside
+  // a superset group the linked exercises take turns (set 1 of A, set 1 of B,
+  // then set 2 of A); everything else is worked through exercise by exercise.
+  const findNextSet = (fromEntryId, fromSetIdx) => {
     const entries = session?.entries || [];
-    const idx = entries.findIndex((e) => e.exerciseId === fromExerciseId);
+    const idx = entries.findIndex((e) => e.id === fromEntryId);
     if (idx === -1) return null;
 
     // Circuit: set 1 of every exercise, then set 2 of every exercise. This
     // is what a HIT workout actually looks like, and it needs no linking.
+    // Dieselbe Uebung darf mehrfach in der Liste stehen - der Zirkel laeuft
+    // ueber die Plaetze, nicht ueber die Uebungen, deshalb ergibt sich
+    // A -> B -> A -> C von selbst aus der Reihenfolge.
     if ((session?.autoOrder || "circuit") === "circuit") {
       for (let k = idx + 1; k < entries.length; k++) {
-        if (entries[k].sets[fromSetIdx]) return { exerciseId: entries[k].exerciseId, setIdx: fromSetIdx };
+        if (entries[k].sets[fromSetIdx]) return { entryId: entries[k].id, setIdx: fromSetIdx };
       }
       for (let k = 0; k < entries.length; k++) {
-        if (entries[k].sets[fromSetIdx + 1]) return { exerciseId: entries[k].exerciseId, setIdx: fromSetIdx + 1 };
+        if (entries[k].sets[fromSetIdx + 1]) return { entryId: entries[k].id, setIdx: fromSetIdx + 1 };
+      }
+      return null;
+    }
+
+    // Superset: die verknuepften Uebungen wechseln sich ab - Satz 1 von A,
+    // Satz 1 von B, dann Satz 2 von A. Ohne diesen Zweig liefe die Automatik
+    // erst A komplett durch und danach B, also genau kein Superset.
+    let groupStart = idx;
+    while (groupStart > 0 && entries[groupStart - 1]?.supersetWithNext) groupStart -= 1;
+    let groupEnd = idx;
+    while (groupEnd < entries.length - 1 && entries[groupEnd]?.supersetWithNext) groupEnd += 1;
+    if (groupEnd > groupStart) {
+      // Rest der Runde innerhalb der Gruppe.
+      for (let k = idx + 1; k <= groupEnd; k++) {
+        if (entries[k].sets[fromSetIdx]) return { entryId: entries[k].id, setIdx: fromSetIdx };
+      }
+      // Runde voll - naechster Satz, wieder beim ersten Platz der Gruppe.
+      for (let k = groupStart; k <= groupEnd; k++) {
+        if (entries[k].sets[fromSetIdx + 1]) return { entryId: entries[k].id, setIdx: fromSetIdx + 1 };
+      }
+      // Gruppe fertig - weiter hinter ihr.
+      for (let k = groupEnd + 1; k < entries.length; k++) {
+        if (entries[k].sets[0]) return { entryId: entries[k].id, setIdx: 0 };
       }
       return null;
     }
 
     // Classic: finish an exercise before moving on.
     const current = entries[idx];
-    if (current.sets[fromSetIdx + 1]) return { exerciseId: current.exerciseId, setIdx: fromSetIdx + 1 };
+    if (current.sets[fromSetIdx + 1]) return { entryId: current.id, setIdx: fromSetIdx + 1 };
     for (let k = idx + 1; k < entries.length; k++) {
-      if (entries[k].sets[0]) return { exerciseId: entries[k].exerciseId, setIdx: 0 };
+      if (entries[k].sets[0]) return { entryId: entries[k].id, setIdx: 0 };
     }
     return null;
   };
@@ -8654,34 +9831,65 @@ function LogView({
     return fromSet > 0 ? fromSet : 30;
   };
 
+  // Im Zirkel ist "Satz 3" in Wahrheit "Runde 3": Satz 1 aller Uebungen ist
+  // Runde 1. Die Rundenzahl ist deshalb nichts Eigenes, was gespeichert
+  // werden muesste - sie ergibt sich aus der laengsten Uebung der Liste.
+  // 0 heisst: kein Zirkel, also von Saetzen statt von Runden sprechen.
+  const roundTotal =
+    (session?.autoOrder || "circuit") === "circuit"
+      ? (session?.entries || []).reduce((m, e) => Math.max(m, entrySets(e).length), 0)
+      : 0;
+
   // True when the set that just finished closes a round (circuit) or an
   // exercise (classic order) - that is when the longer rest applies.
-  const finishesRound = (exerciseId, setIdx) => {
+  const finishesRound = (entryId, setIdx) => {
     const entries = session?.entries || [];
-    const idx = entries.findIndex((e) => e.exerciseId === exerciseId);
+    const idx = entries.findIndex((e) => e.id === entryId);
     if (idx === -1) return false;
     if ((session?.autoOrder || "circuit") === "circuit") return idx === entries.length - 1;
     return setIdx >= (entries[idx]?.sets?.length || 1) - 1;
   };
 
-  const restAfter = (exerciseId, setIdx) => {
-    const roundRest = toNum(session?.roundRestSeconds);
-    if (finishesRound(exerciseId, setIdx)) return Math.max(0, roundRest);
-    return Math.max(0, getRestDurationFor(exerciseId));
+  // Folgt auf diesen Satz direkt ein Dropsatz? Dann faellt die Pause weg.
+  const nextSetIsDrop = (entryId, setIdx) => {
+    const sets = (session?.entries || []).find((e) => e.id === entryId)?.sets;
+    return !!(Array.isArray(sets) && sets[setIdx + 1]?.dropset);
   };
 
-  const startAutoAt = (exerciseId, setIdx, force = false) => {
+  const restAfter = (entryId, setIdx) => {
+    if (nextSetIsDrop(entryId, setIdx)) return 0;
+    // Innerhalb eines Supersets wird ohne Pause zur naechsten Uebung
+    // gewechselt - dieselbe Regel, nach der auch das Abhaken von Hand die
+    // Pausenuhr erst nach dem letzten Platz der Gruppe startet.
+    if ((session?.autoOrder || "circuit") !== "circuit"
+        && supersetGroupInfo[entryId]
+        && supersetGroupInfo[entryId].groupSize > 1
+        && !supersetGroupInfo[entryId].isLast) {
+      return 0;
+    }
+    const roundRest = toNum(session?.roundRestSeconds);
+    if (finishesRound(entryId, setIdx)) return Math.max(0, roundRest);
+    return Math.max(0, getRestDurationFor(entryId));
+  };
+
+  const startAutoAt = (entryId, setIdx, force = false) => {
     if (!force && !autoRunRef.current) return;
-    const entry = (session?.entries || []).find((e) => e.exerciseId === exerciseId);
+    const entry = (session?.entries || []).find((e) => e.id === entryId);
     if (!entry) { applyAutoRun(null); return; }
     // Only exercises explicitly switched to reps wait for a manual tick;
     // everything else runs on the workout's set length.
     if (!entryAutoRuns(entry)) {
-      applyAutoRun({ phase: "waiting", exerciseId, setIdx, endsAt: null });
+      applyAutoRun({ phase: "waiting", entryId, exerciseId: entry.exerciseId, setIdx, endsAt: null });
       return;
     }
     const seconds = setDurationFor(entry);
-    applyAutoRun({ phase: "work", exerciseId, setIdx, endsAt: Date.now() + seconds * 1000 });
+    applyAutoRun({
+      phase: "work",
+      entryId,
+      exerciseId: entry.exerciseId,
+      setIdx,
+      endsAt: Date.now() + seconds * 1000,
+    });
   };
 
   const stopAuto = () => {
@@ -8690,11 +9898,30 @@ function LogView({
     releaseAudio();
   };
 
+  // Friert die laufende Phase an genau der Restzeit ein, statt sie wie
+  // "Stopp" zu verwerfen - man macht an derselben Stelle weiter, nicht am
+  // Anfang des nächsten unerledigten Satzes.
+  const pauseAuto = () => {
+    if (!autoRun || !autoRun.endsAt || autoRun.paused) return;
+    const left = Math.max(0, autoRun.endsAt - Date.now());
+    setAutoLeft(left);
+    applyAutoRun({ ...autoRun, paused: true, pausedLeftMs: left, endsAt: null });
+  };
+  const resumeAuto = () => {
+    if (!autoRun || !autoRun.paused) return;
+    applyAutoRun({
+      ...autoRun,
+      paused: false,
+      endsAt: Date.now() + (autoRun.pausedLeftMs || 0),
+      pausedLeftMs: undefined,
+    });
+  };
+
   const anyAutoRun = (session?.entries || []).some((e) => entryAutoRuns(e));
   const firstUnfinishedSet = () => {
     for (const entry of session?.entries || []) {
       const idx = entry.sets.findIndex((set) => !set.done);
-      if (idx !== -1) return { exerciseId: entry.exerciseId, setIdx: idx };
+      if (idx !== -1) return { entryId: entry.id, setIdx: idx };
     }
     return null;
   };
@@ -8711,29 +9938,29 @@ function LogView({
       if (left > 0) return;
 
       const entries = session?.entries || [];
-      const entry = entries.find((e) => e.exerciseId === autoRun.exerciseId);
+      const entry = entries.find((e) => e.id === autoRun.entryId);
       if (!entry) { stopAuto(); return; }
 
       if (autoRun.phase === "work") {
-        const restSeconds = restAfter(autoRun.exerciseId, autoRun.setIdx);
+        const restSeconds = restAfter(autoRun.entryId, autoRun.setIdx);
         // One beep when a set ends. If a rest follows, its end gets its own
         // beep; without a rest that single beep is all there is.
         // Deliberately a single tone: with no rest configured this is the
         // only signal, and two short beeps would read as two events.
         playBeep({ frequency: 880, duration: 0.32 });
         if (!entry.sets[autoRun.setIdx]?.done) {
-          toggleSetDoneSilently(autoRun.exerciseId, autoRun.setIdx);
+          toggleSetDoneSilently(autoRun.entryId, autoRun.setIdx);
         }
         if (restSeconds > 0) {
           applyAutoRun({
             ...autoRun,
             phase: "rest",
-            isRoundRest: finishesRound(autoRun.exerciseId, autoRun.setIdx),
+            isRoundRest: finishesRound(autoRun.entryId, autoRun.setIdx),
             endsAt: Date.now() + restSeconds * 1000,
           });
         } else {
-          const next = findNextSet(autoRun.exerciseId, autoRun.setIdx);
-          if (next) startAutoAt(next.exerciseId, next.setIdx);
+          const next = findNextSet(autoRun.entryId, autoRun.setIdx);
+          if (next) startAutoAt(next.entryId, next.setIdx);
           else { stopAuto(); playBeep({ frequency: 660, duration: 0.4 }); }
         }
         return;
@@ -8741,8 +9968,8 @@ function LogView({
 
       if (autoRun.phase === "rest") {
         playBell();
-        const next = findNextSet(autoRun.exerciseId, autoRun.setIdx);
-        if (next) startAutoAt(next.exerciseId, next.setIdx);
+        const next = findNextSet(autoRun.entryId, autoRun.setIdx);
+        if (next) startAutoAt(next.entryId, next.setIdx);
         else { stopAuto(); playBeep({ frequency: 660, duration: 0.4 }); }
       }
     };
@@ -8754,23 +9981,33 @@ function LogView({
   // Keeps the screen awake during an automatic run - a locked screen stops
   // iOS from playing the beeps.
   useEffect(() => {
-    const active = !!autoRun;
-    if (active && !wakeLockRef.current && navigator.wakeLock?.request) {
-      navigator.wakeLock.request("screen")
-        .then((lock) => { wakeLockRef.current = lock; })
-        .catch(() => { /* not granted - the run still works, just dimmer */ });
+    if (autoRun) {
+      if (!wakeLockRef.current && navigator.wakeLock?.request) {
+        navigator.wakeLock.request("screen")
+          .then((lock) => { wakeLockRef.current = lock; })
+          .catch(() => { /* not granted - the run still works, just dimmer */ });
+      }
+      return;
     }
-    if (!active && wakeLockRef.current) {
+    if (wakeLockRef.current) {
       wakeLockRef.current.release?.().catch(() => {});
       wakeLockRef.current = null;
     }
-    return () => {
-      if (!active && wakeLockRef.current) {
-        wakeLockRef.current.release?.().catch(() => {});
-        wakeLockRef.current = null;
-      }
-    };
   }, [autoRun]);
+
+  // Freigeben, wenn die Ansicht verschwindet. Der Zweig oben greift dafuer
+  // nicht: beim Abbau ist autoRun noch gesetzt, die Sperre bliebe also
+  // bestehen und der Bildschirm dauerhaft an.
+  useEffect(() => () => {
+    wakeLockRef.current?.release?.().catch(() => {});
+    wakeLockRef.current = null;
+  }, []);
+
+  // Endet das Training (beendet oder verworfen), waehrend die Automatik
+  // laeuft, hat sie nichts mehr, worauf sie zeigen koennte.
+  useEffect(() => {
+    if (!session && autoRunRef.current) stopAuto();
+  }, [session]);
 
   if (!session) {
     return (
@@ -8800,8 +10037,8 @@ function LogView({
 
   // Rest can be overridden per exercise (entry.restSeconds); exercises
   // without their own setting fall back to the session-wide default above.
-  const getRestDurationFor = (exerciseId) => {
-    const entry = session.entries.find((e) => e.exerciseId === exerciseId);
+  const getRestDurationFor = (entryId) => {
+    const entry = session.entries.find((e) => e.id === entryId);
     return entry && entry.restSeconds != null ? entry.restSeconds : restDuration;
   };
   // Schedules the rest-end tone on the audio clock right away instead of
@@ -8818,9 +10055,9 @@ function LogView({
     restBeepScheduledRef.current = scheduleRestBeep(seconds);
   };
 
-  const startRest = (exerciseId) => {
+  const startRest = (entryId) => {
     // Bei 0 Sekunden gibt es keine Pause - der Timer bleibt einfach aus.
-    const sec = exerciseId ? getRestDurationFor(exerciseId) : restDuration;
+    const sec = entryId ? getRestDurationFor(entryId) : restDuration;
     restBeepedRef.current = sec <= 0;
     armRestBeep(sec);
     setRestLeft(sec > 0 ? sec : 0);
@@ -8844,11 +10081,11 @@ function LogView({
     onSetRestEndsAt?.(left > 0 ? nextEnd : 0);
   };
 
-  const addSet = (exerciseId, warmup = false) => {
+  const addSet = (entryId, warmup = false) => {
     onUpdateSession({
       ...session,
       entries: session.entries.map((e) =>
-        e.exerciseId === exerciseId
+        e.id === entryId
           ? {
               ...e,
               sets: [
@@ -8866,11 +10103,11 @@ function LogView({
       ),
     });
   };
-  const updateSet = (exerciseId, idx, field, value) => {
+  const updateSet = (entryId, idx, field, value) => {
     onUpdateSession({
       ...session,
       entries: session.entries.map((e) =>
-        e.exerciseId === exerciseId
+        e.id === entryId
           ? {
               ...e,
               sets: e.sets.map((s, i) => (i === idx ? { ...s, [field]: value } : s)),
@@ -8881,11 +10118,11 @@ function LogView({
   };
   // Used by the automatic run: marks a set as done without kicking off the
   // normal rest timer, because the automatic run manages the rest itself.
-  const toggleSetDoneSilently = (exerciseId, idx) => {
+  const toggleSetDoneSilently = (entryId, idx) => {
     onUpdateSession({
       ...session,
       entries: session.entries.map((e) =>
-        e.exerciseId === exerciseId
+        e.id === entryId
           ? { ...e, sets: e.sets.map((set, i) => (i === idx ? { ...set, done: true } : set)) }
           : e
       ),
@@ -8895,11 +10132,11 @@ function LogView({
   // field can be cleared and freely retyped instead of the digit typed
   // right after clearing getting stuck after a leftover "0". Once the
   // field is left, normalize it to a clean, valid number.
-  const sanitizeSetField = (exerciseId, idx, field) => {
+  const sanitizeSetField = (entryId, idx, field) => {
     onUpdateSession({
       ...session,
       entries: session.entries.map((e) =>
-        e.exerciseId === exerciseId
+        e.id === entryId
           ? {
               ...e,
               sets: e.sets.map((s, i) => {
@@ -8914,23 +10151,24 @@ function LogView({
       ),
     });
   };
-  const removeSet = (exerciseId, idx) => {
+  const removeSet = (entryId, idx) => {
+    setOpenSetKind(null);
     onUpdateSession({
       ...session,
       entries: session.entries.map((e) =>
-        e.exerciseId === exerciseId
+        e.id === entryId
           ? { ...e, sets: e.sets.filter((_, i) => i !== idx) }
           : e
       ),
     });
   };
   const addExerciseToSession = (exerciseId) => {
-    if (session.entries.some((e) => e.exerciseId === exerciseId)) return;
     onUpdateSession({
       ...session,
       entries: [
         ...session.entries,
         {
+          id: uid(),
           exerciseId,
           targetSets: 3,
           targetReps: 10,
@@ -8946,10 +10184,10 @@ function LogView({
     setCreatingExercise(false);
     resetAddFilters();
   };
-  const removeExerciseFromSession = (exerciseId) => {
+  const removeExerciseFromSession = (entryId) => {
     onUpdateSession({
       ...session,
-      entries: session.entries.filter((e) => e.exerciseId !== exerciseId),
+      entries: session.entries.filter((e) => e.id !== entryId),
     });
   };
   // Swaps an exercise for a different one mid-workout. The target values
@@ -8957,12 +10195,11 @@ function LogView({
   // the workout, but the sets actually logged so far are cleared — they
   // were performed on the old exercise and would otherwise misattribute
   // that weight/reps to the new exercise's history and stats.
-  const replaceExerciseInSession = (oldExerciseId, newExerciseId) => {
-    if (session.entries.some((e) => e.exerciseId === newExerciseId)) return;
+  const replaceExerciseInSession = (entryId, newExerciseId) => {
     onUpdateSession({
       ...session,
       entries: session.entries.map((e) =>
-        e.exerciseId === oldExerciseId
+        e.id === entryId
           ? { ...e, exerciseId: newExerciseId, sets: [], notes: "" }
           : e
       ),
@@ -8970,12 +10207,12 @@ function LogView({
     setReplacingExerciseId(null);
     setAddExerciseQuery("");
   };
-  const toggleSetDone = (exerciseId, idx) => {
+  const toggleSetDone = (entryId, idx) => {
     let nowDone = false;
     onUpdateSession({
       ...session,
       entries: session.entries.map((e) =>
-        e.exerciseId === exerciseId
+        e.id === entryId
           ? {
               ...e,
               sets: e.sets.map((s, i) => {
@@ -8989,20 +10226,20 @@ function LogView({
     });
     // The automatic run parks on rep-based exercises; checking the set off
     // by hand is the signal to carry on.
-    if (autoRun && autoRun.phase === "waiting" && autoRun.exerciseId === exerciseId
+    if (autoRun && autoRun.phase === "waiting" && autoRun.entryId === entryId
         && autoRun.setIdx === idx && nowDone) {
       playBeep({ frequency: 880, duration: 0.22 });
-      const restSeconds = restAfter(exerciseId, idx);
+      const restSeconds = restAfter(entryId, idx);
       if (restSeconds > 0) {
         applyAutoRun({
           ...autoRun,
           phase: "rest",
-          isRoundRest: finishesRound(exerciseId, idx),
+          isRoundRest: finishesRound(entryId, idx),
           endsAt: Date.now() + restSeconds * 1000,
         });
       } else {
-        const next = findNextSet(exerciseId, idx);
-        if (next) startAutoAt(next.exerciseId, next.setIdx);
+        const next = findNextSet(entryId, idx);
+        if (next) startAutoAt(next.entryId, next.setIdx);
         else stopAuto();
       }
       return;
@@ -9010,32 +10247,47 @@ function LogView({
     // Inside a superset, sets are done back-to-back with no rest between
     // the linked exercises — the timer only starts once the last exercise
     // in the group has a set checked off.
-    const isLastInGroup = supersetGroupInfo[exerciseId]?.isLast ?? true;
-    if (nowDone && isLastInGroup) startRest(exerciseId);
+    const isLastInGroup = supersetGroupInfo[entryId]?.isLast ?? true;
+    // Vor einem Dropsatz gibt es keine Pause: das Gewicht wird sofort
+    // reduziert und weitergemacht - genau das macht ihn zum Dropsatz.
+    if (nowDone && isLastInGroup && !nextSetIsDrop(entryId, idx)) startRest(entryId);
   };
-  const toggleEntryNotes = (exerciseId) => {
-    setOpenNotes((s) => ({ ...s, [exerciseId]: !s[exerciseId] }));
+  const toggleEntryNotes = (entryId) => {
+    setOpenNotes((s) => ({ ...s, [entryId]: !s[entryId] }));
   };
-  const updateEntryNotes = (exerciseId, notes) => {
+  const updateEntryNotes = (entryId, notes) => {
+    const target = session.entries.find((e) => e.id === entryId);
     onUpdateSession({
       ...session,
       entries: session.entries.map((e) =>
-        e.exerciseId === exerciseId ? { ...e, notes } : e
+        e.id === entryId ? { ...e, notes } : e
       ),
     });
     // Written to the exercise as well, so it survives this workout. The copy
     // in the session still goes into the log, which keeps the history of
     // what the note said on a given day.
-    onUpdateExerciseNote?.(exerciseId, notes);
+    if (target) onUpdateExerciseNote?.(target.exerciseId, notes);
   };
-  const toggleWarmup = (exerciseId, idx) => {
+  const setEntryRir = (entryId, rir) => {
     onUpdateSession({
       ...session,
       entries: session.entries.map((e) =>
-        e.exerciseId === exerciseId
+        // Nochmal antippen nimmt die Angabe zurueck - eine falsch getippte
+        // Zahl waere sonst nicht mehr korrigierbar.
+        e.id === entryId ? { ...e, rir: e.rir === rir ? null : rir } : e
+      ),
+    });
+  };
+  const changeSetKind = (entryId, idx, kind) => {
+    setOpenSetKind(null);
+    setSetKindMenuUp(false);
+    onUpdateSession({
+      ...session,
+      entries: session.entries.map((e) =>
+        e.id === entryId
           ? {
               ...e,
-              sets: e.sets.map((s, i) => (i === idx ? { ...s, warmup: !s.warmup } : s)),
+              sets: e.sets.map((s, i) => (i === idx ? { ...s, ...setKindFlags(kind) } : s)),
             }
           : e
       ),
@@ -9048,11 +10300,11 @@ function LogView({
   const setRestDuration = (sec) => {
     onUpdateSession({ ...session, restSeconds: sec });
   };
-  const setEntryRestDuration = (exerciseId, sec) => {
+  const setEntryRestDuration = (entryId, sec) => {
     onUpdateSession({
       ...session,
       entries: session.entries.map((e) =>
-        e.exerciseId === exerciseId ? { ...e, restSeconds: sec } : e
+        e.id === entryId ? { ...e, restSeconds: sec } : e
       ),
     });
   };
@@ -9101,7 +10353,9 @@ function LogView({
       {autoRun && (
         <div className="auto-run-bar">
           <div className="auto-run-phase">
-            {autoRun.phase === "work"
+            {autoRun.paused
+              ? "Pausiert"
+              : autoRun.phase === "work"
               ? "Satz läuft"
               : autoRun.phase === "rest"
               ? autoRun.isRoundRest
@@ -9115,11 +10369,14 @@ function LogView({
               : `${Math.ceil(autoLeft / 1000)}s`}
           </div>
           <div className="auto-run-what">
-            {exBy[autoRun.exerciseId]?.name || "Übung"} · Satz {autoRun.setIdx + 1}
+            {exBy[autoRun.exerciseId]?.name || "Übung"} ·{" "}
+            {roundTotal > 0
+              ? `Runde ${Math.min(autoRun.setIdx + 1, roundTotal)} von ${roundTotal}`
+              : `Satz ${autoRun.setIdx + 1}`}
             {autoRun.phase === "waiting" && " · abhaken zum Fortfahren"}
           </div>
           <div className="rest-actions" style={{ marginTop: 8 }}>
-            {autoRun.phase !== "waiting" && (
+            {autoRun.phase !== "waiting" && !autoRun.paused && (
               <button
                 className="rest-btn"
                 onClick={() => applyAutoRun({ ...autoRun, endsAt: autoRun.endsAt + 15000 })}
@@ -9127,11 +10384,22 @@ function LogView({
                 +15s
               </button>
             )}
+            {autoRun.phase !== "waiting" && (
+              autoRun.paused ? (
+                <button className="rest-btn" onClick={resumeAuto}>
+                  <Play size={13} /> Fortsetzen
+                </button>
+              ) : (
+                <button className="rest-btn" onClick={pauseAuto}>
+                  <Pause size={13} /> Pause
+                </button>
+              )
+            )}
             <button
               className="rest-btn"
               onClick={() => {
-                const next = findNextSet(autoRun.exerciseId, autoRun.setIdx);
-                if (next) startAutoAt(next.exerciseId, next.setIdx);
+                const next = findNextSet(autoRun.entryId, autoRun.setIdx);
+                if (next) startAutoAt(next.entryId, next.setIdx);
                 else stopAuto();
               }}
             >
@@ -9241,6 +10509,9 @@ function LogView({
 
       {session.entries.map((entry, entryIndex) => {
         const ex = exBy[entry.exerciseId];
+        // Nummern haengen an der ganzen Satzliste (Dropsaetze bekommen eine
+        // Unternummer), nicht an der Position der einzelnen Zeile.
+        const setLabels = setNumberLabels(entry.sets);
         // Band work has no meaningful weight, so the field would only ever
         // hold a 0 and take space away from the reps.
         const usesWeight =
@@ -9274,18 +10545,18 @@ function LogView({
         const exercisePrs = describeExercisePRs(entry.sets, history, isTimeBased, hasWeightHere);
         const volumeChange = exerciseVolumeChange(entry.sets, history.lastSets, isTimeBased, usesWeight);
         const volumeChangeRounded = volumeChange === null ? null : Math.round(volumeChange);
-        const ssInfo = supersetGroupInfo[entry.exerciseId] || { groupSize: 1, isFirst: true, isLast: true };
+        const ssInfo = supersetGroupInfo[entry.id] || { groupSize: 1, isFirst: true, isLast: true };
         const isSuperset = ssInfo.groupSize > 1;
         return (
-          <React.Fragment key={entry.exerciseId}>
+          <React.Fragment key={entry.id}>
           {isSuperset && ssInfo.isFirst && (
             <div className="superset-label">
               <Repeat size={12} /> Superset ({ssInfo.groupSize} Übungen, keine Pause dazwischen)
             </div>
           )}
           <div
-            ref={(el) => { entryRefs.current[entry.exerciseId] = el; }}
-            className={`card entry-card ${draggingEntryId === entry.exerciseId ? "is-dragging" : ""} ${isSuperset ? "superset-card" : ""} ${isSuperset && !ssInfo.isLast ? "superset-card-linked" : ""}`}
+            ref={(el) => { entryRefs.current[entry.id] = el; }}
+            className={`card entry-card ${draggingEntryId === entry.id ? "is-dragging" : ""} ${isSuperset ? "superset-card" : ""} ${isSuperset && !ssInfo.isLast ? "superset-card-linked" : ""}`}
           >
             <div
               style={{
@@ -9299,7 +10570,7 @@ function LogView({
                 <span
                   className="drag-handle"
                   title="Gedrückt halten und ziehen, um die Reihenfolge zu ändern"
-                  {...entryDragProps(entry.exerciseId)}
+                  {...entryDragProps(entry.id)}
                 >
                   <GripVertical size={16} />
                 </span>
@@ -9339,19 +10610,19 @@ function LogView({
                   </span>
                 )}
               </div>
-              <div className={`entry-menu-wrap ${entryMenuUp && openEntryMenu === entry.exerciseId ? "drop-up" : ""}`}>
+              <div className={`entry-menu-wrap ${entryMenuUp && openEntryMenu === entry.id ? "drop-up" : ""}`}>
                 <button
                   className={`note-toggle ${(entry.restSeconds != null || entry.notes) ? "has-note" : ""}`}
                   onClick={(e) => {
-                    const opening = openEntryMenu !== entry.exerciseId;
+                    const opening = openEntryMenu !== entry.id;
                     setEntryMenuUp(opening ? shouldDropUp(e.target) : false);
-                    setOpenEntryMenu(opening ? entry.exerciseId : null);
+                    setOpenEntryMenu(opening ? entry.id : null);
                   }}
                   title="Optionen für diese Übung"
                 >
                   <MoreVertical size={15} />
                 </button>
-                {openEntryMenu === entry.exerciseId && (
+                {openEntryMenu === entry.id && (
                   <div
                     ref={entryMenuRef}
                     className="program-menu"
@@ -9360,7 +10631,7 @@ function LogView({
                     <button
                       className="program-menu-item"
                       onClick={() => {
-                        toggleEntryNotes(entry.exerciseId);
+                        toggleEntryNotes(entry.id);
                         setOpenEntryMenu(null);
                       }}
                     >
@@ -9370,17 +10641,17 @@ function LogView({
                     <button
                       className="program-menu-item"
                       onClick={() => {
-                        setOpenRestPicker((s) => ({ ...s, [entry.exerciseId]: true }));
+                        setOpenRestPicker((s) => ({ ...s, [entry.id]: true }));
                         setOpenEntryMenu(null);
                       }}
                     >
                       <Timer size={14} />
-                      Pausenzeit{entry.restSeconds != null ? ` · ${getRestDurationFor(entry.exerciseId)}s` : ""}
+                      Pausenzeit{entry.restSeconds != null ? ` · ${getRestDurationFor(entry.id)}s` : ""}
                     </button>
                     <button
                       className="program-menu-item"
                       onClick={() => {
-                        setReplacingExerciseId(entry.exerciseId);
+                        setReplacingExerciseId(entry.id);
                         setOpenEntryMenu(null);
                       }}
                     >
@@ -9393,7 +10664,7 @@ function LogView({
                         setOpenEntryMenu(null);
                         onRequestConfirm(
                           `„${ex.name}“ aus diesem Training entfernen?`,
-                          () => removeExerciseFromSession(entry.exerciseId)
+                          () => removeExerciseFromSession(entry.id)
                         );
                       }}
                     >
@@ -9404,7 +10675,7 @@ function LogView({
               </div>
             </div>
 
-            {replacingExerciseId === entry.exerciseId && (
+            {replacingExerciseId === entry.id && (
               <div style={{ marginTop: 10, paddingTop: 10, borderTop: "1px solid var(--border)" }}>
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
                   <span className="plan-title">Übung ersetzen</span>
@@ -9486,16 +10757,23 @@ function LogView({
                     .filter(addPickerMatches)
                     .slice(0, EXERCISE_PICKER_LIMIT)
                     .map((e) => {
-                      const already = session.entries.some((se) => se.exerciseId === e.id);
+                      // Beim Tauschen wird nicht mehr blockiert, wenn die
+                      // Uebung schon vorkommt - im Zirkel ist genau das
+                      // gewollt. Die Anzahl steht nur als Hinweis daneben.
+                      const addedCount = session.entries.filter((se) => se.exerciseId === e.id).length;
                       return (
                         <div className="ex-row" key={e.id}>
                           <span className="ex-name">{e.name}</span>
+                          {addedCount > 0 && (
+                            <span className="tag" title="So oft ist die Übung schon im Training">
+                              {addedCount}×
+                            </span>
+                          )}
                           <button
-                            className={`btn btn-sm ${already ? "btn-ghost" : "btn-primary"}`}
-                            disabled={already}
-                            onClick={() => replaceExerciseInSession(entry.exerciseId, e.id)}
+                            className="btn btn-sm btn-ghost"
+                            onClick={() => replaceExerciseInSession(entry.id, e.id)}
                           >
-                            {already ? "Schon drin" : "Wählen"}
+                            Wählen
                           </button>
                         </div>
                       );
@@ -9504,15 +10782,15 @@ function LogView({
               </div>
             )}
 
-            {openRestPicker[entry.exerciseId] && (
+            {openRestPicker[entry.id] && (
               <div className="chip-row rest-picker-inline" style={{ marginTop: 4, marginBottom: 8 }}>
                 {REST_PRESETS.map((sec) => (
                   <span
                     key={sec}
                     className={`chip ${(entry.restSeconds ?? restDuration) === sec ? "active" : ""}`}
                     onClick={() => {
-                      setEntryRestDuration(entry.exerciseId, sec);
-                      setOpenRestPicker((s) => ({ ...s, [entry.exerciseId]: false }));
+                      setEntryRestDuration(entry.id, sec);
+                      setOpenRestPicker((s) => ({ ...s, [entry.id]: false }));
                     }}
                   >
                     {sec === 0 ? "Aus" : `${sec}s`}
@@ -9522,8 +10800,8 @@ function LogView({
                   <span
                     className="chip"
                     onClick={() => {
-                      setEntryRestDuration(entry.exerciseId, null);
-                      setOpenRestPicker((s) => ({ ...s, [entry.exerciseId]: false }));
+                      setEntryRestDuration(entry.id, null);
+                      setOpenRestPicker((s) => ({ ...s, [entry.id]: false }));
                     }}
                   >
                     Standard nutzen
@@ -9537,11 +10815,15 @@ function LogView({
                 Letztes Mal ({fmtDate(history.lastDate)}):{" "}
                 {history.lastSets
                   .map((s) =>
-                    isTimeBased
+                    // Ohne Pfeil saehe ein Dropsatz in dieser Zeile wie ein
+                    // Leistungseinbruch aus.
+                    (s.dropset ? "↓" : "") +
+                    (isTimeBased
                       ? `${s.duration || 0}s`
-                      : `${s.weight || 0}kg×${s.reps || 0}`
+                      : `${s.weight || 0}kg×${s.reps || 0}`)
                   )
                   .join(", ")}
+                {fmtRir(history.lastRir) ? ` · ${fmtRir(history.lastRir)}` : ""}
               </div>
             )}
 
@@ -9549,13 +10831,13 @@ function LogView({
                 "Notiz bearbeiten") instead of its own button, so the entry
                 stays compact. Once a note has text it keeps showing here
                 permanently - no toggle needed to see it again later. */}
-            {(openNotes[entry.exerciseId] || entry.notes) && (
+            {(openNotes[entry.id] || entry.notes) && (
               <textarea
                 className="session-notes note-inline"
                 placeholder="Notiz zu dieser Übung, z. B. Ausführung, Beschwerden, Griffweite…"
-                autoFocus={openNotes[entry.exerciseId]}
+                autoFocus={openNotes[entry.id]}
                 value={entry.notes || history.lastNote || ""}
-                onChange={(e) => updateEntryNotes(entry.exerciseId, e.target.value)}
+                onChange={(e) => updateEntryNotes(entry.id, e.target.value)}
               />
             )}
 
@@ -9566,39 +10848,43 @@ function LogView({
                   style={{ marginBottom: 4 }}
                 >
                   <span />
-                  <span />
-                  <span />
                   <label className="field-label" style={{ margin: 0 }}>
                     {isTimeBased ? "Sek." : "Wdh."}
                   </label>
                   {usesWeight && (
                     <label className="field-label" style={{ margin: 0 }}>kg</label>
                   )}
+                  <span />
                 </div>
                 {entry.sets.map((s, idx) => {
                   const pr = setPrIndex === idx ? setPrList : null;
+                  const kind = setKind(s);
+                  const kindMenuOpen =
+                    openSetKind?.entryId === entry.id && openSetKind?.idx === idx;
                   return (
-                    <React.Fragment key={idx}>
-                    <SwipeableSetRow
-                      className={`set-row ${s.done ? "is-done" : ""} ${s.warmup ? "is-warmup" : ""} ${usesWeight ? "" : "set-row-noweight"}`}
-                      onSwipeRight={() => toggleSetDone(entry.exerciseId, idx)}
-                      onSwipeLeft={() => removeSet(entry.exerciseId, idx)}
+                    <div
+                      className={`set-line ${s.dropset ? "is-drop" : ""} ${kindMenuOpen ? "menu-open" : ""}`}
+                      key={idx}
                     >
-                      <span className="set-num">{idx + 1}</span>
+                    <SwipeableSetRow
+                      className={`set-row ${s.done ? "is-done" : ""} ${s.warmup ? "is-warmup" : ""} ${s.dropset ? "is-drop" : ""} ${usesWeight ? "" : "set-row-noweight"}`}
+                      onSwipeRight={() => toggleSetDone(entry.id, idx)}
+                      onSwipeLeft={() => removeSet(entry.id, idx)}
+                    >
+                      {/* Die Nummer ist zugleich der Schalter fuer die Satzart:
+                          antippen, dann Aufwaermsatz oder Dropsatz waehlen. */}
                       <span
-                        className={`set-check ${s.done ? "checked" : ""}`}
-                        onClick={() => toggleSetDone(entry.exerciseId, idx)}
-                        role="checkbox"
-                        aria-checked={!!s.done}
+                        className={`set-kind is-${kind} ${kindMenuOpen ? "is-open" : ""}`}
+                        onClick={() => {
+                          setSetKindMenuUp(false);
+                          setOpenSetKind(
+                            kindMenuOpen ? null : { entryId: entry.id, idx }
+                          );
+                        }}
+                        role="button"
+                        title="Satzart wählen"
                       >
-                        {s.done && <Check size={13} color="white" />}
-                      </span>
-                      <span
-                        className={`warmup-toggle ${s.warmup ? "active" : ""}`}
-                        onClick={() => toggleWarmup(entry.exerciseId, idx)}
-                        title="Als Aufwärmsatz markieren"
-                      >
-                        W
+                        {setLabels[idx]}
                       </span>
                       {/* One column, two meanings: a timed set has no rep
                           count, so the seconds take that slot instead of
@@ -9609,8 +10895,8 @@ function LogView({
                                 inputMode="numeric"
                           min="0"
                           value={s.duration ?? ""}
-                          onChange={(e) => updateSet(entry.exerciseId, idx, "duration", e.target.value)}
-                          onBlur={() => sanitizeSetField(entry.exerciseId, idx, "duration")}
+                          onChange={(e) => updateSet(entry.id, idx, "duration", e.target.value)}
+                          onBlur={() => sanitizeSetField(entry.id, idx, "duration")}
                         />
                       ) : (
                         <div style={{ position: "relative" }}>
@@ -9619,8 +10905,8 @@ function LogView({
                             min="0"
                             inputMode="numeric"
                             value={s.reps}
-                            onChange={(e) => updateSet(entry.exerciseId, idx, "reps", e.target.value)}
-                            onBlur={() => sanitizeSetField(entry.exerciseId, idx, "reps")}
+                            onChange={(e) => updateSet(entry.id, idx, "reps", e.target.value)}
+                            onBlur={() => sanitizeSetField(entry.id, idx, "reps")}
                           />
                           {pr && !usesWeight && (
                             <span
@@ -9641,8 +10927,8 @@ function LogView({
                           type="text"
                           inputMode="decimal"
                           value={s.weight}
-                          onChange={(e) => updateSet(entry.exerciseId, idx, "weight", e.target.value)}
-                          onBlur={() => sanitizeSetField(entry.exerciseId, idx, "weight")}
+                          onChange={(e) => updateSet(entry.id, idx, "weight", e.target.value)}
+                          onBlur={() => sanitizeSetField(entry.id, idx, "weight")}
                         />
                         {pr && (
                           <span
@@ -9657,16 +10943,71 @@ function LogView({
                           </span>
                         )}
                       </div>
+                      <span
+                        className={`set-check ${s.done ? "checked" : ""}`}
+                        onClick={() => toggleSetDone(entry.id, idx)}
+                        role="checkbox"
+                        aria-checked={!!s.done}
+                      >
+                        {s.done && <Check size={13} color="white" />}
+                      </span>
                     </SwipeableSetRow>
-                    </React.Fragment>
+                    {kindMenuOpen && (
+                      <div
+                        className={`set-kind-menu ${setKindMenuUp ? "drop-up" : ""}`}
+                        ref={setKindMenuRef}
+                      >
+                        {SET_KINDS.filter(
+                          ([id]) =>
+                            id !== kind &&
+                            (id !== "dropset" || canBeDropset(entry.sets, idx))
+                        ).map(([id, label]) => (
+                          <button
+                            key={id}
+                            className={`set-kind-option is-${id}`}
+                            onClick={() => changeSetKind(entry.id, idx, id)}
+                          >
+                            <span className="set-kind-dot" />
+                            {label}
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                    </div>
                   );
                 })}
               </div>
             )}
 
+            {/* Die Frage taucht erst auf, wenn die Uebung durch ist - vorher
+                waere sie nur im Weg. Nur eine Angabe pro Uebung, am letzten
+                Satz: 1RM-Schaetzungen sind nur nahe am Versagen belastbar,
+                bei 3-4 in Reserve raet man ohnehin (siehe KONZEPT.md). */}
+            {!isTimeBased && entry.sets.length > 0
+              && entry.sets.every((s) => s.done)
+              && entry.sets.some((s) => s.done && !s.warmup) && (
+              <div className="rir-ask">
+                <span className="rir-ask-label" title="Wiederholungen in Reserve im letzten Satz – 0 heißt bis zum Muskelversagen">
+                  RIR
+                </span>
+                <div className="chip-row rir-ask-row">
+                  {RIR_OPTIONS.map((value) => (
+                    <span
+                      key={value}
+                      className={`chip chip-sm ${entry.rir === value ? "active" : ""}`}
+                      onClick={() => setEntryRir(entry.id, value)}
+                      title={value === 0 ? "Bis zum Muskelversagen" : undefined}
+                    >
+                      {rirLabel(value)}
+                    </span>
+                  ))}
+                </div>
+              </div>
+            )}
+
             <button
               className="btn btn-ghost btn-block btn-sm"
-              onClick={() => addSet(entry.exerciseId)}
+              onClick={() => addSet(entry.id)}
             >
               <Plus size={14} /> Satz hinzufügen
             </button>
@@ -9686,7 +11027,7 @@ function LogView({
               unlockAudio();
               playBeep({ frequency: 660, duration: 0.12, volume: 0.15 });
               const first = firstUnfinishedSet();
-              if (first) startAutoAt(first.exerciseId, first.setIdx, true);
+              if (first) startAutoAt(first.entryId, first.setIdx, true);
             }}
           >
             <Play size={16} /> Automatik starten
@@ -9738,7 +11079,7 @@ function LogView({
               <NewExerciseForm
                 exercises={exercises}
                 onAddCustom={onAddCustom}
-                onSetExerciseSubgroup={onSetExerciseSubgroup}
+                onSetExerciseSubgroups={onSetExerciseSubgroups}
                 onDone={(created) => {
                   setCreatingExercise(false);
                   // The parent's exercise list has not re-rendered yet, so the
@@ -9826,17 +11167,20 @@ function LogView({
                 .filter(addPickerMatches)
                 .slice(0, EXERCISE_PICKER_LIMIT)
                 .map((e) => {
-                  const already = session.entries.some((se) => se.exerciseId === e.id);
+                  const addedCount = session.entries.filter((se) => se.exerciseId === e.id).length;
                   return (
                     <div className="ex-row" key={e.id}>
                       <span className="ex-name">{e.name}</span>
+                      {addedCount > 0 && (
+                        <span className="tag" title="So oft ist die Übung schon im Training">
+                          {addedCount}×
+                        </span>
+                      )}
                       <button
-                        className={`btn btn-sm ${already ? "btn-ghost" : "btn-primary"}`}
-                        disabled={already}
+                        className="btn btn-sm btn-ghost"
                         onClick={() => addExerciseToSession(e.id)}
                       >
-                        {already ? <Check size={14} /> : <Plus size={14} />}
-                        {already ? "Drin" : "Add"}
+                        <Plus size={14} /> Add
                       </button>
                     </div>
                   );
@@ -9908,7 +11252,7 @@ function LogView({
 // exercise detail sheet, so both always show identical numbers.
 // ---------------------------------------------------------------------------
 
-const GYM_LINE_COLORS = ["#c1652e", "#3b82f6", "#16a34a", "#a855f7", "#e11d48"];
+const GYM_LINE_COLORS = ["#b25a26", "#41707d", "#4f7a48", "#6f5f92", "#9a7414"];
 
 // Recharts takes plain colour strings rather than CSS variables, so the
 // current theme's values are read off the stylesheet once per render.
@@ -9922,10 +11266,18 @@ function useChartColors(theme) {
       return value || fallback;
     };
     return {
-      grid: read("--surface-alt", "#26242b"),
-      axis: read("--text-dim", "#9a948d"),
-      tooltipBg: read("--surface", "#1d1c21"),
-      tooltipBorder: read("--border", "#37343c"),
+      grid: read("--border", "rgba(60,60,67,0.15)"),
+      axis: read("--text-faint", "#a3a3a8"),
+      tooltipBg: read("--elevated", "#ffffff"),
+      tooltipBorder: read("--border", "rgba(60,60,67,0.15)"),
+      series: {
+        accent: read("--chart-accent", "#b25a26"),
+        gold: read("--chart-gold", "#9a7414"),
+        teal: read("--chart-teal", "#41707d"),
+        violet: read("--chart-violet", "#6f5f92"),
+        green: read("--chart-green", "#4f7a48"),
+        green2: read("--chart-green-2", "#3c6b52"),
+      },
     };
   }, [theme]);
 }
@@ -9975,7 +11327,11 @@ function ExerciseCharts({ logs, exerciseId, isTimeBased, theme, gyms = [], gymIn
   // single line that jumps up and down for no real reason. Exercises marked
   // as being the same everywhere (bodyweight, bands) are the exception -
   // there the split would tear one continuous progression into fragments.
-  const relevantLogs = logs.filter((l) => logEntries(l).some((e) => e.exerciseId === selected));
+  // Nur Trainings, in denen wirklich ein Satz dieser Uebung abgehakt wurde -
+  // sonst haenge ein 0-Punkt in der Kurve, wo die Uebung nur geplant war.
+  const relevantLogs = logs.filter(
+    (l) => performedWorkingSets(logSetsFor(l, selected)).length > 0
+  );
   const gymKeys = [...new Set(relevantLogs.map((l) => l.gymId || "none"))];
   const splitByGym = gymKeys.length > 1 && !gymIndependent;
   const gymLabel = (key) =>
@@ -9983,8 +11339,10 @@ function ExerciseCharts({ logs, exerciseId, isTimeBased, theme, gyms = [], gymIn
 
   const chartData = relevantLogs
     .map((l) => {
-      const entry = logEntries(l).find((e) => e.exerciseId === selected);
-      const workingSets = entrySets(entry).filter((s) => !s.warmup);
+      // Eine Uebung kann mehrfach im selben Training stehen (Zirkel: A, B, A).
+      // Deshalb alle Plaetze zusammennehmen - ein .find() wuerde die Saetze
+      // der zweiten Kopie still aus allen Charts entfernen.
+      const workingSets = performedWorkingSets(logSetsFor(l, selected));
       const maxWeight = selectedIsTimeBased
         ? 0
         : Math.max(0, ...workingSets.map((s) => s.weight || 0));
@@ -10042,24 +11400,28 @@ function ExerciseCharts({ logs, exerciseId, isTimeBased, theme, gyms = [], gymIn
   // and band work has no weight, so volume and 1RM would be flat zero lines -
   // there the rep counts are what actually shows progress.
   const hasAnyWeight = relevantLogs.some((l) =>
-    entrySets(logEntries(l).find((e) => e.exerciseId === selected))
-      .some((x) => !x.warmup && toNum(x.weight) > 0)
+    performedWorkingSets(logSetsFor(l, selected)).some((x) => toNum(x.weight) > 0)
   );
   const cards = selectedIsTimeBased
     ? [
-        { key: "maxDuration", title: "Längster Satz (Sek.)", color: "#c1652e" },
-        { key: "totalDuration", title: "Gesamtzeit pro Training (Sek.)", color: "#e8c547" },
+        { key: "maxDuration", title: "Längster Satz (Sek.)", color: chartColors.series.accent },
+        { key: "totalDuration", title: "Gesamtzeit pro Training (Sek.)", color: chartColors.series.gold },
       ]
     : !hasAnyWeight
     ? [
-        { key: "maxReps", title: "Maximale Wdh. pro Satz", color: "#c1652e" },
-        { key: "totalReps", title: "Gesamte Wdh. pro Training", color: "#e8c547" },
+        { key: "maxReps", title: "Maximale Wdh. pro Satz", color: chartColors.series.accent },
+        { key: "totalReps", title: "Gesamte Wdh. pro Training", color: chartColors.series.gold },
       ]
     : [
-        { key: "maxSetVolume", title: "Maximales Satzvolumen", color: "#5b9aa8" },
-        { key: "best1RM", title: "Geschätztes 1RM", color: "#9a7bc4" },
-        { key: "totalVolume", title: "Gesamtvolumen pro Training", color: "#e8c547" },
-        { key: "maxWeight", title: "Maximalgewicht pro Training (kg)", color: "#c1652e" },
+        { key: "maxSetVolume", title: "Maximales Satzvolumen", color: chartColors.series.teal },
+        { key: "best1RM", title: "Geschätztes 1RM", color: chartColors.series.violet },
+        { key: "totalVolume", title: "Gesamtvolumen pro Training", color: chartColors.series.gold },
+        { key: "maxWeight", title: "Maximalgewicht pro Training (kg)", color: chartColors.series.accent },
+        // Reps werden bei Gewichtsübungen längst pro Satz erfasst (siehe
+        // workingSets oben), standen als eigene Karte bisher aber nur bei
+        // reinen Bodyweight-Übungen zur Verfügung.
+        { key: "maxReps", title: "Maximale Wdh. pro Satz", color: chartColors.series.green },
+        { key: "totalReps", title: "Gesamte Wdh. pro Training", color: chartColors.series.green2 },
       ];
 
   return chartData.length === 0 ? (
@@ -10212,8 +11574,10 @@ const MENU_SPACE_NEEDED = 300;
 // The usable area ends at the top of the navigation bar, not at the bottom
 // of the window - measuring against the window let menus slide underneath it.
 function usableBottom() {
-  const nav = document.querySelector(".fab-nav");
-  const navTop = nav ? nav.getBoundingClientRect().top : window.innerHeight;
+  // Das Dock zuerst: liegt eine Trainings-Leiste über der Navigation, ist
+  // deren Oberkante die eigentliche Grenze, nicht die der Navigation.
+  const dock = document.querySelector(".bottom-dock") || document.querySelector(".fab-nav");
+  const navTop = dock ? dock.getBoundingClientRect().top : window.innerHeight;
   return Math.min(navTop, window.innerHeight) - 8;
 }
 
@@ -10497,6 +11861,15 @@ function BreathingSessionView({ session, onFinish, onCancel }) {
   const goNext = () => {
     if (isOpen) maxOpenSecondsRef.current = Math.max(maxOpenSecondsRef.current, elapsed);
     const nextIndex = phaseIndex + 1;
+    // Vibriert für die Phase, die hier gerade endet - egal ob per Timer oder
+    // per Tippen auf "Weiter" bei einer offenen Phase. Die letzte Phase der
+    // letzten Runde bekommt das kräftigere Ende-Muster statt des normalen.
+    if (phase?.vibrate && navigator.vibrate) {
+      const isExerciseEnd = nextIndex >= phases.length && round >= totalRounds;
+      try {
+        navigator.vibrate(isExerciseEnd ? BREATHING_EXERCISE_END_VIBRATION : BREATHING_PHASE_VIBRATION);
+      } catch (_) {}
+    }
     if (nextIndex < phases.length) {
       setPhaseIndex(nextIndex);
       setPhaseStart(Date.now());
@@ -10640,16 +12013,21 @@ function BreathingEditor({ initial, onSave, onCancel }) {
   const [name, setName] = useState(initial?.name || "");
   const [rounds, setRounds] = useState(String(initial?.rounds ?? 4));
   const [display, setDisplay] = useState(initial?.display || "line");
+  // Zentraler Schalter: setzt beim Umschalten alle Phasen auf denselben Wert
+  // (siehe toggleVibrateDefault) und ist der Startwert für neu hinzugefügte
+  // Phasen - ist aber selbst kein "lebender" Aggregatwert, der bei
+  // individuellem Abweichen einzelner Phasen automatisch nachgeführt wird.
+  const [vibrateOnPhaseEnd, setVibrateOnPhaseEnd] = useState(!!initial?.vibrateOnPhaseEnd);
   const [phases, setPhases] = useState(
     initial?.phases?.length
-      ? initial.phases.map((p) => ({ ...p, seconds: p.seconds == null ? "" : String(p.seconds) }))
-      : [{ label: "Einatmen", direction: "in", seconds: "4" }]
+      ? initial.phases.map((p) => ({ ...p, seconds: p.seconds == null ? "" : String(p.seconds), vibrate: !!p.vibrate }))
+      : [{ label: "Einatmen", direction: "in", seconds: "4", vibrate: false }]
   );
 
   const updatePhase = (idx, patch) =>
     setPhases(phases.map((p, i) => (i === idx ? { ...p, ...patch } : p)));
   const addPhase = () =>
-    setPhases([...phases, { label: "", direction: "hold", seconds: "4" }]);
+    setPhases([...phases, { label: "", direction: "hold", seconds: "4", vibrate: vibrateOnPhaseEnd }]);
   const removePhase = (idx) => setPhases(phases.filter((_, i) => i !== idx));
   const movePhase = (idx, delta) => {
     const target = idx + delta;
@@ -10657,6 +12035,11 @@ function BreathingEditor({ initial, onSave, onCancel }) {
     const next = [...phases];
     [next[idx], next[target]] = [next[target], next[idx]];
     setPhases(next);
+  };
+  const toggleVibrateDefault = () => {
+    const next = !vibrateOnPhaseEnd;
+    setVibrateOnPhaseEnd(next);
+    setPhases(phases.map((p) => ({ ...p, vibrate: next })));
   };
 
   const canSave = name.trim() && phases.length > 0;
@@ -10667,12 +12050,16 @@ function BreathingEditor({ initial, onSave, onCancel }) {
       name: name.trim(),
       display,
       rounds: Math.max(1, toNum(rounds) || 1),
+      vibrateOnPhaseEnd,
       phases: phases.map((p) => ({
         label: p.label.trim() || BREATHING_DIRECTIONS.find((d) => d.id === p.direction)?.label || "Phase",
         direction: p.direction,
         // Leeres Feld heißt bewusst "offen" - das ist die Wim-Hof-Phase,
         // bei der man selbst weitertippt statt einem Countdown zu folgen.
+        // Kommazahlen sind erlaubt (toNum wandelt "4,5" -> 4.5), die
+        // Session-Anzeige läuft ohnehin über echte Sekundenbruchteile.
         seconds: String(p.seconds).trim() === "" ? null : Math.max(1, toNum(p.seconds) || 1),
+        vibrate: !!p.vibrate,
       })),
     });
   };
@@ -10694,6 +12081,11 @@ function BreathingEditor({ initial, onSave, onCancel }) {
           </span>
         ))}
       </div>
+
+      <label className="time-toggle-row" style={{ marginTop: 12 }}>
+        <input type="checkbox" checked={vibrateOnPhaseEnd} onChange={toggleVibrateDefault} />
+        Vibration am Ende jeder Phase
+      </label>
 
       <label className="field-label" style={{ marginTop: 8 }}>Phasen</label>
       <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
@@ -10732,7 +12124,7 @@ function BreathingEditor({ initial, onSave, onCancel }) {
             <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
               <input
                 type="text"
-                inputMode="numeric"
+                inputMode="decimal"
                 placeholder="Sekunden"
                 value={p.seconds}
                 onChange={(e) => updatePhase(idx, { seconds: e.target.value })}
@@ -10746,6 +12138,14 @@ function BreathingEditor({ initial, onSave, onCancel }) {
                 Offen
               </span>
             </div>
+            <label className="time-toggle-row" style={{ marginTop: 6, fontSize: 12.5 }}>
+              <input
+                type="checkbox"
+                checked={!!p.vibrate}
+                onChange={(e) => updatePhase(idx, { vibrate: e.target.checked })}
+              />
+              Vibration am Ende dieser Phase
+            </label>
           </div>
         ))}
       </div>
@@ -11023,13 +12423,18 @@ function ProgressView({
     [logs, excludedPlanIds]
   );
 
+  // Grenze für den Vergleichszeitraum - siehe logsHistoryWeeks. Muss vor der
+  // Serie berechnet werden, weil deren Länge jetzt von der echten Historie
+  // abhängt (wegen "Gesamt" in MUSCLE_COMPARE_OPTIONS).
+  const setsHistoryWeeks = useMemo(() => logsHistoryWeeks(hypertrophyLogs), [hypertrophyLogs]);
   // Weekly set count per muscle group - the number that actually steers
   // hypertrophy training, and the one gap that showed up when looking at
-  // what the app already knows but never displays. weekCount=21 so the
-  // "vor 20 Wochen" comparison chip below always has enough history.
+  // what the app already knows but never displays. weekCount deckt jetzt
+  // immer mindestens 52 Wochen ab, plus die komplette echte Historie für
+  // die Chip-Option "Gesamt".
   const weeklySetSeries = useMemo(
-    () => getWeeklySetSeries(hypertrophyLogs, exBy, exerciseSubgroupOverrides, 21),
-    [hypertrophyLogs, exBy, exerciseSubgroupOverrides]
+    () => getWeeklySetSeries(hypertrophyLogs, exBy, exerciseSubgroupOverrides, muscleSeriesWeekCount(setsHistoryWeeks)),
+    [hypertrophyLogs, exBy, exerciseSubgroupOverrides, setsHistoryWeeks]
   );
   // Same shape as the old single-window version (g.sets/sg.sets) so the
   // existing render code keeps working, plus .values for sparkline/badge/
@@ -11045,10 +12450,6 @@ function ProgressView({
     [weeklySetSeries]
   );
   const weeklySetsTotal = weeklySetsByGroup.reduce((sum, g) => sum + g.sets, 0);
-  // Grenze für den Vergleichszeitraum, wie bei der Belastungs-Historie -
-  // verhindert, dass Wochen vor dem ersten (nicht ausgeschlossenen)
-  // Trainingseintrag als "0" in den Schnitt einfließen.
-  const setsHistoryWeeks = useMemo(() => logsHistoryWeeks(hypertrophyLogs), [hypertrophyLogs]);
   const [setsCompareWeeks, setSetsCompareWeeks] = useState(1);
   // Collapsed by default - opening a group is a deliberate look at detail,
   // not something that should greet you on every visit to the tab.
@@ -11057,32 +12458,50 @@ function ProgressView({
     setExpandedGroups((s) => ({ ...s, [id]: !s[id] }));
   // Tapping a muscle group opens a full chart (axes + tooltip) of its
   // weekly set history - the sparkline next to it is deliberately minimal.
+  // Gezoomt auf setsCompareWeeks (dieselbe Auswahl wie die Chips über der
+  // Liste), damit das Chart genau den Zeitraum zeigt, der gerade ausgewählt
+  // ist - inklusive "Gesamt", das die komplette Reihe unverändert liefert.
   const [chartGroup, setChartGroup] = useState(null);
   const chartColors = useChartColors(theme);
   const chartGroupData = useMemo(() => {
     if (!chartGroup) return [];
-    const weekCount = chartGroup.values.length;
-    return chartGroup.values.map((v, i) => {
+    const zoomed = zoomWeekSeries(chartGroup.values, setsCompareWeeks);
+    const weekCount = zoomed.length;
+    return zoomed.map((v, i) => {
       const weeksAgo = weekCount - 1 - i;
       const ts = Date.now() - weeksAgo * LOAD_WEEK_MS;
       return { date: fmtDate(new Date(ts).toISOString()), sets: v };
     });
-  }, [chartGroup]);
+  }, [chartGroup, setsCompareWeeks]);
 
-  // Belastung pro Muskelgruppe - siehe getMuscleLoadSeries für die Herleitung
-  // der Formel. 12 Wochen Reichweite genügt für "Schnitt der letzten 8
-  // Wochen" als weitesten Vergleich, den die Chip-Reihe unten anbietet.
-  const muscleLoadSeries = useMemo(
-    () => getMuscleLoadSeries(logs, exBy, exerciseSubgroupOverrides, timeBasedExercises, 12),
-    [logs, exBy, exerciseSubgroupOverrides, timeBasedExercises]
-  );
-  // Grenze für den Vergleichszeitraum - siehe logsHistoryWeeks. Verhindert,
-  // dass Wochen vor dem allerersten Trainingseintrag als "0" mitgezählt werden.
+  // Grenze für den Vergleichszeitraum - siehe logsHistoryWeeks. Muss vor der
+  // Serie berechnet werden, weil deren Länge jetzt von der echten Historie
+  // abhängt (wegen "Gesamt" in MUSCLE_COMPARE_OPTIONS).
   const loadHistoryWeeks = useMemo(() => logsHistoryWeeks(logs), [logs]);
+  // Belastung pro Muskelgruppe - siehe getMuscleLoadSeries für die Herleitung
+  // der Formel. weekCount deckt jetzt immer mindestens 52 Wochen ab, plus die
+  // komplette echte Historie für die Chip-Option "Gesamt".
+  const muscleLoadSeries = useMemo(
+    () => getMuscleLoadSeries(logs, exBy, exerciseSubgroupOverrides, timeBasedExercises, muscleSeriesWeekCount(loadHistoryWeeks)),
+    [logs, exBy, exerciseSubgroupOverrides, timeBasedExercises, loadHistoryWeeks]
+  );
   const [loadCompareWeeks, setLoadCompareWeeks] = useState(1);
   const [expandedLoadGroups, setExpandedLoadGroups] = useState({});
   const toggleLoadGroupExpanded = (id) =>
     setExpandedLoadGroups((s) => ({ ...s, [id]: !s[id] }));
+  // Wie bei "Sätze pro Muskelgruppe": Tippen auf eine Zeile öffnet ein
+  // Vollbild-Chart, gezoomt auf loadCompareWeeks.
+  const [loadChartGroup, setLoadChartGroup] = useState(null);
+  const loadChartGroupData = useMemo(() => {
+    if (!loadChartGroup) return [];
+    const zoomed = zoomWeekSeries(loadChartGroup.values, loadCompareWeeks);
+    const weekCount = zoomed.length;
+    return zoomed.map((v, i) => {
+      const weeksAgo = weekCount - 1 - i;
+      const ts = Date.now() - weeksAgo * LOAD_WEEK_MS;
+      return { date: fmtDate(new Date(ts).toISOString()), load: v };
+    });
+  }, [loadChartGroup, loadCompareWeeks]);
 
   // Plateau-/Überlastungs-Signal für die aktuell aufgeklappte Einzelübung
   // (siehe detectLoadSignal). Eigene, übungsspezifische Historienlänge statt
@@ -11199,7 +12618,7 @@ function ProgressView({
       <div className="card">
         <span className="plan-title">Sätze pro Muskelgruppe (7 Tage)</span>
         <div className="chip-row" style={{ marginTop: 10, marginBottom: 4 }}>
-          {WEEK_COMPARE_OPTIONS.map(([weeks, label]) => (
+          {MUSCLE_COMPARE_OPTIONS.map(([weeks, label]) => (
             <span
               key={weeks}
               className={`chip chip-sm ${setsCompareWeeks === weeks ? "active" : ""}`}
@@ -11223,7 +12642,7 @@ function ProgressView({
                   <div
                     className="muscle-week-row-v2 muscle-week-row-v2-clickable"
                     onClick={() => setChartGroup(g)}
-                    title="Tippen für den vollständigen Verlauf"
+                    title="Tippen für den Verlauf im gewählten Zeitraum"
                   >
                     <span className="muscle-week-label">{g.label}</span>
                     <Sparkline values={g.values} />
@@ -11262,24 +12681,15 @@ function ProgressView({
       <div className="card">
         <span className="plan-title">Belastung pro Muskelgruppe</span>
         <div className="chip-row" style={{ marginTop: 10, marginBottom: 4 }}>
-          <span
-            className={`chip chip-sm ${loadCompareWeeks === 1 ? "active" : ""}`}
-            onClick={() => setLoadCompareWeeks(1)}
-          >
-            vs. Vorwoche
-          </span>
-          <span
-            className={`chip chip-sm ${loadCompareWeeks === 4 ? "active" : ""}`}
-            onClick={() => setLoadCompareWeeks(4)}
-          >
-            vs. Schnitt 4 Wochen
-          </span>
-          <span
-            className={`chip chip-sm ${loadCompareWeeks === 8 ? "active" : ""}`}
-            onClick={() => setLoadCompareWeeks(8)}
-          >
-            vs. Schnitt 8 Wochen
-          </span>
+          {MUSCLE_COMPARE_OPTIONS.map(([weeks, label]) => (
+            <span
+              key={weeks}
+              className={`chip chip-sm ${loadCompareWeeks === weeks ? "active" : ""}`}
+              onClick={() => setLoadCompareWeeks(weeks)}
+            >
+              {label}
+            </span>
+          ))}
         </div>
         {muscleLoadSeries.every((g) => g.current === 0) ? (
           <div className="empty-state" style={{ padding: "14px 0" }}>
@@ -11294,17 +12704,23 @@ function ProgressView({
                 <div key={g.id}>
                   <div
                     className="muscle-load-row muscle-load-row-clickable"
-                    onClick={() => toggleLoadGroupExpanded(g.id)}
+                    onClick={() => setLoadChartGroup(g)}
+                    title="Tippen für den Verlauf im gewählten Zeitraum"
                   >
                     <span className="muscle-week-label">{g.label}</span>
                     <Sparkline values={g.values} />
                     <LoadChangeBadge change={change} />
                     <LoadSignalBadge signal={detectLoadSignal(g.values, loadHistoryWeeks)} />
-                    {isExpanded ? (
-                      <ChevronDown size={14} color="var(--text-dim)" />
-                    ) : (
-                      <ChevronRight size={14} color="var(--text-dim)" />
-                    )}
+                    <span
+                      className="muscle-week-chevron"
+                      onClick={(e) => { e.stopPropagation(); toggleLoadGroupExpanded(g.id); }}
+                    >
+                      {isExpanded ? (
+                        <ChevronDown size={14} color="var(--text-dim)" />
+                      ) : (
+                        <ChevronRight size={14} color="var(--text-dim)" />
+                      )}
+                    </span>
                   </div>
                   {isExpanded && (
                     <div className="muscle-week-subs">
@@ -11417,11 +12833,29 @@ function ProgressView({
 
       {chartGroup && (
         <Modal title={`${chartGroup.label} – Sätze pro Woche`} onClose={() => setChartGroup(null)} width={420}>
+          <div className="chip-row" style={{ marginTop: 0, marginBottom: 10 }}>
+            {MUSCLE_COMPARE_OPTIONS.map(([weeks, label]) => (
+              <span
+                key={weeks}
+                className={`chip chip-sm ${setsCompareWeeks === weeks ? "active" : ""}`}
+                onClick={() => setSetsCompareWeeks(weeks)}
+              >
+                {label}
+              </span>
+            ))}
+          </div>
           <div style={{ height: 220 }}>
             <ResponsiveContainer width="99%" height="100%" debounce={1}>
               <LineChart data={chartGroupData} margin={{ top: 6, right: 4, left: 0, bottom: 0 }}>
                 <CartesianGrid strokeDasharray="3 3" stroke={chartColors.grid} vertical={false} />
-                <XAxis dataKey="date" stroke={chartColors.axis} fontSize={11} axisLine={false} tickLine={false} />
+                <XAxis
+                  dataKey="date"
+                  stroke={chartColors.axis}
+                  fontSize={11}
+                  axisLine={false}
+                  tickLine={false}
+                  interval={Math.max(0, Math.ceil(chartGroupData.length / 6) - 1)}
+                />
                 <YAxis
                   stroke={chartColors.axis}
                   fontSize={11}
@@ -11442,9 +12876,64 @@ function ProgressView({
                 <Line
                   type="monotone"
                   dataKey="sets"
-                  stroke="#c1652e"
+                  stroke={chartColors.series.accent}
                   strokeWidth={2.5}
-                  dot={{ r: 3, fill: "#c1652e", strokeWidth: 0 }}
+                  dot={{ r: 3, fill: chartColors.series.accent, strokeWidth: 0 }}
+                  activeDot={{ r: 5 }}
+                />
+              </LineChart>
+            </ResponsiveContainer>
+          </div>
+        </Modal>
+      )}
+
+      {loadChartGroup && (
+        <Modal title={`${loadChartGroup.label} – Belastung pro Woche`} onClose={() => setLoadChartGroup(null)} width={420}>
+          <div className="chip-row" style={{ marginTop: 0, marginBottom: 10 }}>
+            {MUSCLE_COMPARE_OPTIONS.map(([weeks, label]) => (
+              <span
+                key={weeks}
+                className={`chip chip-sm ${loadCompareWeeks === weeks ? "active" : ""}`}
+                onClick={() => setLoadCompareWeeks(weeks)}
+              >
+                {label}
+              </span>
+            ))}
+          </div>
+          <div style={{ height: 220 }}>
+            <ResponsiveContainer width="99%" height="100%" debounce={1}>
+              <LineChart data={loadChartGroupData} margin={{ top: 6, right: 4, left: 0, bottom: 0 }}>
+                <CartesianGrid strokeDasharray="3 3" stroke={chartColors.grid} vertical={false} />
+                <XAxis
+                  dataKey="date"
+                  stroke={chartColors.axis}
+                  fontSize={11}
+                  axisLine={false}
+                  tickLine={false}
+                  interval={Math.max(0, Math.ceil(loadChartGroupData.length / 6) - 1)}
+                />
+                <YAxis
+                  stroke={chartColors.axis}
+                  fontSize={11}
+                  axisLine={false}
+                  tickLine={false}
+                  width={28}
+                />
+                <Tooltip
+                  contentStyle={{
+                    background: chartColors.tooltipBg,
+                    border: `1px solid ${chartColors.tooltipBorder}`,
+                    borderRadius: 10,
+                    fontSize: 12,
+                  }}
+                  formatter={(v) => [`${(Math.round(v * 100) / 100).toLocaleString("de-DE")}`, "Relative Belastung"]}
+                />
+                <Line
+                  type="monotone"
+                  dataKey="load"
+                  stroke={chartColors.series.accent}
+                  strokeWidth={2.5}
+                  dot={{ r: 3, fill: chartColors.series.accent, strokeWidth: 0 }}
                   activeDot={{ r: 5 }}
                 />
               </LineChart>
@@ -11629,7 +13118,7 @@ function HistoryView({
       {sortedLogs.map((log) => {
         const isOpen = expandedLogId === log.id;
         const totalSets = logEntries(log).reduce(
-          (sum, e) => sum + entrySets(e).filter((s) => !s.warmup).length,
+          (sum, e) => sum + performedWorkingSets(entrySets(e)).length,
           0
         );
         return (
@@ -11665,6 +13154,11 @@ function HistoryView({
                   <Clock size={12} /> {log.durationMinutes} Min.
                 </span>
               ) : null}
+              {feelingLabel(log.feeling) && (
+                <span title="Wie sich das Training angefühlt hat">
+                  <Smile size={12} /> {feelingLabel(log.feeling)}
+                </span>
+              )}
             </div>
 
             {isOpen && (
@@ -11693,16 +13187,18 @@ function HistoryView({
                   const ex = exBy[entry.exerciseId];
                   if (!ex) return null;
                   const isTimeBased = isTimeBasedInLogs(logs, entry.exerciseId, timeBasedExercises);
-                  const workingSets = entrySets(entry).filter((s) => !s.warmup);
+                  const workingSets = performedWorkingSets(entrySets(entry));
                   const summary = workingSets
-                    .map((s) =>
-                      isTimeBased && s.duration
-                        ? `${s.duration}s`
-                        : `${s.weight || 0}kg×${s.reps || 0}`
+                    .map(
+                      (s) =>
+                        (s.dropset ? "↓" : "") +
+                        (isTimeBased && s.duration
+                          ? `${s.duration}s`
+                          : `${s.weight || 0}kg×${s.reps || 0}`)
                     )
                     .join(", ");
                   return (
-                    <div key={entry.exerciseId}>
+                    <div key={entry.id || entry.exerciseId}>
                       <div className="history-exercise-row">
                         <span
                           className="ex-name-clickable"
@@ -11710,7 +13206,10 @@ function HistoryView({
                         >
                           {ex.name}
                         </span>
-                        <span className="history-set-summary">{summary || "–"}</span>
+                        <span className="history-set-summary">
+                          {summary || "–"}
+                          {fmtRir(entry.rir) ? ` · ${fmtRir(entry.rir)}` : ""}
+                        </span>
                       </div>
                       {/* Die Übungsnotiz steht bewusst nicht hier: sie ist eine
                           dauerhafte Notiz zur Übung und wiederholt sich sonst

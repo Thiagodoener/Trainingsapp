@@ -7298,6 +7298,23 @@ function ExercisesView({
   // of the overlay being stuck on a stale snapshot.
   const selectedExercise = exercises.find((e) => e.id === selectedExerciseId) || null;
 
+  // Wann eine Übung zuletzt wirklich trainiert wurde. "Wirklich" heißt: mit
+  // mindestens einem abgehakten Arbeitssatz - eine Übung, die nur im Plan
+  // stand und dann ausfiel, wurde nicht gemacht und darf die Liste nicht
+  // anführen. Alle Plätze einer Übung zählen (Zirkel: A, B, A).
+  const lastPerformed = useMemo(() => {
+    const last = {};
+    (Array.isArray(logs) ? logs : []).forEach((l) => {
+      const ts = new Date(l?.date).getTime();
+      if (!Number.isFinite(ts)) return;
+      logEntries(l).forEach((e) => {
+        if (performedWorkingSets(entrySets(e)).length === 0) return;
+        if (!(last[e.exerciseId] >= ts)) last[e.exerciseId] = ts;
+      });
+    });
+    return last;
+  }, [logs]);
+
   const filtered = exercises.filter((e) => {
     const matchesGroup = group === "alle" || e.group === group;
     const matchesSubgroup =
@@ -7308,7 +7325,15 @@ function ExercisesView({
       getExerciseEquipment(e, exerciseEquipmentOverrides) === equipmentFilter;
     const matchesQuery = e.name.toLowerCase().includes(query.toLowerCase());
     return matchesGroup && matchesSubgroup && matchesEquipment && matchesQuery;
-  });
+  })
+    // Zuletzt Trainiertes zuerst: die Liste soll die eigene Praxis abbilden,
+    // nicht die Reihenfolge des Katalogs. Sortiert wird auf der Kopie aus
+    // filter(), nie auf den Übungen selbst - sort() arbeitet an Ort und
+    // Stelle und würde sonst die Reihenfolge der App-weiten Liste ändern.
+    // Nie trainierte Übungen haben alle denselben Wert 0 und behalten
+    // untereinander damit ihre Katalogreihenfolge (sort ist stabil), stehen
+    // aber geschlossen unter den trainierten.
+    .sort((a, b) => (lastPerformed[b.id] || 0) - (lastPerformed[a.id] || 0));
   const activeGroupSubgroups = group !== "alle" ? SUBGROUPS[group] || [] : [];
 
   return (
@@ -11420,6 +11445,17 @@ function buildPercentSeries(data, keys, compareWeeks, toleranceDays = 3) {
   });
 }
 
+// "80 kg × 8" - die Kurzschreibweise, in der ein Satz überall sonst in der App
+// auch auftaucht (Verlauf, "Letztes Mal"). Null, wo es nichts zu beschreiben
+// gibt, damit der Tooltip die Zeile dann einfach weglässt.
+function describeSet(set) {
+  if (!set) return null;
+  const weight = toNum(set.weight);
+  const reps = toNum(set.reps);
+  if (reps <= 0) return null;
+  return weight > 0 ? `${fmtDecimal(weight)} kg × ${reps}` : `${reps} Wdh.`;
+}
+
 function ExerciseCharts({ logs, exerciseId, isTimeBased, theme, gyms = [], gymIndependent = false }) {
   const chartColors = useChartColors(theme);
 
@@ -11459,6 +11495,26 @@ function ExerciseCharts({ logs, exerciseId, isTimeBased, theme, gyms = [], gymIn
             0,
             ...workingSets.map((s) => (Number(s.weight) || 0) * (Number(s.reps) || 0))
           );
+      // Nicht nur WIE VIEL, sondern WOMIT: zu jedem Punkt der Kurve wird der
+      // Satz gemerkt, aus dem der Wert entstanden ist. Ohne das ist "640" oder
+      // ein geschätztes 1RM eine Zahl ohne Herkunft - man sieht die
+      // Veränderung, kann sie aber nicht einordnen.
+      const bestVolumeSet = selectedIsTimeBased
+        ? null
+        : workingSets.reduce(
+            (best, s) =>
+              !best || toNum(s.weight) * toNum(s.reps) > toNum(best.weight) * toNum(best.reps)
+                ? s
+                : best,
+            null
+          );
+      const best1RMSet = selectedIsTimeBased
+        ? null
+        : workingSets.reduce(
+            (best, s) =>
+              !best || estimate1RM(s.weight, s.reps) > estimate1RM(best.weight, best.reps) ? s : best,
+            null
+          );
       // Best estimated one-rep max of the session: the strongest single set
       // converted to a 1RM, which tracks strength progress even when the
       // rep scheme changes between workouts.
@@ -11472,12 +11528,27 @@ function ExerciseCharts({ logs, exerciseId, isTimeBased, theme, gyms = [], gymIn
         : workingSets.reduce((sum, x) => sum + toNum(x.weight) * toNum(x.reps), 0);
       const maxReps = Math.max(0, ...workingSets.map((x) => toNum(x.reps)));
       const maxDuration = Math.max(0, ...workingSets.map((x) => toNum(x.duration)));
+      // Beim Gesamtvolumen gibt es keinen einzelnen Satz dahinter - es ist die
+      // Summe aller. Deshalb die Zusammensetzung, gekürzt: eine Tooltip-Box
+      // auf einem Telefon verträgt keine acht Sätze in einer Zeile.
+      const setList = workingSets.map(describeSet).filter(Boolean);
+      const totalVolumeDetail = setList.length === 0
+        ? null
+        : setList.length <= 3
+        ? setList.join(", ")
+        : `${setList.slice(0, 3).join(", ")} +${setList.length - 3} weitere`;
+      const details = {
+        maxSetVolume__detail: describeSet(bestVolumeSet),
+        best1RM__detail: describeSet(best1RMSet) ? `aus ${describeSet(best1RMSet)}` : null,
+        totalVolume__detail: totalVolumeDetail,
+      };
+
       const base = {
         date: fmtDate(l.date),
         ts: new Date(l.date).getTime(),
       };
       if (!splitByGym) {
-        return { ...base, maxWeight, totalReps, totalDuration, maxSetVolume,
+        return { ...base, ...details, maxWeight, totalReps, totalDuration, maxSetVolume,
                  best1RM, totalVolume, maxReps, maxDuration };
       }
       // One key per gym so Recharts draws separate lines; the gaps are
@@ -11493,6 +11564,12 @@ function ExerciseCharts({ logs, exerciseId, isTimeBased, theme, gyms = [], gymIn
         [`totalVolume_${g}`]: totalVolume,
         [`maxReps_${g}`]: maxReps,
         [`maxDuration_${g}`]: maxDuration,
+        // Der Tooltip sucht die Herkunft unter dem Schlüssel der Linie, und
+        // die heißt hier pro Gym anders - sonst bliebe die Angabe bei
+        // getrennten Gym-Linien leer.
+        [`maxSetVolume_${g}__detail`]: details.maxSetVolume__detail,
+        [`best1RM_${g}__detail`]: details.best1RM__detail,
+        [`totalVolume_${g}__detail`]: details.totalVolume__detail,
       };
     })
     .sort((a, b) => a.ts - b.ts);
@@ -11655,7 +11732,29 @@ function ExerciseStatCard({ title, dataKey, color, chartData, splitByGym, gymKey
                   borderRadius: 10,
                   fontSize: 12,
                 }}
-                formatter={mode === "percent" ? (v) => [`${v == null ? "–" : Math.round(v)}%`, ""] : undefined}
+                // Ohne Namen vor dem Wert bliebe sonst dessen Trennzeichen
+                // stehen und die Zeile begänne mit einem losen ": ".
+                separator={mode === "absolute" && splitByGym ? " : " : ""}
+                formatter={
+                  mode === "percent"
+                    ? (v) => [`${v == null ? "–" : Math.round(v)}%`, ""]
+                    : (v, name, item) => {
+                        // Woraus der Wert entstanden ist, steht im Datenpunkt
+                        // unter dem Schlüssel der jeweiligen Linie (siehe
+                        // ExerciseCharts). Karten ohne solche Angabe - etwa
+                        // "Maximalgewicht" - zeigen weiterhin nur die Zahl.
+                        const detail = item?.payload?.[`${item?.dataKey}__detail`];
+                        // Geschätzte 1RM-Werte sind krumm (88,8166...) - roh
+                        // ausgegeben füllen sie die halbe Tooltip-Zeile mit
+                        // Nachkommastellen, die nichts aussagen.
+                        const num = typeof v === "number" ? fmtDecimal(v) : v;
+                        const shown = detail ? `${num} · ${detail}` : num;
+                        // Ohne Gym-Trennung gibt es nur eine Linie; deren
+                        // technischer Name ("maxSetVolume") stand bisher mit
+                        // im Tooltip und sagt niemandem etwas.
+                        return [shown, splitByGym ? name : ""];
+                      }
+                }
               />
               {mode === "percent" && <ReferenceLine y={0} stroke={chartColors.axis} strokeDasharray="3 3" />}
               {renderLines()}

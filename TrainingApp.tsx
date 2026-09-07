@@ -722,19 +722,28 @@ function getExerciseHistory(logs, exerciseId, excludeSessionId, isTimeBased = fa
     const totalVolume = doneSets.reduce((a, x) => a + toNum(x.weight) * toNum(x.reps), 0);
     if (totalVolume > bestTotalVolume) { bestTotalVolume = totalVolume; bestTotalVolumeRir = sessionRir; }
 
+    // Die RIR-Angabe beschreibt den LETZTEN Satz der Übung - so wird sie im
+    // Training auch abgefragt. Für einen Rekord, der in einem früheren Satz
+    // fiel, ist sie nicht die Reserve, mit der er erreicht wurde: Wer
+    // 100×8 / 100×6 / 90×5 macht, stellt den Gewichtsrekord im ERSTEN Satz
+    // auf, während die Angabe den dritten beschreibt. Solche Rekorde bekommen
+    // deshalb keine Reserve zugeordnet - lieber keine Angabe als eine falsche.
+    const lastDoneSet = doneSets[doneSets.length - 1];
+    const rirOf = (set) => (set === lastDoneSet ? sessionRir : null);
+
     for (const set of doneSets) {
       const reps = toNum(set.reps);
-      if (reps > bestSetReps) { bestSetReps = reps; bestSetRepsRir = sessionRir; }
+      if (reps > bestSetReps) { bestSetReps = reps; bestSetRepsRir = rirOf(set); }
       const vol = toNum(set.weight) * reps;
-      if (vol > bestSetVolume) { bestSetVolume = vol; bestSetVolumeRir = sessionRir; }
+      if (vol > bestSetVolume) { bestSetVolume = vol; bestSetVolumeRir = rirOf(set); }
       const oneRM = estimate1RM(set.weight, set.reps);
-      if (oneRM > best1RM) { best1RM = oneRM; best1RMRir = sessionRir; }
+      if (oneRM > best1RM) { best1RM = oneRM; best1RMRir = rirOf(set); }
     }
 
     if (isTimeBased) {
       for (const set of doneSets) {
         const dur = Number(set.duration) || 0;
-        if (dur > bestDuration) { bestDuration = dur; bestDurationRir = sessionRir; }
+        if (dur > bestDuration) { bestDuration = dur; bestDurationRir = rirOf(set); }
       }
     } else {
       // Numbers are compared explicitly: values that slipped through as
@@ -745,10 +754,10 @@ function getExerciseHistory(logs, exerciseId, excludeSessionId, isTimeBased = fa
         if (weight > bestWeight) {
           bestWeight = weight;
           bestRepsAtBestWeight = reps;
-          bestWeightRir = sessionRir;
+          bestWeightRir = rirOf(set);
         } else if (weight === bestWeight && reps > bestRepsAtBestWeight) {
           bestRepsAtBestWeight = reps;
-          bestWeightRir = sessionRir;
+          bestWeightRir = rirOf(set);
         }
       }
     }
@@ -980,6 +989,10 @@ function getFatigueWarning(logs, muscleLoadSeries, nowTs = Date.now()) {
 // die Anzeige gerundet - "sonst 1,5 RIR" wäre eine Scheingenauigkeit, die es
 // auf einer Fünf-Stufen-Skala nicht gibt.
 function rirComparison(currentRir, typical) {
+  // Wie in recordReserveNote: Number(null) ist 0. Ohne diese Zeile bliebe der
+  // Vergleich stehen, nachdem man die Angabe wieder abgewählt hat - und zwar
+  // so, als hätte man 0 gewählt.
+  if (currentRir == null) return null;
   const now = Number(currentRir);
   if (!Number.isFinite(now) || typical == null) return null;
   const usual = Number(typical);
@@ -999,6 +1012,10 @@ function rirComparison(currentRir, typical) {
 // (siehe KONZEPT.md, Regel 3) - und nur dort, wo beide Seiten eine Angabe
 // haben. Ohne alten RIR-Wert wäre jede Einordnung geraten.
 function recordReserveNote(currentRir, previousRir) {
+  // null zuerst abfangen: Number(null) ist 0 und damit "endlich" - eine
+  // fehlende Angabe würde sonst als "am Limit" durchgehen und einen
+  // Vergleich behaupten, für den es gar keine Grundlage gibt.
+  if (currentRir == null || previousRir == null) return null;
   const now = Number(currentRir);
   const before = Number(previousRir);
   if (!Number.isFinite(now) || !Number.isFinite(before)) return null;
@@ -1079,7 +1096,9 @@ function getExerciseTimeline(logs, exerciseId) {
 // Records the trophy is awarded for, per set. Deliberately a fixed list:
 // anything not in here does not count, so the trophy keeps its meaning.
 // Without an earlier session there is nothing to beat, so nothing counts.
-function describeSetPRs(set, best, isTimeBased = false, hasWeight = true) {
+// setRir = die Reserve, die fuer GENAU DIESEN Satz gilt - also die Angabe der
+// Uebung nur dann, wenn dieser Satz ihr letzter war (siehe getExerciseHistory).
+function describeSetPRs(set, best, isTimeBased = false, hasWeight = true, setRir = null) {
   if (!set || !set.done || set.warmup) return [];
   if (!best || (best.comparableSessions || 0) === 0) return [];
   const found = [];
@@ -1092,6 +1111,7 @@ function describeSetPRs(set, best, isTimeBased = false, hasWeight = true) {
         value: `${dur} Sek.`,
         previous: toNum(best.bestDuration) > 0 ? `${toNum(best.bestDuration)} Sek.` : null,
         previousRir: best.bestDurationRir,
+        currentRir: setRir,
       });
     }
     return found;
@@ -1106,6 +1126,7 @@ function describeSetPRs(set, best, isTimeBased = false, hasWeight = true) {
       value: `${reps} Wdh.`,
       previous: toNum(best.bestSetReps) > 0 ? `${toNum(best.bestSetReps)} Wdh.` : null,
       previousRir: best.bestSetRepsRir,
+      currentRir: setRir,
     });
   }
 
@@ -1119,6 +1140,7 @@ function describeSetPRs(set, best, isTimeBased = false, hasWeight = true) {
       value: `${fmtDecimal(weight)} kg`,
       previous: toNum(best.bestWeight) > 0 ? `${fmtDecimal(best.bestWeight)} kg` : null,
       previousRir: best.bestWeightRir,
+      currentRir: setRir,
     });
   }
   const oneRM = estimate1RM(weight, reps);
@@ -1128,6 +1150,7 @@ function describeSetPRs(set, best, isTimeBased = false, hasWeight = true) {
       value: `${Math.round(oneRM)} kg`,
       previous: toNum(best.best1RM) > 0 ? `${Math.round(toNum(best.best1RM))} kg` : null,
       previousRir: best.best1RMRir,
+      currentRir: setRir,
     });
   }
   const vol = weight * reps;
@@ -1137,6 +1160,7 @@ function describeSetPRs(set, best, isTimeBased = false, hasWeight = true) {
       value: `${Math.round(vol)} kg`,
       previous: toNum(best.bestSetVolume) > 0 ? `${Math.round(toNum(best.bestSetVolume))} kg` : null,
       previousRir: best.bestSetVolumeRir,
+      currentRir: setRir,
     });
   }
   return found;
@@ -1144,7 +1168,9 @@ function describeSetPRs(set, best, isTimeBased = false, hasWeight = true) {
 
 // Records that only make sense once every set of the exercise is counted.
 // These belong next to the exercise name, not to a single set.
-function describeExercisePRs(sets, best, isTimeBased = false, hasWeight = true) {
+// Hier gilt die Angabe der ganzen Uebung: diese Rekorde fassen alle Saetze
+// zusammen, es gibt also keinen einzelnen Satz, dem sie gehoeren muesste.
+function describeExercisePRs(sets, best, isTimeBased = false, hasWeight = true, sessionRir = null) {
   if (!best || (best.comparableSessions || 0) === 0) return [];
   const done = (Array.isArray(sets) ? sets : []).filter((x) => x && x.done && !x.warmup);
   if (done.length === 0) return [];
@@ -1158,6 +1184,7 @@ function describeExercisePRs(sets, best, isTimeBased = false, hasWeight = true) 
         value: `${total} Sek.`,
         previous: toNum(best.bestTotalDuration) > 0 ? `${toNum(best.bestTotalDuration)} Sek.` : null,
         previousRir: best.bestTotalDurationRir,
+        currentRir: sessionRir,
       });
     }
     return found;
@@ -1170,6 +1197,7 @@ function describeExercisePRs(sets, best, isTimeBased = false, hasWeight = true) 
       value: `${totalReps} Wdh.`,
       previous: toNum(best.bestTotalReps) > 0 ? `${toNum(best.bestTotalReps)} Wdh.` : null,
       previousRir: best.bestTotalRepsRir,
+      currentRir: sessionRir,
     });
   }
   if (hasWeight) {
@@ -1181,6 +1209,7 @@ function describeExercisePRs(sets, best, isTimeBased = false, hasWeight = true) 
         previous: toNum(best.bestTotalVolume) > 0
           ? `${Math.round(toNum(best.bestTotalVolume))} kg` : null,
         previousRir: best.bestTotalVolumeRir,
+        currentRir: sessionRir,
       });
     }
   }
@@ -11164,17 +11193,25 @@ function LogView({
         // you work up 60/70/80 all three would beat the old best, and three
         // trophies in a row say less than one on the set that counts.
         const hasWeightHere = usesWeight && entry.sets.some((x) => toNum(x.weight) > 0);
+        // Die RIR-Angabe gilt dem letzten abgehakten Arbeitssatz. Fällt ein
+        // Rekord in einem früheren Satz, gehört sie nicht zu ihm - dann wird
+        // gar keine Reserve genannt statt einer, die woanders herkommt.
+        const performedHere = performedWorkingSets(entry.sets);
+        const lastPerformedHere = performedHere[performedHere.length - 1] || null;
         let setPrIndex = -1;
         let setPrList = null;
         let bestScore = -1;
         entry.sets.forEach((x, i) => {
-          const prs = describeSetPRs(x, history, isTimeBased, hasWeightHere);
+          const prs = describeSetPRs(
+            x, history, isTimeBased, hasWeightHere,
+            x === lastPerformedHere ? entry.rir : null
+          );
           if (prs.length === 0) return;
           // Rank by what was actually lifted (or held), so the strongest set wins.
           const score = isTimeBased ? toNum(x.duration) : toNum(x.weight) * 1000 + toNum(x.reps);
           if (score > bestScore) { bestScore = score; setPrIndex = i; setPrList = prs; }
         });
-        const exercisePrs = describeExercisePRs(entry.sets, history, isTimeBased, hasWeightHere);
+        const exercisePrs = describeExercisePRs(entry.sets, history, isTimeBased, hasWeightHere, entry.rir);
         const volumeChange = exerciseVolumeChange(entry.sets, history.lastSets, isTimeBased, usesWeight);
         const volumeChangeRounded = volumeChange === null ? null : Math.round(volumeChange);
         const ssInfo = supersetGroupInfo[entry.id] || { groupSize: 1, isFirst: true, isLast: true };
@@ -11220,7 +11257,7 @@ function LogView({
                     title="Rekord für die ganze Übung – antippen"
                     onClick={(ev) => {
                       ev.stopPropagation();
-                      setPrInfo({ list: exercisePrs, exerciseName: ex?.name || "Übung", rir: entry.rir });
+                      setPrInfo({ list: exercisePrs, exerciseName: ex?.name || "Übung" });
                     }}
                   >
                     <Trophy size={12} />
@@ -11546,7 +11583,7 @@ function LogView({
                               title="Was für ein Rekord? Antippen."
                               onClick={(ev) => {
                                 ev.stopPropagation();
-                                setPrInfo({ list: pr, exerciseName: ex?.name || "Übung", rir: entry.rir });
+                                setPrInfo({ list: pr, exerciseName: ex?.name || "Übung" });
                               }}
                             >
                               <Trophy size={12} />
@@ -11568,7 +11605,7 @@ function LogView({
                             title="Was für ein Rekord? Antippen."
                             onClick={(ev) => {
                               ev.stopPropagation();
-                              setPrInfo({ list: pr, exerciseName: ex?.name || "Übung", rir: entry.rir });
+                              setPrInfo({ list: pr, exerciseName: ex?.name || "Übung" });
                             }}
                           >
                             <Trophy size={12} />
@@ -11703,22 +11740,23 @@ function LogView({
                   Anzeige läuft also von unten nach oben. Damit dieser Satz
                   direkt UNTER der "Bisher"-Zeile landet, auf die er sich
                   bezieht, muss er im Code davor stehen. */}
-              {recordReserveNote(prInfo.rir, r.previousRir) && (
+              {recordReserveNote(r.currentRir, r.previousRir) ? (
                 <div style={{ fontSize: 12.5, color: "var(--brass)" }}>
-                  {recordReserveNote(prInfo.rir, r.previousRir)}
+                  {recordReserveNote(r.currentRir, r.previousRir)}
                 </div>
-              )}
+              ) : fmtRir(r.currentRir) ? (
+                // Ohne alten Vergleichswert lässt sich nichts einordnen -
+                // die heutige Reserve zu nennen ist aber trotzdem sinnvoll.
+                <div style={{ fontSize: 12.5, color: "var(--text-dim)" }}>
+                  Heute erreicht mit {fmtRir(r.currentRir)}.
+                </div>
+              ) : null}
               <div style={{ fontSize: 12.5, color: "var(--text-dim)" }}>
                 {r.previous ? `Bisher: ${r.previous}` : "Erste gewertete Bestmarke"}
                 {r.previous && fmtRir(r.previousRir) ? ` (${fmtRir(r.previousRir)})` : ""}
               </div>
             </div>
           ))}
-          {fmtRir(prInfo.rir) && (
-            <div style={{ fontSize: 12.5, color: "var(--text-dim)", marginTop: 2 }}>
-              Heute erreicht mit {fmtRir(prInfo.rir)}.
-            </div>
-          )}
           <button
             className="btn btn-primary btn-block btn-sm"
             style={{ marginTop: 14 }}

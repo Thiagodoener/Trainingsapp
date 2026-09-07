@@ -341,10 +341,10 @@ const RIR_MAX = 4;
 const RIR_OPTIONS = [0, 1, 2, 3, 4];
 const rirLabel = (rir) => (rir >= RIR_MAX ? `${RIR_MAX}+` : String(rir));
 // "0 in Reserve" heisst: bis zum Muskelversagen.
-function fmtRir(rir) {
+function fmtRir(rir, unit = "in Reserve") {
   if (rir == null || !Number.isFinite(Number(rir))) return null;
   const n = Math.max(0, Math.min(RIR_MAX, Math.round(Number(rir))));
-  return n === 0 ? "bis Versagen" : `${rirLabel(n)} in Reserve`;
+  return n === 0 ? "bis Versagen" : `${rirLabel(n)} ${unit}`;
 }
 
 // Sitzungsgefuehl: fuenf Stufen mit Worten statt einer 10er-Skala. Worte,
@@ -10823,7 +10823,7 @@ function LogView({
                       : `${s.weight || 0}kg×${s.reps || 0}`)
                   )
                   .join(", ")}
-                {fmtRir(history.lastRir) ? ` · ${fmtRir(history.lastRir)}` : ""}
+                {fmtRir(history.lastRir, "RIR") ? ` · ${fmtRir(history.lastRir, "RIR")}` : ""}
               </div>
             )}
 

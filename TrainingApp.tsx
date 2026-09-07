@@ -35,6 +35,7 @@ import {
   AlertTriangle,
   Minus,
   Home,
+  Info,
 } from "lucide-react";
 import {
   LineChart,
@@ -1063,6 +1064,34 @@ const MUSCLE_COMPARE_OPTIONS = [
   [Infinity, "Gesamt"],
 ];
 
+// Erklärtexte hinter den Überschriften der Statistik-Karten (antippen).
+// Umsetzung von Regel 4 aus KONZEPT.md aus der Leserichtung: eine Kennzahl,
+// deren Rechenweg man nicht nachvollziehen kann, ist so wenig wert wie ein
+// Eingabefeld ohne Rückmeldung. Beantwortet werden bewusst zwei Fragen -
+// "was sehe ich hier?" und "wie wird das gerechnet?" - und zwar in derselben
+// Sprache wie die Herleitungen im Code darüber, nur ohne Fachbegriffe.
+const STAT_EXPLANATIONS = {
+  weeklySets: {
+    title: "Sätze pro Muskelgruppe",
+    paragraphs: [
+      "Zeigt, wie viele Arbeitssätze jede Muskelgruppe in den letzten 7 Tagen abbekommen hat - und ob das mehr oder weniger ist als sonst.",
+      "Gezählt wird nur, was du auch abgehakt hast. Ein vorbelegter, aber nie ausgeführter Satz zählt nicht mit, sonst würde die Statistik Trainings behaupten, die nie stattgefunden haben. Aufwärmsätze zählen ebenfalls nicht.",
+      "Dropsätze zählen hier bewusst nicht als eigener Satz: Die Zahl bildet Trainingsreize mit Erholung dazwischen ab, und zwischen einem Satz und seinen Drops gibt es keine Erholung. In der Belastungs-Karte darunter zählen sie dagegen voll mit - die Arbeit wurde ja geleistet.",
+      "Die Prozentzahl vergleicht die aktuelle Woche gegen den Durchschnitt der Wochen davor - wie viele, bestimmst du mit den Feldern oben. Die Linie daneben zeigt genau diesen Zeitraum.",
+    ],
+  },
+  muscleLoad: {
+    title: "Belastung pro Muskelgruppe",
+    paragraphs: [
+      "Beantwortet eine andere Frage als die Karte darüber: nicht \"wie viele Sätze?\", sondern \"wie viel Arbeit?\". Zwei getrennte Kennzahlen, mit Absicht.",
+      "Kilogramm allein taugen dafür nicht: Wer von der Langhantel auf Kurzhanteln wechselt, bewegt bei gleicher Anstrengung viel weniger Kilogramm - die Kurve würde einen Rückschritt zeigen, den es nie gab. Reine Satzzahlen taugen auch nicht: Wer bei gleicher Satzzahl schwerer wird, sähe davon nichts.",
+      "Deshalb wird jeder Satz an deinem eigenen besten Satz in genau dieser Übung gemessen: \"Wie viel von meinem Bestwert war das?\" Ein Satz auf Bestniveau zählt 1,0. Ein Kurzhantel-Satz mit 22 kg ist damit genauso viel wert wie ein Langhantel-Satz mit 60 kg, wenn beide gleich nah am jeweiligen persönlichen Bestwert liegen.",
+      "Ein neuer Rekord verfälscht die Vergangenheit dabei nicht - er wird auf alle Wochen gleich angewendet und kürzt sich beim Prozentvergleich wieder heraus.",
+      "Die Warnzeichen rechts kommen aus derselben Reihe: ein Hinweis, wenn die aktuelle Woche mehr als 15 % über dem Schnitt der 4 Wochen davor liegt, ein deutlicher Alarm ab 30 %, und ein Plateau-Zeichen, wenn seit 3 Wochen kein neuer Höchstwert mehr dazugekommen ist. Das sind Fragen, keine Urteile - wie es sich anfühlt, weißt nur du.",
+    ],
+  },
+};
+
 // Wie viele Wochen die Rohdaten-Serie mindestens abdecken muss, damit jeder
 // MUSCLE_COMPARE_OPTIONS-Zeitraum (inkl. "Gesamt") daraus bedient werden
 // kann - die längste feste Option (52) als Minimum, plus die komplette
@@ -1078,6 +1107,17 @@ function zoomWeekSeries(values, weeks) {
   if (!Array.isArray(values)) return [];
   if (!Number.isFinite(weeks)) return values;
   return values.slice(Math.max(0, values.length - weeks));
+}
+
+// Der Prozentwert daneben vergleicht die AKTUELLE Woche gegen den Schnitt der
+// `compareWeeks` Wochen DAVOR (siehe muscleLoadChange). Eine Grafik, die zu
+// dieser Zahl passt, muss deshalb `compareWeeks + 1` Wochen zeigen: den
+// Vergleichszeitraum und die Woche, die dagegen gehalten wird. Mit nur
+// `compareWeeks` bliebe bei "Vorwoche" ein einziger Punkt übrig - eine Linie
+// aus einem Punkt gibt es nicht, die Sparkline fiele auf ihren leeren
+// Platzhalter-Strich zurück.
+function compareWindowSeries(values, compareWeeks) {
+  return zoomWeekSeries(values, Number.isFinite(compareWeeks) ? compareWeeks + 1 : compareWeeks);
 }
 
 // Womit die "Arbeit" eines Satzes gemessen wird, hängt an der Übungsart.
@@ -3153,6 +3193,69 @@ function TrainingAppInner() {
           font-size: 21px;
           line-height: 1.15;
           letter-spacing: -0.2px;
+        }
+
+        /* Eine Überschrift, hinter der eine Erklärung steckt. Das (i) ist der
+           einzige Hinweis darauf, dass hier etwas passiert - ohne Icon sähe
+           sie aus wie jede andere Überschrift und niemand käme auf die Idee,
+           sie anzutippen. Bewusst gedämpft: es ist ein Angebot, kein
+           Bedienelement, das nach Aufmerksamkeit verlangt. */
+        .plan-title-explain {
+          display: inline-flex;
+          align-items: center;
+          gap: 6px;
+          background: none;
+          border: none;
+          padding: 0;
+          margin: 0;
+          color: var(--text);
+          cursor: pointer;
+          text-align: left;
+        }
+        .plan-title-explain .plan-title-info {
+          color: var(--text-faint);
+          flex-shrink: 0;
+          transition: color 150ms ease;
+        }
+        .plan-title-explain:hover .plan-title-info,
+        .plan-title-explain:focus-visible .plan-title-info {
+          color: var(--accent);
+        }
+        /* Fließtext im Erklärfenster - schmaler gesetzt und mit mehr
+           Zeilenabstand als die Bedien-Oberfläche, weil das hier gelesen
+           und nicht bedient wird. */
+        .explain-body p {
+          margin: 0 0 12px;
+          font-size: 14px;
+          line-height: 1.55;
+          color: var(--text-dim);
+        }
+        .explain-body p:last-child { margin-bottom: 0; }
+
+        /* Eine Atemübung in der "Pro Übung"-Liste. Name und Kennzahlen
+           untereinander statt nebeneinander: auf einem Telefon wären drei
+           Werte plus Übungsname in einer Zeile entweder abgeschnitten oder
+           unlesbar klein. Trennung durch Haarlinien wie überall sonst. */
+        .breathing-ex-row {
+          display: flex;
+          flex-direction: column;
+          gap: 3px;
+          padding: 10px 0;
+          border-bottom: 1px solid var(--border);
+        }
+        .breathing-ex-row:last-child { border-bottom: none; }
+        .breathing-ex-row:first-child { padding-top: 2px; }
+        .breathing-ex-name {
+          font-size: 15px;
+          color: var(--text);
+        }
+        .breathing-ex-meta {
+          display: flex;
+          flex-wrap: wrap;
+          gap: 4px 12px;
+          font-size: 12.5px;
+          color: var(--text-dim);
+          font-variant-numeric: tabular-nums;
         }
 
         /* iOS Safari auto-zooms the page whenever a focused form control
@@ -12266,6 +12369,24 @@ function Sparkline({ values, height = 24 }) {
   );
 }
 
+// Überschrift einer Statistik-Karte, hinter der eine Erklärung steckt
+// (siehe STAT_EXPLANATIONS). Als <button>, nicht als <span> mit onClick,
+// damit sie auch per Tastatur erreichbar ist und Screenreader sie als
+// bedienbar ansagen.
+function ExplainableTitle({ children, onExplain }) {
+  return (
+    <button
+      type="button"
+      className="plan-title-explain"
+      onClick={onExplain}
+      title="Antippen: Was steht hier und wie wird es gerechnet?"
+    >
+      <span className="plan-title">{children}</span>
+      <Info size={14} className="plan-title-info" />
+    </button>
+  );
+}
+
 // change is a percentage (can be negative), or null when there is no
 // history yet to compare against - that is not the same as 0 % and reads
 // as a dash instead of a misleading "unchanged".
@@ -12451,6 +12572,9 @@ function ProgressView({
   );
   const weeklySetsTotal = weeklySetsByGroup.reduce((sum, g) => sum + g.sets, 0);
   const [setsCompareWeeks, setSetsCompareWeeks] = useState(1);
+  // Welche Karten-Erklärung gerade offen ist (siehe STAT_EXPLANATIONS) -
+  // null heißt: keine.
+  const [explain, setExplain] = useState(null);
   // Collapsed by default - opening a group is a deliberate look at detail,
   // not something that should greet you on every visit to the tab.
   const [expandedGroups, setExpandedGroups] = useState({});
@@ -12465,7 +12589,7 @@ function ProgressView({
   const chartColors = useChartColors(theme);
   const chartGroupData = useMemo(() => {
     if (!chartGroup) return [];
-    const zoomed = zoomWeekSeries(chartGroup.values, setsCompareWeeks);
+    const zoomed = compareWindowSeries(chartGroup.values, setsCompareWeeks);
     const weekCount = zoomed.length;
     return zoomed.map((v, i) => {
       const weeksAgo = weekCount - 1 - i;
@@ -12494,7 +12618,7 @@ function ProgressView({
   const [loadChartGroup, setLoadChartGroup] = useState(null);
   const loadChartGroupData = useMemo(() => {
     if (!loadChartGroup) return [];
-    const zoomed = zoomWeekSeries(loadChartGroup.values, loadCompareWeeks);
+    const zoomed = compareWindowSeries(loadChartGroup.values, loadCompareWeeks);
     const weekCount = zoomed.length;
     return zoomed.map((v, i) => {
       const weeksAgo = weekCount - 1 - i;
@@ -12616,7 +12740,9 @@ function ProgressView({
       </div>
 
       <div className="card">
-        <span className="plan-title">Sätze pro Muskelgruppe (7 Tage)</span>
+        <ExplainableTitle onExplain={() => setExplain(STAT_EXPLANATIONS.weeklySets)}>
+          Sätze pro Muskelgruppe (7 Tage)
+        </ExplainableTitle>
         <div className="chip-row" style={{ marginTop: 10, marginBottom: 4 }}>
           {MUSCLE_COMPARE_OPTIONS.map(([weeks, label]) => (
             <span
@@ -12645,7 +12771,7 @@ function ProgressView({
                     title="Tippen für den Verlauf im gewählten Zeitraum"
                   >
                     <span className="muscle-week-label">{g.label}</span>
-                    <Sparkline values={g.values} />
+                    <Sparkline values={compareWindowSeries(g.values, setsCompareWeeks)} />
                     <span className="muscle-week-value">{g.sets}</span>
                     <LoadChangeBadge change={change} />
                     <span
@@ -12664,7 +12790,7 @@ function ProgressView({
                       {g.subs.map((sg) => (
                         <div className="muscle-week-row-v2 muscle-week-row-v2-sub" key={sg.id}>
                           <span className="muscle-week-label">{sg.label}</span>
-                          <Sparkline values={sg.values} />
+                          <Sparkline values={compareWindowSeries(sg.values, setsCompareWeeks)} />
                           <span className="muscle-week-value">{sg.sets}</span>
                           <LoadChangeBadge change={muscleLoadChange(sg.values, setsCompareWeeks, setsHistoryWeeks)} />
                         </div>
@@ -12679,7 +12805,9 @@ function ProgressView({
       </div>
 
       <div className="card">
-        <span className="plan-title">Belastung pro Muskelgruppe</span>
+        <ExplainableTitle onExplain={() => setExplain(STAT_EXPLANATIONS.muscleLoad)}>
+          Belastung pro Muskelgruppe
+        </ExplainableTitle>
         <div className="chip-row" style={{ marginTop: 10, marginBottom: 4 }}>
           {MUSCLE_COMPARE_OPTIONS.map(([weeks, label]) => (
             <span
@@ -12708,7 +12836,7 @@ function ProgressView({
                     title="Tippen für den Verlauf im gewählten Zeitraum"
                   >
                     <span className="muscle-week-label">{g.label}</span>
-                    <Sparkline values={g.values} />
+                    <Sparkline values={compareWindowSeries(g.values, loadCompareWeeks)} />
                     <LoadChangeBadge change={change} />
                     <LoadSignalBadge signal={detectLoadSignal(g.values, loadHistoryWeeks)} />
                     <span
@@ -12727,7 +12855,7 @@ function ProgressView({
                       {g.subs.map((sg) => (
                         <div className="muscle-load-row muscle-load-row-sub" key={sg.id}>
                           <span className="muscle-week-label">{sg.label}</span>
-                          <Sparkline values={sg.values} />
+                          <Sparkline values={compareWindowSeries(sg.values, loadCompareWeeks)} />
                           <LoadChangeBadge change={muscleLoadChange(sg.values, loadCompareWeeks, loadHistoryWeeks)} />
                           <LoadSignalBadge signal={detectLoadSignal(sg.values, loadHistoryWeeks)} />
                         </div>
@@ -12829,6 +12957,16 @@ function ProgressView({
           onToggleGymIndependent={onToggleGymIndependent}
           onClose={() => setSelectedExerciseId(null)}
         />
+      )}
+
+      {explain && (
+        <Modal title={explain.title} onClose={() => setExplain(null)} width={420}>
+          <div className="explain-body">
+            {explain.paragraphs.map((text, i) => (
+              <p key={i}>{text}</p>
+            ))}
+          </div>
+        </Modal>
       )}
 
       {chartGroup && (
@@ -12979,13 +13117,21 @@ function BreathingProgressView({ breathingExercises = [], breathingLogs = [] }) 
   // unter mehreren Einträgen mit demselben (dann unbekannten) Namen verteilt
   // würde, sobald mehrere ihrer Sitzungen zusammengezählt werden sollen.
   const perExercise = useMemo(() => {
-    const counts = {};
+    const byLabel = {};
     breathingLogs.forEach((l) => {
       const label = breathingById[l.breathingId]?.name || l.name || "Unbekannte Übung";
-      if (!counts[label]) counts[label] = { label, count: 0 };
-      counts[label].count += 1;
+      if (!byLabel[label]) byLabel[label] = { label, count: 0, seconds: 0, maxHold: 0 };
+      const row = byLabel[label];
+      row.count += 1;
+      row.seconds += toNum(l.durationSeconds);
+      // maxHoldSeconds bleibt beim Speichern null, wenn die Übung gar keine
+      // offene Halte-Phase hat (siehe finishBreathingSession). maxHold bleibt
+      // dann 0 und die Zeile wird unten weggelassen - "0 Sek. Anhaltedauer"
+      // sähe nach Fehler aus, wo es schlicht nichts zu messen gab.
+      const hold = toNum(l.maxHoldSeconds);
+      if (hold > row.maxHold) row.maxHold = hold;
     });
-    return Object.values(counts).sort((a, b) => b.count - a.count);
+    return Object.values(byLabel).sort((a, b) => b.count - a.count);
   }, [breathingLogs, breathingById]);
 
   if (breathingLogs.length === 0) {
@@ -13001,6 +13147,19 @@ function BreathingProgressView({ breathingExercises = [], breathingLogs = [] }) 
     const m = Math.floor(s / 60);
     const sec = Math.round(s % 60);
     return m > 0 ? `${m}:${String(sec).padStart(2, "0")} Min.` : `${sec} Sek.`;
+  };
+
+  // Gesamtzeiten summieren sich über Monate und reichen von Sekunden bis in
+  // Stunden. Eine reine Minutenzahl wäre am oberen Ende schwer zu lesen
+  // ("312 Min.") und am unteren Ende einfach "0".
+  const fmtTotal = (totalSeconds) => {
+    const s = Math.max(0, Math.round(toNum(totalSeconds)));
+    if (s < 60) return `${s} Sek.`;
+    const minutes = Math.round(s / 60);
+    if (minutes < 60) return `${minutes} Min.`;
+    const h = Math.floor(minutes / 60);
+    const m = minutes % 60;
+    return m > 0 ? `${h} Std. ${m} Min.` : `${h} Std.`;
   };
 
   return (
@@ -13043,7 +13202,7 @@ function BreathingProgressView({ breathingExercises = [], breathingLogs = [] }) 
         <div style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 10 }}>
           <span className="muscle-week-label" style={{ minWidth: 66 }}>Sitzungen</span>
           <span style={{ flex: 1 }}>
-            <Sparkline values={weeklySeries.values} />
+            <Sparkline values={compareWindowSeries(weeklySeries.values, compareWeeks)} />
           </span>
           <LoadChangeBadge change={change} />
         </div>
@@ -13053,12 +13212,13 @@ function BreathingProgressView({ breathingExercises = [], breathingLogs = [] }) 
         <span className="plan-title">Pro Übung</span>
         <div style={{ marginTop: 10 }}>
           {perExercise.map((ex) => (
-            <div
-              key={ex.label}
-              style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "7px 0" }}
-            >
-              <span className="muscle-week-label" style={{ whiteSpace: "normal" }}>{ex.label}</span>
-              <span className="muscle-week-value">{ex.count}×</span>
+            <div className="breathing-ex-row" key={ex.label}>
+              <span className="breathing-ex-name">{ex.label}</span>
+              <div className="breathing-ex-meta">
+                <span>{ex.count}× gemacht</span>
+                <span>{fmtTotal(ex.seconds)} gesamt</span>
+                {ex.maxHold > 0 && <span>längste Anhaltedauer {fmtHold(ex.maxHold)}</span>}
+              </div>
             </div>
           ))}
         </div>

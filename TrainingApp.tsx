@@ -898,6 +898,79 @@ function getFeelingPerformance(logs, timeBasedExercises) {
   return { rows, sessionsWithFeeling };
 }
 
+// ---------------------------------------------------------------------------
+// Frühwarnung: schlechteres Gefühl bei steigender Belastung
+//
+// Beide Signale für sich sagen wenig. Belastung steigt beim Aufbau ständig -
+// das ist der Sinn der Sache. Müde ist man auch mal, aus Gründen, die nichts
+// mit dem Training zu tun haben. Erst die Kombination über mehrere Wochen ist
+// eine Beobachtung wert: mehr Arbeit, und der Körper meldet gleichzeitig
+// weniger zurück. Dieselbe Zwei-Signal-Logik, mit der KONZEPT.md auch die
+// Unterbelastung begründet.
+//
+// Gemessen wird gegen den EIGENEN Normalwert, nicht gegen eine feste Grenze.
+// Wer grundsätzlich "müde" antippt, hätte sonst eine Dauerwarnung; wer
+// grundsätzlich "stark" wählt, bekäme nie eine.
+// ---------------------------------------------------------------------------
+
+const FATIGUE_WINDOW_WEEKS = 3;      // beobachteter Zeitraum
+const FATIGUE_MIN_SESSIONS = 3;      // so viele Gefühlsangaben braucht es darin
+const FATIGUE_BASELINE_WEEKS = 12;   // so weit reicht der persönliche Normalwert zurück
+const FATIGUE_MIN_BASELINE = 6;      // und auf so vielen Angaben muss er beruhen
+const FATIGUE_FEELING_DROP = 0.5;    // um so viel muss das Gefühl darunter liegen
+const FATIGUE_LOAD_RISE = 1.1;       // und die Belastung um so viel darüber
+const FATIGUE_LOAD_LOOKBACK = 4;     // Vergleichszeitraum für die Belastung
+
+function getFatigueWarning(logs, muscleLoadSeries, nowTs = Date.now()) {
+  const safeLogs = (Array.isArray(logs) ? logs : []).filter(Boolean);
+  const windowMs = FATIGUE_WINDOW_WEEKS * LOAD_WEEK_MS;
+  const baselineMs = windowMs + FATIGUE_BASELINE_WEEKS * LOAD_WEEK_MS;
+
+  const recent = [];
+  const baseline = [];
+  safeLogs.forEach((l) => {
+    const feeling = Number(l.feeling);
+    if (!Number.isFinite(feeling)) return;
+    const ts = new Date(l.date).getTime();
+    if (!Number.isFinite(ts)) return;
+    const age = nowTs - ts;
+    if (age < 0) return;
+    if (age <= windowMs) recent.push(feeling);
+    else if (age <= baselineMs) baseline.push(feeling);
+  });
+
+  if (recent.length < FATIGUE_MIN_SESSIONS || baseline.length < FATIGUE_MIN_BASELINE) return null;
+  const mean = (list) => list.reduce((sum, v) => sum + v, 0) / list.length;
+  const recentFeeling = mean(recent);
+  const usualFeeling = mean(baseline);
+  if (recentFeeling > usualFeeling - FATIGUE_FEELING_DROP) return null;
+
+  // Gesamtbelastung: die Wochenreihen aller Muskelgruppen aufsummiert. Jede
+  // Übung gehört zu genau einer Gruppe, es wird also nichts doppelt gezählt.
+  const groups = Array.isArray(muscleLoadSeries) ? muscleLoadSeries : [];
+  const weeks = groups[0]?.values?.length || 0;
+  if (weeks < FATIGUE_WINDOW_WEEKS + FATIGUE_LOAD_LOOKBACK) return null;
+  const totals = new Array(weeks).fill(0);
+  groups.forEach((g) => {
+    (Array.isArray(g.values) ? g.values : []).forEach((v, i) => { totals[i] += v || 0; });
+  });
+
+  const recentLoad = mean(totals.slice(weeks - FATIGUE_WINDOW_WEEKS));
+  const beforeLoad = mean(
+    totals.slice(weeks - FATIGUE_WINDOW_WEEKS - FATIGUE_LOAD_LOOKBACK, weeks - FATIGUE_WINDOW_WEEKS)
+  );
+  if (!(beforeLoad > 0) || !(recentLoad >= beforeLoad * FATIGUE_LOAD_RISE)) return null;
+
+  return {
+    sessions: recent.length,
+    recentFeeling,
+    usualFeeling,
+    recentLabel: feelingLabel(Math.round(recentFeeling)),
+    usualLabel: feelingLabel(Math.round(usualFeeling)),
+    loadRise: Math.round((recentLoad / beforeLoad - 1) * 100),
+  };
+}
+
 // "War der Tag so hart wie sonst?" - der heutige RIR-Wert gegen den üblichen
 // derselben Übung. Bewusst nur beschreibend: ob "näher am Limit" gut oder
 // schlecht ist, hängt davon ab, ob heute mehr Gewicht auf der Stange lag,
@@ -3525,6 +3598,31 @@ function TrainingAppInner() {
         }
         .stat-item-clickable:active { background: var(--fill); }
 
+        /* Die Frühwarnung aus Gefühl und Belastung. Warnfarbe nur im Symbol,
+           der Text bleibt normal gesetzt: eine Beobachtung, die man lesen
+           soll, kein Alarm, der Schrecken verbreiten will. */
+        .fatigue-note {
+          display: flex;
+          gap: 9px;
+          align-items: flex-start;
+          font-size: 13px;
+          line-height: 1.5;
+          color: var(--text);
+          padding-bottom: 12px;
+          margin-bottom: 4px;
+          border-bottom: 1px solid var(--border);
+        }
+        .fatigue-note:last-child {
+          padding-bottom: 0;
+          margin-bottom: 0;
+          border-bottom: none;
+        }
+        .fatigue-note-icon {
+          color: var(--danger);
+          flex-shrink: 0;
+          margin-top: 2px;
+        }
+
         /* Eine Gefühlsstufe mit ihrem Leistungsvergleich. Die Herkunftsangabe
            steht bewusst als eigene Zeile darunter statt klein daneben - sie
            gehört zur Aussage, nicht als Fußnote an ihren Rand. */
@@ -6031,20 +6129,33 @@ function DashboardView({
   // Belastungssignale: dieselbe Auswertung wie im Fortschritt-Tab, hier aber
   // auf die auffälligen Gruppen eingedampft.
   const loadHistoryWeeks = useMemo(() => logsHistoryWeeks(logs), [logs]);
-  const signals = useMemo(() => {
-    const series = getMuscleLoadSeries(
+  // Die Wochenreihen werden zweimal gebraucht - für die Signale je
+  // Muskelgruppe und für die Gesamtbelastung in der Frühwarnung. Einmal
+  // gerechnet reicht; die Reihe über alle Gyms und Übungen ist nicht billig.
+  const loadSeries = useMemo(
+    () => getMuscleLoadSeries(
       logs, exBy, exerciseSubgroupOverrides, timeBasedExercises,
       muscleSeriesWeekCount(loadHistoryWeeks)
-    );
-    return series
+    ),
+    [logs, exBy, exerciseSubgroupOverrides, timeBasedExercises, loadHistoryWeeks]
+  );
+
+  const signals = useMemo(
+    () => loadSeries
       .map((g) => ({
         id: g.id,
         label: g.label,
         signal: detectLoadSignal(g.values, loadHistoryWeeks),
         change: muscleLoadChange(g.values, 4, loadHistoryWeeks),
       }))
-      .filter((g) => g.signal);
-  }, [logs, exBy, exerciseSubgroupOverrides, timeBasedExercises, loadHistoryWeeks]);
+      .filter((g) => g.signal),
+    [loadSeries, loadHistoryWeeks]
+  );
+
+  const fatigueWarning = useMemo(
+    () => getFatigueWarning(logs, loadSeries),
+    [logs, loadSeries]
+  );
 
   const lastLog = useMemo(() => {
     let best = null;
@@ -6237,7 +6348,23 @@ function DashboardView({
 
       <span className="stat-section-title">Belastung</span>
       <div className="card">
-        {signals.length === 0 ? (
+        {/* Steht über den Gruppen-Signalen, weil es den ganzen Menschen
+            betrifft und nicht eine Muskelgruppe. Bewusst nur zwei
+            Feststellungen und kein Rat: ob das ein Grund zum Zurückschalten
+            ist, hängt von der Trainingsphase und vom Rest des Lebens ab -
+            beides weiß die App nicht (KONZEPT.md, Regel 2 und 3). */}
+        {fatigueWarning && (
+          <div className="fatigue-note">
+            <AlertTriangle size={14} className="fatigue-note-icon" />
+            <div>
+              Seit {FATIGUE_WINDOW_WEEKS} Wochen fühlen sich deine Trainings schlechter an als
+              sonst – im Schnitt „{fatigueWarning.recentLabel}" statt „{fatigueWarning.usualLabel}"
+              {" "}(aus {fatigueWarning.sessions} {fatigueWarning.sessions === 1 ? "Training" : "Trainings"}).
+              Gleichzeitig liegt deine Belastung {fatigueWarning.loadRise} % über den Wochen davor.
+            </div>
+          </div>
+        )}
+        {signals.length === 0 && !fatigueWarning ? (
           <div style={{ color: "var(--text-dim)", fontSize: 13 }}>
             Keine Auffälligkeiten.
           </div>

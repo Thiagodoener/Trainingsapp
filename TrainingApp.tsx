@@ -341,11 +341,14 @@ const setKindFlags = (kind) => ({ warmup: kind === "warmup", dropset: kind === "
 const RIR_MAX = 4;
 const RIR_OPTIONS = [0, 1, 2, 3, 4];
 const rirLabel = (rir) => (rir >= RIR_MAX ? `${RIR_MAX}+` : String(rir));
-// "0 in Reserve" heisst: bis zum Muskelversagen.
-function fmtRir(rir, unit = "in Reserve") {
+// Überall dieselbe Schreibweise, auch bei 0: "0 RIR" statt "bis Versagen".
+// Beides heißt dasselbe, aber eine einheitliche Zahl lässt sich zwischen
+// Trainings vergleichen, ohne im Kopf zu übersetzen - und der Sonderfall
+// stand nur an manchen Stellen, was zwei Skalen vortäuschte, wo es eine gibt.
+function fmtRir(rir) {
   if (rir == null || !Number.isFinite(Number(rir))) return null;
   const n = Math.max(0, Math.min(RIR_MAX, Math.round(Number(rir))));
-  return n === 0 ? "bis Versagen" : `${rirLabel(n)} ${unit}`;
+  return `${rirLabel(n)} RIR`;
 }
 
 // Sitzungsgefuehl: fuenf Stufen mit Worten statt einer 10er-Skala. Worte,
@@ -935,6 +938,10 @@ function calculateTrainingStats(logs, exBy, timeBasedExercises) {
   let totalReps = 0;
   let totalDuration = 0;
   let best1RM = 0;
+  // Woher der Höchstwert stammt. Ohne das ist "213 kg" eine Zahl, zu der man
+  // nicht einmal die Übung nennen kann - und genau die Frage stellt man sich
+  // als Erstes.
+  let best1RMSource = null;
   let prs = 0;
   const muscleVolume = {};
   // Per exercise we remember both the heaviest weight and how many reps
@@ -964,7 +971,18 @@ function calculateTrainingStats(logs, exBy, timeBasedExercises) {
         if (!timeBased) {
           const volume = weight * reps;
           totalVolume += volume;
-          best1RM = Math.max(best1RM, estimate1RM(weight, reps));
+          const oneRM = estimate1RM(weight, reps);
+          if (oneRM > best1RM) {
+            best1RM = oneRM;
+            best1RMSource = {
+              exerciseId: entry.exerciseId,
+              exerciseName: ex.name,
+              date: log.date,
+              logId: log.id,
+              weight,
+              reps,
+            };
+          }
           muscleVolume[ex.group] = (muscleVolume[ex.group] || 0) + volume;
           const prev = bestByExercise[entry.exerciseId] || { weight: 0, reps: 0 };
           if (weight > 0) {
@@ -990,7 +1008,7 @@ function calculateTrainingStats(logs, exBy, timeBasedExercises) {
     });
   });
 
-  return { totalVolume, totalSets, totalReps, totalDuration, best1RM, prs, muscleVolume };
+  return { totalVolume, totalSets, totalReps, totalDuration, best1RM, best1RMSource, prs, muscleVolume };
 }
 
 function getTimePR(logs, exerciseId) {
@@ -1079,6 +1097,10 @@ const STAT_EXPLANATIONS = {
       "Dropsätze zählen hier bewusst nicht als eigener Satz: Die Zahl bildet Trainingsreize mit Erholung dazwischen ab, und zwischen einem Satz und seinen Drops gibt es keine Erholung. In der Belastungs-Karte darunter zählen sie dagegen voll mit - die Arbeit wurde ja geleistet.",
       "Die Prozentzahl vergleicht die aktuelle Woche gegen den Durchschnitt der Wochen davor - wie viele, bestimmst du mit den Feldern oben. Die Linie daneben zeigt genau diesen Zeitraum.",
     ],
+    formula: [
+      "Sätze = Anzahl abgehakter Sätze ohne Aufwärm- und Dropsätze, gezählt über die letzten 7 Tage.",
+      "Änderung = (diese Woche − Schnitt der gewählten Wochen davor) ÷ Schnitt × 100.",
+    ],
   },
   muscleLoad: {
     title: "Belastung pro Muskelgruppe",
@@ -1088,6 +1110,11 @@ const STAT_EXPLANATIONS = {
       "Deshalb wird jeder Satz an deinem eigenen besten Satz in genau dieser Übung gemessen: \"Wie viel von meinem Bestwert war das?\" Ein Satz auf Bestniveau zählt 1,0. Ein Kurzhantel-Satz mit 22 kg ist damit genauso viel wert wie ein Langhantel-Satz mit 60 kg, wenn beide gleich nah am jeweiligen persönlichen Bestwert liegen.",
       "Ein neuer Rekord verfälscht die Vergangenheit dabei nicht - er wird auf alle Wochen gleich angewendet und kürzt sich beim Prozentvergleich wieder heraus.",
       "Die Warnzeichen rechts kommen aus derselben Reihe: ein Hinweis, wenn die aktuelle Woche mehr als 15 % über dem Schnitt der 4 Wochen davor liegt, ein deutlicher Alarm ab 30 %, und ein Plateau-Zeichen, wenn seit 3 Wochen kein neuer Höchstwert mehr dazugekommen ist. Das sind Fragen, keine Urteile - wie es sich anfühlt, weißt nur du.",
+    ],
+    formula: [
+      "Wert eines Satzes = (kg × Wdh.) ÷ bester Satz dieser Übung. Bei Übungen ohne Gewicht zählen die Wiederholungen, bei Zeit-Übungen die Sekunden.",
+      "Wochenwert = Summe aller Satzwerte der Muskelgruppe in einem 7-Tage-Fenster. Dropsätze zählen hier voll mit.",
+      "Änderung = (diese Woche − Schnitt der gewählten Wochen davor) ÷ Schnitt × 100.",
     ],
   },
 };
@@ -3232,6 +3259,67 @@ function TrainingAppInner() {
         }
         .explain-body p:last-child { margin-bottom: 0; }
 
+        /* Die Karte "Letztes Training" führt in den Verlauf. position:
+           relative steht hier bewusst: der Pfeil rechts wird daran
+           ausgerichtet und würde sonst - wie das Pokal-Abzeichen zuvor - an
+           der nächsthöheren positionierten Ebene kleben. */
+        .dash-last-log {
+          position: relative;
+          cursor: pointer;
+          padding-right: 30px;
+        }
+        .dash-last-log-arrow {
+          position: absolute;
+          top: 50%;
+          right: 10px;
+          transform: translateY(-50%);
+          color: var(--text-faint);
+        }
+
+        /* Eine Kachel, hinter der noch etwas steckt. Der Pfeil im Label ist
+           der eigentliche Hinweis darauf; die Fläche reagiert nur beim
+           Antippen, damit sie im Ruhezustand wie ihre Nachbarn aussieht. */
+        .stat-item-clickable {
+          cursor: pointer;
+          border-radius: 10px;
+          transition: background 150ms ease;
+        }
+        .stat-item-clickable:active { background: var(--fill); }
+
+        /* Erklärender Nachsatz unter einem Chart - leiser als der Chart
+           selbst, aber nah genug dran, dass klar ist, worauf er sich
+           bezieht. */
+        .chart-hint {
+          margin-top: 10px;
+          font-size: 12px;
+          line-height: 1.45;
+          color: var(--text-faint);
+        }
+
+        /* Der Rechenweg im Erklärfenster. Abgesetzt vom Fließtext, weil er
+           nachgeschlagen und nicht gelesen wird. */
+        .explain-formula {
+          margin-top: 14px;
+          padding: 11px 12px;
+          border-radius: 10px;
+          background: var(--fill);
+          font-size: 13px;
+          line-height: 1.5;
+          color: var(--text);
+        }
+        .explain-formula-label {
+          display: block;
+          font-size: 11px;
+          letter-spacing: 0.06em;
+          text-transform: uppercase;
+          color: var(--text-dim);
+          margin-bottom: 6px;
+        }
+        .explain-formula code {
+          font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+          font-size: 12.5px;
+        }
+
         /* Eine Atemübung in der "Pro Übung"-Liste. Name und Kennzahlen
            untereinander statt nebeneinander: auf einem Telefon wären drei
            Werte plus Übungsname in einer Zeile entweder abgeschnitten oder
@@ -4282,8 +4370,13 @@ function TrainingAppInner() {
           cursor: pointer;
         }
         /* Next to the exercise name it sits in the flow, not absolutely
-           positioned like the one inside a set field. */
-        .pr-badge-inline {
+           positioned like the one inside a set field.
+           Zwei Klassen im Selektor, weil .pr-badge weiter unten steht: bei
+           gleicher Spezifität gewinnt die spätere Regel, und das absolute
+           "top/right" von .pr-badge hat dieses Abzeichen aus der Zeile heraus
+           in die obere rechte Ecke der GANZEN App geschossen - dort war die
+           nächste positionierte Ebene. */
+        .pr-badge.pr-badge-inline {
           position: static;
           margin-left: 6px;
           display: inline-flex;
@@ -4940,6 +5033,9 @@ function TrainingAppInner() {
             onStartWorkout={(plan, entryId) => startScheduledWorkout(plan, entryId)}
             onStartBreathing={(exercise, entryId) => startBreathingSession(exercise, entryId)}
             onOpenProgress={() => setTab("progress")}
+            // Derselbe Sprung, den der Kalender schon macht: in den Verlauf
+            // und dieses Training gleich aufgeklappt.
+            onOpenLog={(log) => { setTab("progress"); setHistoryFocusLogId(log.id); }}
           />
         ) : tab === "calendar" ? (
           <CalendarView
@@ -5646,6 +5742,7 @@ function DashboardView({
   onStartWorkout,
   onStartBreathing,
   onOpenProgress,
+  onOpenLog,
 }) {
   const todayKey = toDateKey(new Date());
 
@@ -5888,7 +5985,11 @@ function DashboardView({
       {lastLogInfo && (
         <>
           <span className="stat-section-title">Letztes Training</span>
-          <div className="card">
+          <div
+            className="card dash-last-log"
+            onClick={() => onOpenLog?.(lastLog)}
+            title="Antippen: das ganze Training ansehen"
+          >
             <div className="plan-title">{lastLogInfo.name}</div>
             <div style={{ marginTop: 6, color: "var(--text-dim)", fontSize: 13 }}>
               {timeAgoShort(lastLogInfo.date)}
@@ -5900,6 +6001,7 @@ function DashboardView({
                 <Trophy size={14} /> {lastLogInfo.prs} {lastLogInfo.prs === 1 ? "Rekord" : "Rekorde"}
               </div>
             )}
+            <ChevronRight size={16} className="dash-last-log-arrow" />
           </div>
         </>
       )}
@@ -10951,7 +11053,7 @@ function LogView({
                       : `${s.weight || 0}kg×${s.reps || 0}`)
                   )
                   .join(", ")}
-                {fmtRir(history.lastRir, "RIR") ? ` · ${fmtRir(history.lastRir, "RIR")}` : ""}
+                {fmtRir(history.lastRir) ? ` · ${fmtRir(history.lastRir)}` : ""}
               </div>
             )}
 
@@ -11419,9 +11521,21 @@ function useChartColors(theme) {
 // wie dort verwässern. keys erlaubt mehrere Datenreihen auf einmal (z. B.
 // eine pro Gym, wenn nach Gym aufgesplittet wird) - jede wird nur gegen
 // ihre eigene Historie verglichen.
-function buildPercentSeries(data, keys, compareWeeks, toleranceDays = 3) {
+// Der Spielraum wächst mit dem Vergleichszeitraum. Feste ±3 Tage sind bei
+// "Vorwoche" richtig, bei "20 Wochen" aber absurd streng: man müsste dieselbe
+// Übung zufällig innerhalb von drei Tagen um ein Datum vor fünf Monaten
+// trainiert haben, sonst gibt es keinen Vergleichswert - und die Linie reißt
+// an dieser Stelle. 15 % des Abstands halten das Fenster proportional
+// (±3 Tage bei einer Woche, ~±12 Tage bei zwölf).
+const PERCENT_TOLERANCE_SHARE = 0.15;
+const PERCENT_TOLERANCE_MIN_DAYS = 3;
+
+function buildPercentSeries(data, keys, compareWeeks, toleranceDays = PERCENT_TOLERANCE_MIN_DAYS) {
   const targetOffsetMs = compareWeeks * LOAD_WEEK_MS;
-  const toleranceMs = toleranceDays * 86400000;
+  const toleranceMs = Math.max(
+    toleranceDays * 86400000,
+    targetOffsetMs * PERCENT_TOLERANCE_SHARE
+  );
   return data.map((pt, i) => {
     const out = { date: pt.date, ts: pt.ts };
     keys.forEach((key) => {
@@ -11641,6 +11755,19 @@ function ExerciseStatCard({ title, dataKey, color, chartData, splitByGym, gymKey
     [chartData, percentKeys, compareWeeks]
   );
   const hasPercentValues = percentData.some((pt) => percentKeys.some((k) => pt[k] != null));
+  // Trainings, für die es keinen Vergleichspartner gibt, haben keinen Wert -
+  // dort bricht die Linie. Das ist richtig so (eine durchgezogene Linie würde
+  // eine Zahl behaupten, die nie berechnet wurde), aber ohne Erklärung sieht
+  // es nach einem Fehler aus. Gezählt wird nur, was auch absolut vorhanden
+  // war: ein Training ohne diesen Wert fehlt in beiden Ansichten und ist
+  // keine Lücke des Prozent-Vergleichs.
+  const percentGaps = useMemo(
+    () =>
+      percentData.filter((pt, i) =>
+        percentKeys.some((k) => pt[k] == null && chartData[i]?.[k] > 0)
+      ).length,
+    [percentData, percentKeys, chartData]
+  );
   const activeData = mode === "percent" ? percentData : chartData;
 
   const renderLines = () =>
@@ -11709,7 +11836,7 @@ function ExerciseStatCard({ title, dataKey, color, chartData, splitByGym, gymKey
       {mode === "percent" && !hasPercentValues ? (
         <div className="empty-state" style={{ padding: "14px 0" }}>
           Noch kein Vergleichswert für „{compareLabel}" – dafür fehlt ein Training von vor
-          diesem Zeitraum (±3 Tage Toleranz).
+          diesem Zeitraum.
         </div>
       ) : (
         <div style={{ height: 190, marginTop: 14 }}>
@@ -11761,6 +11888,16 @@ function ExerciseStatCard({ title, dataKey, color, chartData, splitByGym, gymKey
               {gymLegend}
             </LineChart>
           </ResponsiveContainer>
+        </div>
+      )}
+      {mode === "percent" && hasPercentValues && percentGaps > 0 && (
+        // Bewusst nicht "unterbrochene Linie": fehlen die Werte am Anfang der
+        // Reihe, ist die Linie nur kürzer und nirgends unterbrochen. Die
+        // Aussage, die in beiden Fällen stimmt, ist die über die Trainings.
+        <div className="chart-hint">
+          {percentGaps === 1 ? "Für ein Training" : `Für ${percentGaps} Trainings`} fehlt in
+          dieser Ansicht der Punkt: Es gab kein Training dieser Übung im Abstand von
+          „{compareLabel}", gegen das sich vergleichen ließe.
         </div>
       )}
     </div>
@@ -12674,6 +12811,8 @@ function ProgressView({
   // Welche Karten-Erklärung gerade offen ist (siehe STAT_EXPLANATIONS) -
   // null heißt: keine.
   const [explain, setExplain] = useState(null);
+  // Herkunft des besten geschätzten 1RM, sobald die Kachel angetippt wurde.
+  const [best1RMInfo, setBest1RMInfo] = useState(null);
   // Collapsed by default - opening a group is a deliberate look at detail,
   // not something that should greet you on every visit to the tab.
   const [expandedGroups, setExpandedGroups] = useState({});
@@ -12828,9 +12967,16 @@ function ProgressView({
             <span className="stat-value">{weeklyWorkouts}</span>
             <span className="stat-label">Trainings (7 Tage)</span>
           </div>
-          <div className="stat-item">
+          <div
+            className={`stat-item ${stats.best1RMSource ? "stat-item-clickable" : ""}`}
+            onClick={() => stats.best1RMSource && setBest1RMInfo(stats.best1RMSource)}
+            title={stats.best1RMSource ? "Antippen: aus welchem Satz stammt dieser Wert?" : undefined}
+          >
             <span className="stat-value">{Math.round(stats.best1RM)} kg</span>
-            <span className="stat-label">Bestes gesch. 1RM</span>
+            <span className="stat-label">
+              Bestes gesch. 1RM
+              {stats.best1RMSource && <ChevronRight size={12} style={{ verticalAlign: -2, marginLeft: 3 }} />}
+            </span>
           </div>
           <div className="stat-item">
             <span className="stat-value">{stats.prs}</span>
@@ -13058,12 +13204,55 @@ function ProgressView({
         />
       )}
 
+      {best1RMInfo && (
+        <Modal title="Bestes geschätztes 1RM" onClose={() => setBest1RMInfo(null)} width={380}>
+          <div className="plan-title" style={{ marginBottom: 10 }}>{best1RMInfo.exerciseName}</div>
+          <div className="stat-hero" style={{ marginBottom: 10 }}>
+            <span className="stat-hero-label">Erreicht mit</span>
+            <span className="stat-hero-value">
+              {fmtDecimal(best1RMInfo.weight)} kg × {best1RMInfo.reps}
+            </span>
+            <div style={{ marginTop: 4, fontSize: 12.5, color: "var(--text-dim)" }}>
+              {fmtDate(best1RMInfo.date)}
+            </div>
+          </div>
+          {/* Der Satz selbst ist die Antwort auf "woher kommt die Zahl" - der
+              Rechenweg gehört dazu, sonst bleibt die Schätzung undurchsichtig. */}
+          <div className="explain-formula">
+            <span className="explain-formula-label">So wird gerechnet</span>
+            <div>
+              Aus Gewicht und Wiederholungen dieses einen Satzes wird geschätzt, was einmal
+              maximal gegangen wäre. Je mehr Wiederholungen, desto ungenauer die Schätzung -
+              ein Satz mit 3 Wiederholungen ist belastbarer als einer mit 15.
+            </div>
+          </div>
+          <button
+            className="btn btn-ghost btn-block btn-sm"
+            style={{ marginTop: 12 }}
+            onClick={() => {
+              setSelected(best1RMInfo.exerciseId);
+              setBest1RMInfo(null);
+            }}
+          >
+            Verlauf dieser Übung ansehen
+          </button>
+        </Modal>
+      )}
+
       {explain && (
         <Modal title={explain.title} onClose={() => setExplain(null)} width={420}>
           <div className="explain-body">
             {explain.paragraphs.map((text, i) => (
               <p key={i}>{text}</p>
             ))}
+            {explain.formula && (
+              <div className="explain-formula">
+                <span className="explain-formula-label">So wird gerechnet</span>
+                {explain.formula.map((line, i) => (
+                  <div key={i} style={{ marginTop: i === 0 ? 0 : 6 }}>{line}</div>
+                ))}
+              </div>
+            )}
           </div>
         </Modal>
       )}

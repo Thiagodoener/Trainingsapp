@@ -661,6 +661,21 @@ function getExerciseHistory(logs, exerciseId, excludeSessionId, isTimeBased = fa
   let bestTotalReps = 0;
   let bestTotalDuration = 0;
   let comparableSessions = 0;
+  // Zu jedem Bestwert das RIR der Einheit, in der er aufgestellt wurde. Ein
+  // Rekord sagt für sich genommen nur "mehr als vorher"; erst zusammen mit
+  // der Reserve wird daraus eine Aussage: derselbe Wert mit 2 in Reserve ist
+  // etwas anderes als derselbe Wert am Limit.
+  let bestWeightRir = null;
+  let best1RMRir = null;
+  let bestSetVolumeRir = null;
+  let bestSetRepsRir = null;
+  let bestDurationRir = null;
+  let bestTotalVolumeRir = null;
+  let bestTotalRepsRir = null;
+  let bestTotalDurationRir = null;
+  // Alle RIR-Angaben dieser Übung, neueste zuerst - Grundlage für "wie hart
+  // beendest du diese Übung sonst?".
+  const rirHistory = [];
 
   for (const log of past) {
     // Logs written by older versions (or a half-finished save) can be
@@ -685,31 +700,42 @@ function getExerciseHistory(logs, exerciseId, excludeSessionId, isTimeBased = fa
     );
     if (doneSets.length === 0) continue;
 
+    // Bei mehreren Plaetzen zaehlt die erste vorhandene Angabe.
+    const rirEntry = matching.find((e) => Number.isFinite(Number(e.rir)));
+    const sessionRir = rirEntry ? Number(rirEntry.rir) : null;
+    if (sessionRir != null) rirHistory.push(sessionRir);
+
     if (!lastSets) {
       lastSets = doneSets;
       lastDate = log.date;
-      // Bei mehreren Plaetzen zaehlt die erste vorhandene Angabe.
-      const rirEntry = matching.find((e) => Number.isFinite(Number(e.rir)));
-      lastRir = rirEntry ? Number(rirEntry.rir) : null;
+      lastRir = sessionRir;
     }
 
     comparableSessions += 1;
-    // Per-exercise totals of this session.
-    bestTotalReps = Math.max(bestTotalReps, doneSets.reduce((a, x) => a + toNum(x.reps), 0));
-    bestTotalDuration = Math.max(
-      bestTotalDuration, doneSets.reduce((a, x) => a + toNum(x.duration), 0)
-    );
-    bestTotalVolume = Math.max(
-      bestTotalVolume, doneSets.reduce((a, x) => a + toNum(x.weight) * toNum(x.reps), 0)
-    );
+    // Per-exercise totals of this session. Bewusst kein Math.max mehr: nur
+    // wer merkt, WANN ein Bestwert überboten wurde, kann auch festhalten,
+    // mit welcher Reserve das geschah.
+    const totalReps = doneSets.reduce((a, x) => a + toNum(x.reps), 0);
+    if (totalReps > bestTotalReps) { bestTotalReps = totalReps; bestTotalRepsRir = sessionRir; }
+    const totalDuration = doneSets.reduce((a, x) => a + toNum(x.duration), 0);
+    if (totalDuration > bestTotalDuration) { bestTotalDuration = totalDuration; bestTotalDurationRir = sessionRir; }
+    const totalVolume = doneSets.reduce((a, x) => a + toNum(x.weight) * toNum(x.reps), 0);
+    if (totalVolume > bestTotalVolume) { bestTotalVolume = totalVolume; bestTotalVolumeRir = sessionRir; }
+
     for (const set of doneSets) {
-      bestSetReps = Math.max(bestSetReps, toNum(set.reps));
-      bestSetVolume = Math.max(bestSetVolume, toNum(set.weight) * toNum(set.reps));
-      best1RM = Math.max(best1RM, estimate1RM(set.weight, set.reps));
+      const reps = toNum(set.reps);
+      if (reps > bestSetReps) { bestSetReps = reps; bestSetRepsRir = sessionRir; }
+      const vol = toNum(set.weight) * reps;
+      if (vol > bestSetVolume) { bestSetVolume = vol; bestSetVolumeRir = sessionRir; }
+      const oneRM = estimate1RM(set.weight, set.reps);
+      if (oneRM > best1RM) { best1RM = oneRM; best1RMRir = sessionRir; }
     }
 
     if (isTimeBased) {
-      for (const set of doneSets) bestDuration = Math.max(bestDuration, Number(set.duration) || 0);
+      for (const set of doneSets) {
+        const dur = Number(set.duration) || 0;
+        if (dur > bestDuration) { bestDuration = dur; bestDurationRir = sessionRir; }
+      }
     } else {
       // Numbers are compared explicitly: values that slipped through as
       // strings would otherwise compare lexically ("60" > "7" is false).
@@ -719,8 +745,10 @@ function getExerciseHistory(logs, exerciseId, excludeSessionId, isTimeBased = fa
         if (weight > bestWeight) {
           bestWeight = weight;
           bestRepsAtBestWeight = reps;
+          bestWeightRir = sessionRir;
         } else if (weight === bestWeight && reps > bestRepsAtBestWeight) {
           bestRepsAtBestWeight = reps;
+          bestWeightRir = sessionRir;
         }
       }
     }
@@ -730,7 +758,71 @@ function getExerciseHistory(logs, exerciseId, excludeSessionId, isTimeBased = fa
     lastSets, lastDate, lastRir, bestWeight, bestRepsAtBestWeight, bestDuration, lastNote,
     best1RM, bestSetVolume, bestSetReps, bestTotalVolume, bestTotalReps, bestTotalDuration,
     comparableSessions,
+    bestWeightRir, best1RMRir, bestSetVolumeRir, bestSetRepsRir, bestDurationRir,
+    bestTotalVolumeRir, bestTotalRepsRir, bestTotalDurationRir,
+    rirHistory,
+    typicalRir: typicalRir(rirHistory),
   };
+}
+
+// Wie hart beendest du diese Übung üblicherweise? Median statt Mittelwert,
+// weil die Skala nur fünf Stufen hat und ein einzelner Ausreißer-Tag
+// ("heute ging gar nichts") den Schnitt sonst spürbar zieht. Nur die
+// jüngsten Einheiten zählen: wie nah man ans Limit geht, ändert sich mit
+// der Trainingsphase, ein Wert von vor einem Jahr beschreibt nicht mehr,
+// wie man heute trainiert.
+const TYPICAL_RIR_WINDOW = 10;
+const TYPICAL_RIR_MIN_SESSIONS = 3;
+
+// "War der Tag so hart wie sonst?" - der heutige RIR-Wert gegen den üblichen
+// derselben Übung. Bewusst nur beschreibend: ob "näher am Limit" gut oder
+// schlecht ist, hängt davon ab, ob heute mehr Gewicht auf der Stange lag,
+// wie die Woche lief und wie man sich fühlt. Das weiß die App nicht, und ein
+// Urteil zu fällen, dessen Grundlage man nicht kennt, verstößt gegen Regel 3.
+// Halbe Werte sind möglich (Median aus einer geraden Anzahl), deshalb wird
+// die Anzeige gerundet - "sonst 1,5 RIR" wäre eine Scheingenauigkeit, die es
+// auf einer Fünf-Stufen-Skala nicht gibt.
+function rirComparison(currentRir, typical) {
+  const now = Number(currentRir);
+  if (!Number.isFinite(now) || typical == null) return null;
+  const usual = Number(typical);
+  if (!Number.isFinite(usual)) return null;
+  const shown = `sonst meist ${rirLabel(Math.round(usual))} RIR`;
+  // Eine halbe Stufe ist auf dieser Skala kein Unterschied, sondern
+  // Rauschen - erst ab einer ganzen Stufe wird etwas behauptet.
+  if (Math.abs(now - usual) < 1) return `Wie üblich für diese Übung (${shown}).`;
+  return now < usual
+    ? `Näher am Limit als üblich (${shown}).`
+    : `Mehr Reserve als üblich (${shown}).`;
+}
+
+// Ordnet einen Rekord gegen den alten ein - nicht über die Zahl, sondern
+// über den Preis: Mehr Reserve heißt, derselbe Rekord kostete weniger als
+// beim letzten Mal. Bewusst nur eine Feststellung, kein Lob und kein Rat
+// (siehe KONZEPT.md, Regel 3) - und nur dort, wo beide Seiten eine Angabe
+// haben. Ohne alten RIR-Wert wäre jede Einordnung geraten.
+function recordReserveNote(currentRir, previousRir) {
+  const now = Number(currentRir);
+  const before = Number(previousRir);
+  if (!Number.isFinite(now) || !Number.isFinite(before)) return null;
+  if (now > before) {
+    return before === 0
+      ? "Mehr Reserve als beim alten Rekord – der ging bis ans Limit."
+      : `Mehr Reserve als beim alten Rekord (${rirLabel(before)} RIR).`;
+  }
+  if (now < before) return `Näher am Limit als beim alten Rekord (${rirLabel(before)} RIR).`;
+  return "Gleiche Reserve wie beim alten Rekord.";
+}
+
+function typicalRir(values) {
+  const list = (Array.isArray(values) ? values : [])
+    .filter((v) => Number.isFinite(Number(v)))
+    .slice(0, TYPICAL_RIR_WINDOW)
+    .map(Number)
+    .sort((a, b) => a - b);
+  if (list.length < TYPICAL_RIR_MIN_SESSIONS) return null;
+  const mid = Math.floor(list.length / 2);
+  return list.length % 2 === 1 ? list[mid] : (list[mid - 1] + list[mid]) / 2;
 }
 
 // Live-Vergleich zum letzten Mal, während der Eingabe - nicht erst wenn ein
@@ -802,6 +894,7 @@ function describeSetPRs(set, best, isTimeBased = false, hasWeight = true) {
         title: "Längster Satz",
         value: `${dur} Sek.`,
         previous: toNum(best.bestDuration) > 0 ? `${toNum(best.bestDuration)} Sek.` : null,
+        previousRir: best.bestDurationRir,
       });
     }
     return found;
@@ -815,6 +908,7 @@ function describeSetPRs(set, best, isTimeBased = false, hasWeight = true) {
       title: "Meiste Wiederholungen in einem Satz",
       value: `${reps} Wdh.`,
       previous: toNum(best.bestSetReps) > 0 ? `${toNum(best.bestSetReps)} Wdh.` : null,
+      previousRir: best.bestSetRepsRir,
     });
   }
 
@@ -827,6 +921,7 @@ function describeSetPRs(set, best, isTimeBased = false, hasWeight = true) {
       title: "Höchstes Gewicht",
       value: `${fmtDecimal(weight)} kg`,
       previous: toNum(best.bestWeight) > 0 ? `${fmtDecimal(best.bestWeight)} kg` : null,
+      previousRir: best.bestWeightRir,
     });
   }
   const oneRM = estimate1RM(weight, reps);
@@ -835,6 +930,7 @@ function describeSetPRs(set, best, isTimeBased = false, hasWeight = true) {
       title: "Höchste geschätzte 1RM",
       value: `${Math.round(oneRM)} kg`,
       previous: toNum(best.best1RM) > 0 ? `${Math.round(toNum(best.best1RM))} kg` : null,
+      previousRir: best.best1RMRir,
     });
   }
   const vol = weight * reps;
@@ -843,6 +939,7 @@ function describeSetPRs(set, best, isTimeBased = false, hasWeight = true) {
       title: "Höchstes Satzvolumen",
       value: `${Math.round(vol)} kg`,
       previous: toNum(best.bestSetVolume) > 0 ? `${Math.round(toNum(best.bestSetVolume))} kg` : null,
+      previousRir: best.bestSetVolumeRir,
     });
   }
   return found;
@@ -863,6 +960,7 @@ function describeExercisePRs(sets, best, isTimeBased = false, hasWeight = true) 
         title: "Längste Gesamtzeit der Übung",
         value: `${total} Sek.`,
         previous: toNum(best.bestTotalDuration) > 0 ? `${toNum(best.bestTotalDuration)} Sek.` : null,
+        previousRir: best.bestTotalDurationRir,
       });
     }
     return found;
@@ -874,6 +972,7 @@ function describeExercisePRs(sets, best, isTimeBased = false, hasWeight = true) 
       title: "Meiste Wiederholungen der Übung",
       value: `${totalReps} Wdh.`,
       previous: toNum(best.bestTotalReps) > 0 ? `${toNum(best.bestTotalReps)} Wdh.` : null,
+      previousRir: best.bestTotalRepsRir,
     });
   }
   if (hasWeight) {
@@ -884,6 +983,7 @@ function describeExercisePRs(sets, best, isTimeBased = false, hasWeight = true) 
         value: `${Math.round(totalVol)} kg`,
         previous: toNum(best.bestTotalVolume) > 0
           ? `${Math.round(toNum(best.bestTotalVolume))} kg` : null,
+        previousRir: best.bestTotalVolumeRir,
       });
     }
   }
@@ -3514,6 +3614,15 @@ function TrainingAppInner() {
           text-transform: uppercase;
           color: var(--text-faint);
         }
+        /* Die Einordnung unter der RIR-Abfrage. Leise gesetzt: sie ist eine
+           Beobachtung am Rande, kein Ergebnis, das Aufmerksamkeit fordert. */
+        .rir-compare {
+          margin-top: 6px;
+          font-size: 12px;
+          line-height: 1.4;
+          color: var(--text-faint);
+        }
+
         .rir-ask-row {
           margin-bottom: 0;
         }
@@ -10818,7 +10927,7 @@ function LogView({
                     title="Rekord für die ganze Übung – antippen"
                     onClick={(ev) => {
                       ev.stopPropagation();
-                      setPrInfo({ list: exercisePrs, exerciseName: ex?.name || "Übung" });
+                      setPrInfo({ list: exercisePrs, exerciseName: ex?.name || "Übung", rir: entry.rir });
                     }}
                   >
                     <Trophy size={12} />
@@ -11144,7 +11253,7 @@ function LogView({
                               title="Was für ein Rekord? Antippen."
                               onClick={(ev) => {
                                 ev.stopPropagation();
-                                setPrInfo({ list: pr, exerciseName: ex?.name || "Übung" });
+                                setPrInfo({ list: pr, exerciseName: ex?.name || "Übung", rir: entry.rir });
                               }}
                             >
                               <Trophy size={12} />
@@ -11166,7 +11275,7 @@ function LogView({
                             title="Was für ein Rekord? Antippen."
                             onClick={(ev) => {
                               ev.stopPropagation();
-                              setPrInfo({ list: pr, exerciseName: ex?.name || "Übung" });
+                              setPrInfo({ list: pr, exerciseName: ex?.name || "Übung", rir: entry.rir });
                             }}
                           >
                             <Trophy size={12} />
@@ -11235,6 +11344,16 @@ function LogView({
               </div>
             )}
 
+            {/* "War der Tag so hart wie sonst?" - erscheint bewusst ERST,
+                nachdem ein Wert gewählt wurde. Stünde der übliche Wert schon
+                vorher da, wäre er eine Vorgabe: man tippt ihn an, statt
+                hinzuspüren, und die Angabe wäre wertlos. Genau das meint
+                Regel 1 in KONZEPT.md mit "erst schätzen lassen, dann Zahlen
+                zeigen". */}
+            {rirComparison(entry.rir, history.typicalRir) && (
+              <div className="rir-compare">{rirComparison(entry.rir, history.typicalRir)}</div>
+            )}
+
             <button
               className="btn btn-ghost btn-block btn-sm"
               onClick={() => addSet(entry.id)}
@@ -11283,11 +11402,30 @@ function LogView({
                 {r.title}
               </span>
               <span className="stat-hero-value">{r.value}</span>
-              <div style={{ marginTop: 4, fontSize: 12.5, color: "var(--text-dim)" }}>
+              {/* Die eigentliche Aussage: ein Rekord mit mehr Reserve als der
+                  alte ist mehr wert als die Zahl allein verrät. Nur wenn
+                  beide Seiten eine Angabe haben - ohne Vergleichswert wäre
+                  jede Einordnung geraten.
+                  Achtung Reihenfolge: .stat-hero ist column-reverse, die
+                  Anzeige läuft also von unten nach oben. Damit dieser Satz
+                  direkt UNTER der "Bisher"-Zeile landet, auf die er sich
+                  bezieht, muss er im Code davor stehen. */}
+              {recordReserveNote(prInfo.rir, r.previousRir) && (
+                <div style={{ fontSize: 12.5, color: "var(--brass)" }}>
+                  {recordReserveNote(prInfo.rir, r.previousRir)}
+                </div>
+              )}
+              <div style={{ fontSize: 12.5, color: "var(--text-dim)" }}>
                 {r.previous ? `Bisher: ${r.previous}` : "Erste gewertete Bestmarke"}
+                {r.previous && fmtRir(r.previousRir) ? ` (${fmtRir(r.previousRir)})` : ""}
               </div>
             </div>
           ))}
+          {fmtRir(prInfo.rir) && (
+            <div style={{ fontSize: 12.5, color: "var(--text-dim)", marginTop: 2 }}>
+              Heute erreicht mit {fmtRir(prInfo.rir)}.
+            </div>
+          )}
           <button
             className="btn btn-primary btn-block btn-sm"
             style={{ marginTop: 14 }}

@@ -774,6 +774,130 @@ function getExerciseHistory(logs, exerciseId, excludeSessionId, isTimeBased = fa
 const TYPICAL_RIR_WINDOW = 10;
 const TYPICAL_RIR_MIN_SESSIONS = 3;
 
+// ---------------------------------------------------------------------------
+// Gefühl gegen Leistung (KONZEPT.md, Stufe 3)
+//
+// Die Frage: Sagt dein Gefühl nach dem Training etwas über deine tatsächliche
+// Leistung aus? Zwei Fallen stecken darin, und beide sind der Grund, warum
+// hier mehr steht als ein Mittelwert je Gefühlsstufe:
+//
+// 1. Die Leistung steigt über Monate ohnehin. Gegen einen flachen Durchschnitt
+//    verglichen, sähen späte Trainings pauschal gut aus - man würde den
+//    Trainingsfortschritt messen, nicht das Gefühl. Verglichen wird deshalb
+//    gegen die ERWARTUNG für genau diesen Tag: den Schnitt der letzten
+//    Einheiten derselben Übung davor. Ausgewertet wird nur die Abweichung
+//    davon, und die enthält den Trend per Konstruktion nicht mehr.
+//
+// 2. Die Datenmenge ist der Engpass. Aus 15 Trainings werden vielleicht fünf
+//    "müde"-Tage; ein Mittelwert aus fünf Zahlen ist Rauschen. Gerechnet wird
+//    deshalb pro ÜBUNG statt pro Training - das sind vier bis fünf
+//    Beobachtungen je Einheit statt einer. Kein echter Faktor fünf, weil die
+//    Übungen eines Tages sich ähneln, aber deutlich schneller belastbar.
+//    Genau deshalb zählt für die Vertrauensschwelle unten die Zahl der
+//    TRAININGS, nicht die der Beobachtungen: Übungen desselben Tages sind
+//    kein unabhängiger Nachweis.
+//
+// Leistung heißt hier Arbeit JE SATZ, nicht Arbeit insgesamt. Ein kurzer Tag
+// mit weniger Sätzen ist sonst nicht von einem schwachen Tag zu unterscheiden.
+// ---------------------------------------------------------------------------
+
+// Wie viele Nachbar-Einheiten je Seite die Erwartung bilden. Bewusst
+// beidseitig, obwohl KONZEPT.md von den "letzten" Sitzungen spricht: Ein
+// Schnitt nur aus der Vergangenheit hinkt einem steigenden Niveau immer um
+// ein paar Wochen hinterher, wodurch JEDER Tag ein kleines Plus bekäme - bei
+// spürbarem Fortschritt schnell mehrere Prozent. Für den Vergleich der
+// Gefühlsstufen untereinander wäre das egal (alle Stufen bekämen dasselbe
+// Plus), für die Zahl, die dasteht, nicht. Die Auswertung läuft ohnehin
+// rückblickend über abgeschlossene Trainings, deshalb ist "das Niveau um
+// diesen Tag herum" verfügbar und ehrlicher als eine Vorhersage.
+const FEELING_EXPECT_SIDE = 2;     // bis zu 2 Einheiten davor und 2 danach
+const FEELING_EXPECT_MIN = 2;      // darunter ist es keine Erwartung, sondern ein Einzelwert
+const FEELING_MIN_SESSIONS_TENDENCY = 3;  // ab hier eine Tendenz in Worten
+const FEELING_MIN_SESSIONS_PERCENT = 5;   // ab hier eine Prozentzahl
+
+function getFeelingPerformance(logs, timeBasedExercises) {
+  const safeLogs = (Array.isArray(logs) ? logs : []).filter(Boolean);
+  const chronological = [...safeLogs].sort((a, b) => new Date(a.date) - new Date(b.date));
+
+  // Womit die Arbeit eines Satzes gemessen wird, hängt an der Übungsart -
+  // einmal je Übung bestimmt statt in jeder Schleifenrunde neu.
+  const modeCache = {};
+  const modeFor = (exerciseId) => {
+    if (modeCache[exerciseId]) return modeCache[exerciseId];
+    const isTime = isTimeBasedInLogs(safeLogs, exerciseId, timeBasedExercises);
+    const hasWeight = safeLogs.some((l) =>
+      performedWorkingSets(logSetsFor(l, exerciseId)).some((s) => toNum(s.weight) > 0)
+    );
+    modeCache[exerciseId] = isTime ? "time" : hasWeight ? "weight" : "reps";
+    return modeCache[exerciseId];
+  };
+
+  // Erster Durchgang: je Übung die Leistung jeder Einheit, in zeitlicher
+  // Reihenfolge. Erst wenn die Reihe vollständig ist, lässt sich das Niveau
+  // um einen Tag herum bestimmen.
+  const seriesByExercise = {};
+  let sessionsWithFeeling = 0;
+
+  chronological.forEach((log) => {
+    const feeling = Number.isFinite(Number(log.feeling)) ? Number(log.feeling) : null;
+    if (feeling != null) sessionsWithFeeling += 1;
+
+    // Eine Übung kann mehrfach im selben Training stehen (Zirkel: A, B, A).
+    // Alle Plätze gehören zusammen, sonst zählte derselbe Tag doppelt.
+    const exerciseIds = [...new Set(logEntries(log).map((e) => e.exerciseId).filter(Boolean))];
+
+    exerciseIds.forEach((exerciseId) => {
+      const sets = performedWorkingSets(logSetsFor(log, exerciseId));
+      if (sets.length === 0) return;
+      const mode = modeFor(exerciseId);
+      const perSet = sets.reduce((sum, s) => sum + loadSetWork(s, mode), 0) / sets.length;
+      if (!(perSet > 0)) return;
+      const series = seriesByExercise[exerciseId] || (seriesByExercise[exerciseId] = []);
+      series.push({ logId: log.id, feeling, perSet });
+    });
+  });
+
+  // Zweiter Durchgang: jede Einheit mit Gefühlsangabe gegen ihre Nachbarn.
+  // Die Erwartung entsteht aus ALLEN Nachbar-Einheiten, auch aus denen ohne
+  // Gefühlsangabe - sie beschreibt das übliche Niveau, nicht die Stimmung.
+  const byFeeling = {};
+  Object.values(seriesByExercise).forEach((series) => {
+    series.forEach((point, i) => {
+      if (point.feeling == null) return;
+      const neighbours = [
+        ...series.slice(Math.max(0, i - FEELING_EXPECT_SIDE), i),
+        ...series.slice(i + 1, i + 1 + FEELING_EXPECT_SIDE),
+      ];
+      if (neighbours.length < FEELING_EXPECT_MIN) return;
+      const expected = neighbours.reduce((sum, p) => sum + p.perSet, 0) / neighbours.length;
+      if (!(expected > 0)) return;
+      const row = byFeeling[point.feeling] || (byFeeling[point.feeling] = { deviations: [], sessions: new Set() });
+      row.deviations.push(((point.perSet - expected) / expected) * 100);
+      row.sessions.add(point.logId);
+    });
+  });
+
+  const rows = FEELING_OPTIONS.map(([value, label]) => {
+    const row = byFeeling[value];
+    if (!row || row.deviations.length === 0) return null;
+    const sessions = row.sessions.size;
+    if (sessions < FEELING_MIN_SESSIONS_TENDENCY) return null;
+    const avg = row.deviations.reduce((sum, v) => sum + v, 0) / row.deviations.length;
+    return {
+      value,
+      label,
+      sessions,
+      observations: row.deviations.length,
+      deviation: avg,
+      // Unter der Prozent-Schwelle wird bewusst keine Zahl gezeigt: sie wäre
+      // genauer, als die Datenlage hergibt.
+      showPercent: sessions >= FEELING_MIN_SESSIONS_PERCENT,
+    };
+  }).filter(Boolean);
+
+  return { rows, sessionsWithFeeling };
+}
+
 // "War der Tag so hart wie sonst?" - der heutige RIR-Wert gegen den üblichen
 // derselben Übung. Bewusst nur beschreibend: ob "näher am Limit" gut oder
 // schlecht ist, hängt davon ab, ob heute mehr Gewicht auf der Stange lag,
@@ -1215,6 +1339,21 @@ const STAT_EXPLANATIONS = {
       "Wert eines Satzes = (kg × Wdh.) ÷ bester Satz dieser Übung. Bei Übungen ohne Gewicht zählen die Wiederholungen, bei Zeit-Übungen die Sekunden.",
       "Wochenwert = Summe aller Satzwerte der Muskelgruppe in einem 7-Tage-Fenster. Dropsätze zählen hier voll mit.",
       "Änderung = (diese Woche − Schnitt der gewählten Wochen davor) ÷ Schnitt × 100.",
+    ],
+  },
+  feelingPerformance: {
+    title: "Gefühl und Leistung",
+    paragraphs: [
+      "Beantwortet eine Frage, die man sich sonst nur ungefähr beantworten kann: Sagt dein Gefühl nach dem Training überhaupt etwas über deine tatsächliche Leistung aus?",
+      "Bei manchen Menschen tut es das deutlich, bei anderen kaum - wer an „müde\"-Tagen genauso stark ist wie sonst, kann sich das Zögern vor solchen Einheiten sparen. Wessen Leistung dagegen spürbar einbricht, hat einen guten Grund, auf das Gefühl zu hören.",
+      "Verglichen wird nicht gegen einen festen Durchschnitt, sondern gegen die Erwartung für genau diesen Tag: das Niveau der letzten Einheiten derselben Übung. Sonst würde die Auswertung nur zeigen, dass du über die Monate stärker geworden bist - und das weißt du schon.",
+      "Gerechnet wird pro Übung statt pro Training, weil sonst zu wenige Zahlen zusammenkommen. Für die Frage „ist das belastbar?\" zählt trotzdem die Zahl der Trainings: fünf Übungen an einem müden Tag sind ein müder Tag, nicht fünf Belege.",
+    ],
+    formula: [
+      "Leistung einer Übung an einem Tag = (kg × Wdh.) aller abgehakten Arbeitssätze ÷ Anzahl dieser Sätze. Also die Arbeit je Satz - ein kurzer Tag mit weniger Sätzen zählt dadurch nicht als schwach.",
+      "Erwartung = Schnitt derselben Übung über die bis zu 2 Einheiten davor und 2 danach. Beide Seiten, weil ein Schnitt nur aus der Vergangenheit einem steigenden Niveau hinterherhinkt und dadurch jeden Tag zu gut aussehen ließe.",
+      "Abweichung = (Leistung − Erwartung) ÷ Erwartung × 100, danach gemittelt über alle Übungen mit derselben Gefühlsangabe.",
+      "Ab 3 Trainings je Stufe erscheint eine Tendenz, ab 5 eine Prozentzahl.",
     ],
   },
 };
@@ -3385,6 +3524,33 @@ function TrainingAppInner() {
           transition: background 150ms ease;
         }
         .stat-item-clickable:active { background: var(--fill); }
+
+        /* Eine Gefühlsstufe mit ihrem Leistungsvergleich. Die Herkunftsangabe
+           steht bewusst als eigene Zeile darunter statt klein daneben - sie
+           gehört zur Aussage, nicht als Fußnote an ihren Rand. */
+        .feeling-row {
+          display: grid;
+          grid-template-columns: 86px 1fr;
+          gap: 2px 10px;
+          padding: 9px 0;
+          border-bottom: 1px solid var(--border);
+        }
+        .feeling-row:last-child { border-bottom: none; }
+        .feeling-row-label {
+          grid-row: span 2;
+          align-self: center;
+          font-size: 14px;
+          color: var(--text);
+        }
+        .feeling-row-value {
+          font-size: 14px;
+          color: var(--text);
+          font-variant-numeric: tabular-nums;
+        }
+        .feeling-row-basis {
+          font-size: 12px;
+          color: var(--text-faint);
+        }
 
         /* Erklärender Nachsatz unter einem Chart - leiser als der Chart
            selbst, aber nah genug dran, dass klar ist, worauf er sich
@@ -12897,6 +13063,10 @@ function ProgressView({
   );
 
   const stats = useMemo(() => calculateTrainingStats(logs, exBy, timeBasedExercises), [logs, exBy, timeBasedExercises]);
+  const feelingPerformance = useMemo(
+    () => getFeelingPerformance(logs, timeBasedExercises),
+    [logs, timeBasedExercises]
+  );
 
   // Folders can be marked "ohne Statistik" (e.g. EMOM/Conditioning) so their
   // sets don't dilute "Sätze pro Muskelgruppe" - that card is deliberately a
@@ -13248,6 +13418,48 @@ function ProgressView({
                 </div>
               );
             })}
+          </div>
+        )}
+      </div>
+
+      <div className="card">
+        <ExplainableTitle onExplain={() => setExplain(STAT_EXPLANATIONS.feelingPerformance)}>
+          Gefühl und Leistung
+        </ExplainableTitle>
+        {feelingPerformance.rows.length === 0 ? (
+          // Auch ohne Ergebnis sichtbar, und zwar mit Zählerstand: Wer nach
+          // jedem Training eine Angabe macht, soll sehen, dass sie ankommt
+          // und ab wann sie etwas liefert. Eine stumme Karte wäre genau der
+          // Datenfriedhof, den Regel 4 verhindern soll.
+          <div className="chart-hint" style={{ marginTop: 10 }}>
+            {feelingPerformance.sessionsWithFeeling === 0
+              ? "Sobald du nach dem Training angibst, wie es sich angefühlt hat, wird hier verglichen, ob dein Gefühl zu deiner tatsächlichen Leistung passt."
+              : `Bisher ${feelingPerformance.sessionsWithFeeling} ${
+                  feelingPerformance.sessionsWithFeeling === 1 ? "Training" : "Trainings"
+                } mit Gefühlsangabe. Ab 3 Trainings mit derselben Angabe erscheint hier die erste Tendenz.`}
+          </div>
+        ) : (
+          <div style={{ marginTop: 10 }}>
+            {feelingPerformance.rows.map((r) => (
+              <div className="feeling-row" key={r.value}>
+                <span className="feeling-row-label">{r.label}</span>
+                <span className="feeling-row-value">
+                  {r.showPercent
+                    ? `${Math.round(100 + r.deviation)} % deiner üblichen Leistung`
+                    : Math.abs(r.deviation) < 2
+                    ? "wie üblich"
+                    : r.deviation < 0
+                    ? "etwas darunter"
+                    : "etwas darüber"}
+                </span>
+                {/* Woraus die Aussage stammt, steht immer dabei - ohne das
+                    wirkt eine Zahl aus vier Tagen wie ein Naturgesetz. */}
+                <span className="feeling-row-basis">
+                  aus {r.sessions} {r.sessions === 1 ? "Training" : "Trainings"}
+                  {r.showPercent ? "" : " – für eine Prozentzahl noch zu wenig"}
+                </span>
+              </div>
+            ))}
           </div>
         )}
       </div>

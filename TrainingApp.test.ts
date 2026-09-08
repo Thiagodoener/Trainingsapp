@@ -33,6 +33,8 @@ import {
   getDeloadEffects,
   performedWorkingSets,
   setNumberLabels,
+  EXERCISES,
+  getExerciseMeta,
 } from "./TrainingApp";
 
 // Diese Tests sichern die Rechenfunktionen ab - also das, was die App
@@ -897,5 +899,97 @@ describe("Entlastung ueber einen beliebigen Zeitraum", () => {
     expect(r.start).toBe(r.end);
     expect(isDeloadDate(new Date(2026, 8, 9), [r])).toBe(true);
     expect(isDeloadDate(new Date(2026, 8, 10), [r])).toBe(false);
+  });
+});
+
+
+describe("Regression: Rekorde und Live-Vergleich", () => {
+  const historieMit = (saetze: any[][]) =>
+    getExerciseHistory(
+      saetze.map((s, i) => training({
+        id: "l" + i,
+        date: new Date(Date.now() - (saetze.length - i) * TAG).toISOString(),
+        entries: [{ id: "e", exerciseId: "bankdruecken", sets: s }],
+      })),
+      "bankdruecken"
+    );
+
+  it("zaehlt einen leichten Ausbelastungssatz nicht als Wiederholungs-Rekord", () => {
+    // Normal: 8 Wdh. bei 100 kg. Dann ein Ausbrennsatz: 20 Wdh. bei 40 kg.
+    // Der ist kein Rekord - er ist ein anderer Satz.
+    const h = historieMit([[satz({ weight: 100, reps: 8 })]]);
+    const leicht = satz({ weight: 40, reps: 20 });
+    const titel = describeSetPRs(leicht, h).map((r) => r.title);
+    expect(titel).not.toContain("Meiste Wiederholungen in einem Satz");
+    // Bei gleichem oder hoeherem Gewicht zaehlt er weiterhin.
+    const schwerer = satz({ weight: 100, reps: 9 });
+    expect(describeSetPRs(schwerer, h).map((r) => r.title))
+      .toContain("Meiste Wiederholungen in einem Satz");
+  });
+
+  it("laesst Koerpergewichts-Uebungen unveraendert", () => {
+    // Ohne Gewicht sind die Wiederholungen der Rekord - dort darf die
+    // Gewichtspruefung nichts blockieren (0 >= 0).
+    const h = historieMit([[satz({ weight: 0, reps: 12 })]]);
+    expect(describeSetPRs(satz({ weight: 0, reps: 15 }), h, false, false).map((r) => r.title))
+      .toContain("Meiste Wiederholungen in einem Satz");
+  });
+});
+
+describe("Geraete-Zuordnung der mitgelieferten Uebungen", () => {
+  it("kennt fuer jede mitgelieferte Uebung ein Geraet", () => {
+    const ohne = EXERCISES.filter((e: any) => !e.equipment);
+    expect(ohne.map((e: any) => e.name)).toEqual([]);
+  });
+
+  it("landet nicht mehr massenhaft auf 'Sonstiges'", () => {
+    // Vorher wurde das Geraet aus dem Namen geraten: 72 von 126 Uebungen
+    // fielen durch und waren im Filter nicht unterscheidbar.
+    const sonstige = EXERCISES.filter((e: any) => getExerciseMeta(e).equipment === "Sonstiges");
+    expect(sonstige.length).toBeLessThan(5);
+  });
+
+  it("raet weiterhin bei selbst angelegten Uebungen", () => {
+    expect(getExerciseMeta({ name: "Kabelzug-Dings", group: "brust" }).equipment).toBe("Kabelzug");
+    expect(getExerciseMeta({ name: "Irgendwas", group: "brust" }).equipment).toBe("Sonstiges");
+  });
+});
+
+
+describe("Regression: Koerpergewichts-Uebungen haben eine Historie", () => {
+  // Vorher zaehlte ein Satz nur mit, wenn Gewicht drinstand. Klimmzug, Dips
+  // und Liegestuetz fielen damit komplett aus: kein "Letztes Mal", keine
+  // Rekorde, keine Reserve-Einordnung - obwohl die Saetze sauber
+  // protokolliert waren.
+  const logs = [1, 2, 3].map((i) =>
+    training({
+      id: "l" + i,
+      date: new Date(Date.now() - i * 3 * TAG).toISOString(),
+      entries: [{
+        id: "e",
+        exerciseId: "klimmzug",
+        sets: [satz({ weight: 0, reps: 12 }), satz({ weight: 0, reps: 10 })],
+      }],
+    })
+  );
+
+  it("merkt sich die letzten Saetze", () => {
+    const h = getExerciseHistory(logs, "klimmzug");
+    expect(h.comparableSessions).toBe(3);
+    expect(h.lastSets).toHaveLength(2);
+    expect(h.bestSetReps).toBe(12);
+  });
+
+  it("erkennt einen Wiederholungs-Rekord", () => {
+    const h = getExerciseHistory(logs, "klimmzug");
+    expect(describeSetPRs(satz({ weight: 0, reps: 14 }), h, false, false).map((r) => r.title))
+      .toContain("Meiste Wiederholungen in einem Satz");
+  });
+
+  it("erfindet dabei keine Gewichts-Rekorde", () => {
+    const h = getExerciseHistory(logs, "klimmzug");
+    const titel = describeSetPRs(satz({ weight: 0, reps: 14 }), h, false, false).map((r) => r.title);
+    expect(titel).not.toContain("Höchstes Gewicht");
+    expect(titel).not.toContain("Höchste geschätzte 1RM");
   });
 });

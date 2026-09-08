@@ -470,146 +470,146 @@ function exerciseHasSubgroup(exercise, subgroupOverrides, subgroupId) {
   return getExerciseSubgroups(exercise, subgroupOverrides).includes(subgroupId);
 }
 
-const EXERCISES = [
+export const EXERCISES = [
   // Brust
-  { id: "bankdruecken", name: "Bankdrücken", group: "brust" },
-  { id: "schraegbank", name: "Schrägbankdrücken", group: "brust" },
-  { id: "negativbank", name: "Negativbankdrücken", group: "brust" },
-  { id: "kurzhantel-bankdruecken", name: "Kurzhantel-Bankdrücken", group: "brust" },
-  { id: "kurzhantel-schraeg", name: "Kurzhantel-Schrägbankdrücken", group: "brust" },
-  { id: "fliegende", name: "Fliegende (Kabel)", group: "brust" },
-  { id: "kurzhantel-fliegende", name: "Kurzhantel-Fliegende", group: "brust" },
-  { id: "butterfly", name: "Butterfly-Maschine", group: "brust" },
-  { id: "cable-crossover", name: "Cable Crossover", group: "brust" },
-  { id: "liegestuetz", name: "Liegestütz", group: "brust" },
-  { id: "diamant-liegestuetz", name: "Diamant-Liegestütz", group: "brust" },
-  { id: "brust-maschine", name: "Brustpresse (Maschine)", group: "brust" },
-  { id: "pullover", name: "Pullover", group: "brust" },
-  { id: "svend-press", name: "Svend Press", group: "brust" },
-  { id: "smith-bankdruecken", name: "Bankdrücken (Smith Machine)", group: "brust" },
-  { id: "decline-bankdruecken", name: "Negativ-Kurzhantel-Bankdrücken", group: "brust" },
-  { id: "brust-dips", name: "Brust-Dips", group: "brust" },
-  { id: "landmine-press-brust", name: "Landmine Chest Press", group: "brust" },
-  { id: "resistance-band-fliegende", name: "Fliegende (Widerstandsband)", group: "brust" },
-  { id: "pike-liegestuetz", name: "Pike Push-up", group: "brust" },
+  { id: "bankdruecken", name: "Bankdrücken", group: "brust", equipment: "Langhantel" },
+  { id: "schraegbank", name: "Schrägbankdrücken", group: "brust", equipment: "Langhantel" },
+  { id: "negativbank", name: "Negativbankdrücken", group: "brust", equipment: "Langhantel" },
+  { id: "kurzhantel-bankdruecken", name: "Kurzhantel-Bankdrücken", group: "brust", equipment: "Kurzhanteln" },
+  { id: "kurzhantel-schraeg", name: "Kurzhantel-Schrägbankdrücken", group: "brust", equipment: "Kurzhanteln" },
+  { id: "fliegende", name: "Fliegende (Kabel)", group: "brust", equipment: "Kabelzug" },
+  { id: "kurzhantel-fliegende", name: "Kurzhantel-Fliegende", group: "brust", equipment: "Kurzhanteln" },
+  { id: "butterfly", name: "Butterfly-Maschine", group: "brust", equipment: "Maschine" },
+  { id: "cable-crossover", name: "Cable Crossover", group: "brust", equipment: "Kabelzug" },
+  { id: "liegestuetz", name: "Liegestütz", group: "brust", equipment: "Körpergewicht" },
+  { id: "diamant-liegestuetz", name: "Diamant-Liegestütz", group: "brust", equipment: "Körpergewicht" },
+  { id: "brust-maschine", name: "Brustpresse (Maschine)", group: "brust", equipment: "Maschine" },
+  { id: "pullover", name: "Pullover", group: "brust", equipment: "Kurzhanteln" },
+  { id: "svend-press", name: "Svend Press", group: "brust", equipment: "Gewichtsscheibe" },
+  { id: "smith-bankdruecken", name: "Bankdrücken (Smith Machine)", group: "brust", equipment: "Maschine" },
+  { id: "decline-bankdruecken", name: "Negativ-Kurzhantel-Bankdrücken", group: "brust", equipment: "Kurzhanteln" },
+  { id: "brust-dips", name: "Brust-Dips", group: "brust", equipment: "Körpergewicht" },
+  { id: "landmine-press-brust", name: "Landmine Chest Press", group: "brust", equipment: "Langhantel" },
+  { id: "resistance-band-fliegende", name: "Fliegende (Widerstandsband)", group: "brust", equipment: "Band" },
+  { id: "pike-liegestuetz", name: "Pike Push-up", group: "brust", equipment: "Körpergewicht" },
 
   // Rücken
-  { id: "klimmzug", name: "Klimmzug", group: "ruecken" },
-  { id: "klimmzug-untergriff", name: "Klimmzug (Untergriff)", group: "ruecken" },
-  { id: "latzug", name: "Latzug", group: "ruecken" },
-  { id: "latzug-eng", name: "Latzug enger Griff", group: "ruecken" },
-  { id: "rudern", name: "Langhantelrudern", group: "ruecken" },
-  { id: "kurzhantelrudern", name: "Einarmiges Kurzhantelrudern", group: "ruecken" },
-  { id: "kabelrudern", name: "Kabelrudern (sitzend)", group: "ruecken" },
-  { id: "t-bar-rudern", name: "T-Bar-Rudern", group: "ruecken" },
-  { id: "kreuzheben", name: "Kreuzheben", group: "ruecken" },
-  { id: "rumaenisches-kreuzheben", name: "Rumänisches Kreuzheben", group: "ruecken" },
-  { id: "sumo-kreuzheben", name: "Sumo-Kreuzheben", group: "ruecken" },
-  { id: "hyperextension", name: "Hyperextensionen", group: "ruecken" },
-  { id: "face-pull", name: "Face Pull", group: "ruecken" },
-  { id: "shrugs", name: "Shrugs (Nackenheben)", group: "ruecken" },
-  { id: "good-morning", name: "Good Morning", group: "ruecken" },
-  { id: "pull-up-negativ", name: "Negativ-Klimmzug", group: "ruecken" },
-  { id: "meron-row", name: "Meadows Row", group: "ruecken" },
-  { id: "chest-supported-row", name: "Chest Supported Row", group: "ruecken" },
-  { id: "cable-pullover", name: "Kabel-Pullover", group: "ruecken" },
-  { id: "reverse-hyperextension", name: "Reverse Hyperextension", group: "ruecken" },
-  { id: "renegade-row", name: "Renegade Row", group: "ruecken" },
-  { id: "band-pull-apart", name: "Band Pull-Apart", group: "ruecken" },
+  { id: "klimmzug", name: "Klimmzug", group: "ruecken", equipment: "Körpergewicht" },
+  { id: "klimmzug-untergriff", name: "Klimmzug (Untergriff)", group: "ruecken", equipment: "Körpergewicht" },
+  { id: "latzug", name: "Latzug", group: "ruecken", equipment: "Kabelzug" },
+  { id: "latzug-eng", name: "Latzug enger Griff", group: "ruecken", equipment: "Kabelzug" },
+  { id: "rudern", name: "Langhantelrudern", group: "ruecken", equipment: "Langhantel" },
+  { id: "kurzhantelrudern", name: "Einarmiges Kurzhantelrudern", group: "ruecken", equipment: "Kurzhanteln" },
+  { id: "kabelrudern", name: "Kabelrudern (sitzend)", group: "ruecken", equipment: "Kabelzug" },
+  { id: "t-bar-rudern", name: "T-Bar-Rudern", group: "ruecken", equipment: "Langhantel" },
+  { id: "kreuzheben", name: "Kreuzheben", group: "ruecken", equipment: "Langhantel" },
+  { id: "rumaenisches-kreuzheben", name: "Rumänisches Kreuzheben", group: "ruecken", equipment: "Langhantel" },
+  { id: "sumo-kreuzheben", name: "Sumo-Kreuzheben", group: "ruecken", equipment: "Langhantel" },
+  { id: "hyperextension", name: "Hyperextensionen", group: "ruecken", equipment: "Körpergewicht" },
+  { id: "face-pull", name: "Face Pull", group: "ruecken", equipment: "Kabelzug" },
+  { id: "shrugs", name: "Shrugs (Nackenheben)", group: "ruecken", equipment: "Langhantel" },
+  { id: "good-morning", name: "Good Morning", group: "ruecken", equipment: "Langhantel" },
+  { id: "pull-up-negativ", name: "Negativ-Klimmzug", group: "ruecken", equipment: "Körpergewicht" },
+  { id: "meron-row", name: "Meadows Row", group: "ruecken", equipment: "Kurzhanteln" },
+  { id: "chest-supported-row", name: "Chest Supported Row", group: "ruecken", equipment: "Kurzhanteln" },
+  { id: "cable-pullover", name: "Kabel-Pullover", group: "ruecken", equipment: "Kabelzug" },
+  { id: "reverse-hyperextension", name: "Reverse Hyperextension", group: "ruecken", equipment: "Körpergewicht" },
+  { id: "renegade-row", name: "Renegade Row", group: "ruecken", equipment: "Kurzhanteln" },
+  { id: "band-pull-apart", name: "Band Pull-Apart", group: "ruecken", equipment: "Band" },
 
   // Beine
-  { id: "kniebeuge", name: "Kniebeuge", group: "beine" },
-  { id: "frontkniebeuge", name: "Frontkniebeuge", group: "beine" },
-  { id: "goblet-squat", name: "Goblet Squat", group: "beine" },
-  { id: "beinpresse", name: "Beinpresse", group: "beine" },
-  { id: "ausfallschritt", name: "Ausfallschritte", group: "beine" },
-  { id: "bulgarian-split-squat", name: "Bulgarian Split Squat", group: "beine" },
-  { id: "beinstrecker", name: "Beinstrecker", group: "beine" },
-  { id: "beinbeuger", name: "Beinbeuger", group: "beine" },
-  { id: "wadenheben", name: "Wadenheben (stehend)", group: "beine" },
-  { id: "wadenheben-sitzend", name: "Wadenheben (sitzend)", group: "beine" },
-  { id: "hip-thrust", name: "Hip Thrust", group: "beine" },
-  { id: "hueftadduktion", name: "Hüftadduktoren-Maschine", group: "beine" },
-  { id: "hueftabduktion", name: "Hüftabduktoren-Maschine", group: "beine" },
-  { id: "step-up", name: "Step-ups", group: "beine" },
-  { id: "kettlebell-swing", name: "Kettlebell Swing", group: "beine" },
-  { id: "hackenschmidt", name: "Hackenschmidt-Kniebeuge", group: "beine" },
-  { id: "sissy-squat", name: "Sissy Squat", group: "beine" },
-  { id: "nordic-curl", name: "Nordic Hamstring Curl", group: "beine" },
-  { id: "sumo-kniebeuge", name: "Sumo-Kniebeuge", group: "beine" },
-  { id: "pistol-squat", name: "Pistol Squat", group: "beine" },
-  { id: "walking-lunge", name: "Walking Lunges", group: "beine" },
-  { id: "curtsy-lunge", name: "Curtsy Lunge", group: "beine" },
-  { id: "glute-bridge", name: "Glute Bridge", group: "beine" },
-  { id: "seated-calf-raise-maschine", name: "Waden-Maschine (liegend)", group: "beine" },
-  { id: "box-jump", name: "Box Jump", group: "beine" },
+  { id: "kniebeuge", name: "Kniebeuge", group: "beine", equipment: "Langhantel" },
+  { id: "frontkniebeuge", name: "Frontkniebeuge", group: "beine", equipment: "Langhantel" },
+  { id: "goblet-squat", name: "Goblet Squat", group: "beine", equipment: "Kurzhanteln" },
+  { id: "beinpresse", name: "Beinpresse", group: "beine", equipment: "Maschine" },
+  { id: "ausfallschritt", name: "Ausfallschritte", group: "beine", equipment: "Kurzhanteln" },
+  { id: "bulgarian-split-squat", name: "Bulgarian Split Squat", group: "beine", equipment: "Kurzhanteln" },
+  { id: "beinstrecker", name: "Beinstrecker", group: "beine", equipment: "Maschine" },
+  { id: "beinbeuger", name: "Beinbeuger", group: "beine", equipment: "Maschine" },
+  { id: "wadenheben", name: "Wadenheben (stehend)", group: "beine", equipment: "Maschine" },
+  { id: "wadenheben-sitzend", name: "Wadenheben (sitzend)", group: "beine", equipment: "Maschine" },
+  { id: "hip-thrust", name: "Hip Thrust", group: "beine", equipment: "Langhantel" },
+  { id: "hueftadduktion", name: "Hüftadduktoren-Maschine", group: "beine", equipment: "Maschine" },
+  { id: "hueftabduktion", name: "Hüftabduktoren-Maschine", group: "beine", equipment: "Maschine" },
+  { id: "step-up", name: "Step-ups", group: "beine", equipment: "Kurzhanteln" },
+  { id: "kettlebell-swing", name: "Kettlebell Swing", group: "beine", equipment: "Kettlebell" },
+  { id: "hackenschmidt", name: "Hackenschmidt-Kniebeuge", group: "beine", equipment: "Maschine" },
+  { id: "sissy-squat", name: "Sissy Squat", group: "beine", equipment: "Körpergewicht" },
+  { id: "nordic-curl", name: "Nordic Hamstring Curl", group: "beine", equipment: "Körpergewicht" },
+  { id: "sumo-kniebeuge", name: "Sumo-Kniebeuge", group: "beine", equipment: "Langhantel" },
+  { id: "pistol-squat", name: "Pistol Squat", group: "beine", equipment: "Körpergewicht" },
+  { id: "walking-lunge", name: "Walking Lunges", group: "beine", equipment: "Kurzhanteln" },
+  { id: "curtsy-lunge", name: "Curtsy Lunge", group: "beine", equipment: "Kurzhanteln" },
+  { id: "glute-bridge", name: "Glute Bridge", group: "beine", equipment: "Körpergewicht" },
+  { id: "seated-calf-raise-maschine", name: "Waden-Maschine (liegend)", group: "beine", equipment: "Maschine" },
+  { id: "box-jump", name: "Box Jump", group: "beine", equipment: "Körpergewicht" },
 
   // Schultern
-  { id: "schulterdruecken", name: "Schulterdrücken", group: "schultern" },
-  { id: "military-press", name: "Military Press", group: "schultern" },
-  { id: "arnold-press", name: "Arnold Press", group: "schultern" },
-  { id: "seitheben", name: "Seitheben", group: "schultern" },
-  { id: "kabel-seitheben", name: "Seitheben am Kabel", group: "schultern" },
-  { id: "frontheben", name: "Frontheben", group: "schultern" },
-  { id: "reverse-fly", name: "Reverse Fly (hintere Schulter)", group: "schultern" },
-  { id: "aufrechtes-rudern", name: "Aufrechtes Rudern", group: "schultern" },
-  { id: "landmine-press", name: "Landmine Press", group: "schultern" },
-  { id: "pike-push-up-schulter", name: "Pike Push-up (Schulter)", group: "schultern" },
-  { id: "cuban-press", name: "Cuban Press", group: "schultern" },
-  { id: "y-raise", name: "Y-Raise", group: "schultern" },
-  { id: "bus-driver", name: "Bus Driver", group: "schultern" },
-  { id: "schulterdruecken-maschine", name: "Schulterdrücken (Maschine)", group: "schultern" },
-  { id: "plate-raise", name: "Plate Front Raise", group: "schultern" },
+  { id: "schulterdruecken", name: "Schulterdrücken", group: "schultern", equipment: "Langhantel" },
+  { id: "military-press", name: "Military Press", group: "schultern", equipment: "Langhantel" },
+  { id: "arnold-press", name: "Arnold Press", group: "schultern", equipment: "Kurzhanteln" },
+  { id: "seitheben", name: "Seitheben", group: "schultern", equipment: "Kurzhanteln" },
+  { id: "kabel-seitheben", name: "Seitheben am Kabel", group: "schultern", equipment: "Kabelzug" },
+  { id: "frontheben", name: "Frontheben", group: "schultern", equipment: "Kurzhanteln" },
+  { id: "reverse-fly", name: "Reverse Fly (hintere Schulter)", group: "schultern", equipment: "Kurzhanteln" },
+  { id: "aufrechtes-rudern", name: "Aufrechtes Rudern", group: "schultern", equipment: "Langhantel" },
+  { id: "landmine-press", name: "Landmine Press", group: "schultern", equipment: "Langhantel" },
+  { id: "pike-push-up-schulter", name: "Pike Push-up (Schulter)", group: "schultern", equipment: "Körpergewicht" },
+  { id: "cuban-press", name: "Cuban Press", group: "schultern", equipment: "Kurzhanteln" },
+  { id: "y-raise", name: "Y-Raise", group: "schultern", equipment: "Kurzhanteln" },
+  { id: "bus-driver", name: "Bus Driver", group: "schultern", equipment: "Gewichtsscheibe" },
+  { id: "schulterdruecken-maschine", name: "Schulterdrücken (Maschine)", group: "schultern", equipment: "Maschine" },
+  { id: "plate-raise", name: "Plate Front Raise", group: "schultern", equipment: "Gewichtsscheibe" },
 
   // Arme
-  { id: "bizepscurl", name: "Bizepscurl", group: "arme" },
-  { id: "langhantelcurl", name: "Langhantel-Bizepscurl", group: "arme" },
-  { id: "scottcurl", name: "Scott-Curl", group: "arme" },
-  { id: "kabelcurl", name: "Bizepscurl am Kabel", group: "arme" },
-  { id: "hammercurl", name: "Hammercurl", group: "arme" },
-  { id: "konzentrationscurl", name: "Konzentrationscurl", group: "arme" },
-  { id: "trizepsdrucken", name: "Trizepsdrücken (Kabel)", group: "arme" },
-  { id: "trizepsdrucken-seil", name: "Trizepsdrücken (Seil)", group: "arme" },
-  { id: "franzoesisches-druecken", name: "Französisches Drücken", group: "arme" },
-  { id: "trizeps-kickback", name: "Trizeps-Kickback", group: "arme" },
-  { id: "dips", name: "Dips", group: "arme" },
-  { id: "enges-bankdruecken", name: "Enges Bankdrücken", group: "arme" },
-  { id: "unterarm-curl", name: "Unterarm-Curl (Wrist Curl)", group: "arme" },
-  { id: "21er-curl", name: "21er Bizepscurl", group: "arme" },
-  { id: "spider-curl", name: "Spider Curl", group: "arme" },
-  { id: "zottman-curl", name: "Zottman Curl", group: "arme" },
-  { id: "overhead-trizepsdruecken", name: "Überkopf-Trizepsdrücken (Kurzhantel)", group: "arme" },
-  { id: "trizeps-dips-bank", name: "Trizeps-Dips (Bank)", group: "arme" },
-  { id: "reverse-curl", name: "Reverse Curl", group: "arme" },
-  { id: "unterarm-curl-reverse", name: "Unterarm-Curl (Reverse)", group: "arme" },
+  { id: "bizepscurl", name: "Bizepscurl", group: "arme", equipment: "Kurzhanteln" },
+  { id: "langhantelcurl", name: "Langhantel-Bizepscurl", group: "arme", equipment: "Langhantel" },
+  { id: "scottcurl", name: "Scott-Curl", group: "arme", equipment: "Langhantel" },
+  { id: "kabelcurl", name: "Bizepscurl am Kabel", group: "arme", equipment: "Kabelzug" },
+  { id: "hammercurl", name: "Hammercurl", group: "arme", equipment: "Kurzhanteln" },
+  { id: "konzentrationscurl", name: "Konzentrationscurl", group: "arme", equipment: "Kurzhanteln" },
+  { id: "trizepsdrucken", name: "Trizepsdrücken (Kabel)", group: "arme", equipment: "Kabelzug" },
+  { id: "trizepsdrucken-seil", name: "Trizepsdrücken (Seil)", group: "arme", equipment: "Kabelzug" },
+  { id: "franzoesisches-druecken", name: "Französisches Drücken", group: "arme", equipment: "Langhantel" },
+  { id: "trizeps-kickback", name: "Trizeps-Kickback", group: "arme", equipment: "Kurzhanteln" },
+  { id: "dips", name: "Dips", group: "arme", equipment: "Körpergewicht" },
+  { id: "enges-bankdruecken", name: "Enges Bankdrücken", group: "arme", equipment: "Langhantel" },
+  { id: "unterarm-curl", name: "Unterarm-Curl (Wrist Curl)", group: "arme", equipment: "Langhantel" },
+  { id: "21er-curl", name: "21er Bizepscurl", group: "arme", equipment: "Langhantel" },
+  { id: "spider-curl", name: "Spider Curl", group: "arme", equipment: "Kurzhanteln" },
+  { id: "zottman-curl", name: "Zottman Curl", group: "arme", equipment: "Kurzhanteln" },
+  { id: "overhead-trizepsdruecken", name: "Überkopf-Trizepsdrücken (Kurzhantel)", group: "arme", equipment: "Kurzhanteln" },
+  { id: "trizeps-dips-bank", name: "Trizeps-Dips (Bank)", group: "arme", equipment: "Körpergewicht" },
+  { id: "reverse-curl", name: "Reverse Curl", group: "arme", equipment: "Langhantel" },
+  { id: "unterarm-curl-reverse", name: "Unterarm-Curl (Reverse)", group: "arme", equipment: "Langhantel" },
 
   // Rumpf
-  { id: "plank", name: "Plank", group: "rumpf" },
-  { id: "seitplank", name: "Seitplank", group: "rumpf" },
-  { id: "crunches", name: "Crunches", group: "rumpf" },
-  { id: "kabel-crunches", name: "Kabel-Crunches", group: "rumpf" },
-  { id: "situps", name: "Sit-ups", group: "rumpf" },
-  { id: "beinheben", name: "Beinheben (hängend)", group: "rumpf" },
-  { id: "beinheben-liegend", name: "Beinheben (liegend)", group: "rumpf" },
-  { id: "russian-twist", name: "Russian Twist", group: "rumpf" },
-  { id: "ab-wheel", name: "Ab Wheel Rollout", group: "rumpf" },
-  { id: "mountain-climber", name: "Mountain Climbers", group: "rumpf" },
-  { id: "hollow-hold", name: "Hollow Hold", group: "rumpf" },
-  { id: "dead-bug", name: "Dead Bug", group: "rumpf" },
-  { id: "pallof-press", name: "Pallof Press", group: "rumpf" },
-  { id: "landmine-twist", name: "Landmine Rotation", group: "rumpf" },
-  { id: "v-ups", name: "V-Ups", group: "rumpf" },
-  { id: "cable-woodchopper", name: "Kabel-Holzhacker", group: "rumpf" },
-  { id: "reverse-crunch", name: "Reverse Crunch", group: "rumpf" },
-  { id: "stir-the-pot", name: "Stir the Pot", group: "rumpf" },
+  { id: "plank", name: "Plank", group: "rumpf", equipment: "Körpergewicht" },
+  { id: "seitplank", name: "Seitplank", group: "rumpf", equipment: "Körpergewicht" },
+  { id: "crunches", name: "Crunches", group: "rumpf", equipment: "Körpergewicht" },
+  { id: "kabel-crunches", name: "Kabel-Crunches", group: "rumpf", equipment: "Kabelzug" },
+  { id: "situps", name: "Sit-ups", group: "rumpf", equipment: "Körpergewicht" },
+  { id: "beinheben", name: "Beinheben (hängend)", group: "rumpf", equipment: "Körpergewicht" },
+  { id: "beinheben-liegend", name: "Beinheben (liegend)", group: "rumpf", equipment: "Körpergewicht" },
+  { id: "russian-twist", name: "Russian Twist", group: "rumpf", equipment: "Gewichtsscheibe" },
+  { id: "ab-wheel", name: "Ab Wheel Rollout", group: "rumpf", equipment: "Sonstiges" },
+  { id: "mountain-climber", name: "Mountain Climbers", group: "rumpf", equipment: "Körpergewicht" },
+  { id: "hollow-hold", name: "Hollow Hold", group: "rumpf", equipment: "Körpergewicht" },
+  { id: "dead-bug", name: "Dead Bug", group: "rumpf", equipment: "Körpergewicht" },
+  { id: "pallof-press", name: "Pallof Press", group: "rumpf", equipment: "Kabelzug" },
+  { id: "landmine-twist", name: "Landmine Rotation", group: "rumpf", equipment: "Langhantel" },
+  { id: "v-ups", name: "V-Ups", group: "rumpf", equipment: "Körpergewicht" },
+  { id: "cable-woodchopper", name: "Kabel-Holzhacker", group: "rumpf", equipment: "Kabelzug" },
+  { id: "reverse-crunch", name: "Reverse Crunch", group: "rumpf", equipment: "Körpergewicht" },
+  { id: "stir-the-pot", name: "Stir the Pot", group: "rumpf", equipment: "Sonstiges" },
 
   // Nacken
-  { id: "nackenheben-kurzhantel", name: "Nackenheben (Kurzhanteln)", group: "nacken" },
-  { id: "nackenheben-langhantel", name: "Nackenheben (Langhantel)", group: "nacken" },
-  { id: "neck-curl", name: "Nacken-Curl (liegend)", group: "nacken" },
-  { id: "neck-extension", name: "Nacken-Extension (liegend)", group: "nacken" },
-  { id: "neck-lateral", name: "Seitliches Nackenheben", group: "nacken" },
-  { id: "neck-harness", name: "Nackentraining mit Kopfgeschirr", group: "nacken" },
+  { id: "nackenheben-kurzhantel", name: "Nackenheben (Kurzhanteln)", group: "nacken", equipment: "Kurzhanteln" },
+  { id: "nackenheben-langhantel", name: "Nackenheben (Langhantel)", group: "nacken", equipment: "Langhantel" },
+  { id: "neck-curl", name: "Nacken-Curl (liegend)", group: "nacken", equipment: "Gewichtsscheibe" },
+  { id: "neck-extension", name: "Nacken-Extension (liegend)", group: "nacken", equipment: "Gewichtsscheibe" },
+  { id: "neck-lateral", name: "Seitliches Nackenheben", group: "nacken", equipment: "Gewichtsscheibe" },
+  { id: "neck-harness", name: "Nackentraining mit Kopfgeschirr", group: "nacken", equipment: "Sonstiges" },
 ];
 
 const EX_BY_ID = Object.fromEntries(EXERCISES.map((e) => [e.id, e]));
@@ -714,6 +714,11 @@ export function getExerciseHistory(logs, exerciseId, excludeSessionId, isTimeBas
   let best1RM = 0;
   let bestSetVolume = 0;
   let bestSetReps = 0;
+  // Bei welchem Gewicht der Wiederholungs-Rekord aufgestellt wurde. Ohne das
+  // gilt ein leichter Ausbelastungssatz (20 Wdh. mit 40 kg) als Rekord fuer
+  // eine Uebung, die sonst mit 8 Wdh. bei 100 kg laeuft - und macht den
+  // Rekord bei echtem Arbeitsgewicht dauerhaft unschlagbar.
+  let bestSetRepsWeight = 0;
   let bestTotalVolume = 0;
   let bestTotalReps = 0;
   let bestTotalDuration = 0;
@@ -748,12 +753,20 @@ export function getExerciseHistory(logs, exerciseId, excludeSessionId, isTimeBas
     // Saetze aller Plaetze dieser Uebung in diesem Training, in der
     // Reihenfolge, in der sie im Training standen.
     const sets = matching.flatMap((e) => (Array.isArray(e.sets) ? e.sets : []));
+    // Ein Satz zaehlt, wenn ueberhaupt Arbeit drinsteht. Frueher wurde bei
+    // Uebungen ohne Zeit AUSSCHLIESSLICH auf Gewicht geprueft - damit fielen
+    // alle Koerpergewichts-Uebungen komplett heraus: Klimmzug, Dips,
+    // Liegestuetz und alles andere mit 0 kg hatte gar keine Historie. Kein
+    // "Letztes Mal", keine Rekorde, keine Reserve-Einordnung, obwohl die
+    // Saetze sauber protokolliert waren.
     const doneSets = sets.filter(
       (set) =>
         set &&
         set.done &&
         !set.warmup &&
-        (isTimeBased ? Number(set.duration) > 0 : Number(set.weight) > 0)
+        (isTimeBased
+          ? Number(set.duration) > 0
+          : Number(set.weight) > 0 || Number(set.reps) > 0)
     );
     if (doneSets.length === 0) continue;
 
@@ -790,7 +803,12 @@ export function getExerciseHistory(logs, exerciseId, excludeSessionId, isTimeBas
 
     for (const set of doneSets) {
       const reps = toNum(set.reps);
-      if (reps > bestSetReps) { bestSetReps = reps; bestSetRepsRir = rirOf(set); }
+      const weightHere = toNum(set.weight);
+      if (reps > bestSetReps && weightHere >= bestSetRepsWeight) {
+        bestSetReps = reps;
+        bestSetRepsWeight = weightHere;
+        bestSetRepsRir = rirOf(set);
+      }
       const vol = toNum(set.weight) * reps;
       if (vol > bestSetVolume) { bestSetVolume = vol; bestSetVolumeRir = rirOf(set); }
       const oneRM = estimate1RM(set.weight, set.reps);
@@ -822,7 +840,8 @@ export function getExerciseHistory(logs, exerciseId, excludeSessionId, isTimeBas
 
   return {
     lastSets, lastDate, lastRir, bestWeight, bestRepsAtBestWeight, bestDuration, lastNote,
-    best1RM, bestSetVolume, bestSetReps, bestTotalVolume, bestTotalReps, bestTotalDuration,
+    best1RM, bestSetVolume, bestSetReps, bestSetRepsWeight,
+    bestTotalVolume, bestTotalReps, bestTotalDuration,
     comparableSessions,
     bestWeightRir, best1RMRir, bestSetVolumeRir, bestSetRepsRir, bestDurationRir,
     bestTotalVolumeRir, bestTotalRepsRir, bestTotalDurationRir,
@@ -1204,6 +1223,18 @@ export function typicalRir(values, window = TYPICAL_RIR_WINDOW) {
 // Vorbelegte Felder entsprechen zu Beginn exakt dem letzten Mal, macht also
 // bewusst 0 % - erst eine tatsächliche Änderung an Gewicht oder Wdh. bewegt
 // die Zahl. null bedeutet "keine Vorgeschichte", nicht 0 %.
+// Volumen dieser Übung gegen das letzte Mal - live, während man einträgt.
+//
+// Gezählt wird nur, was ABGEHAKT ist. Vorher zählten auf der linken Seite die
+// vorbelegten Sätze des Plans mit: Beim Öffnen eines Trainings stand dann
+// schon "+31 %" neben einer Übung, an der man noch keinen Finger gerührt
+// hatte - eine Behauptung über Arbeit, die noch gar nicht stattgefunden hat.
+// Die rechte Seite (letztes Mal) hatte diesen Fehler nie, dort stehen von
+// Anfang an nur abgehakte Sätze. Genau diese Regel steht auch in KONZEPT.md:
+// "Gezählt wird nur, was abgehakt ist."
+//
+// Solange nichts abgehakt ist, gibt es nichts zu vergleichen - dann bleibt
+// das Abzeichen weg, statt mit "-100 %" zu begrüßen.
 function exerciseVolumeChange(currentSets, lastSets, isTimeBased, usesWeight) {
   if (!Array.isArray(lastSets) || lastSets.length === 0) return null;
   const metric = (set) =>
@@ -1212,13 +1243,14 @@ function exerciseVolumeChange(currentSets, lastSets, isTimeBased, usesWeight) {
       : usesWeight
       ? toNum(set.weight) * toNum(set.reps)
       : toNum(set.reps);
-  const sum = (sets) =>
+  const sum = (sets, nurAbgehakt) =>
     (Array.isArray(sets) ? sets : [])
-      .filter((s) => s && !s.warmup)
+      .filter((s) => s && !s.warmup && (!nurAbgehakt || s.done))
       .reduce((total, s) => total + metric(s), 0);
-  const lastTotal = sum(lastSets);
+  const lastTotal = sum(lastSets, false);
   if (lastTotal <= 0) return null;
-  const currentTotal = sum(currentSets);
+  const currentTotal = sum(currentSets, true);
+  if (currentTotal <= 0) return null;
   return ((currentTotal - lastTotal) / lastTotal) * 100;
 }
 
@@ -1275,7 +1307,9 @@ export function describeSetPRs(set, best, isTimeBased = false, hasWeight = true,
   const weight = toNum(set.weight);
   const reps = toNum(set.reps);
 
-  if (reps > 0 && reps > toNum(best.bestSetReps)) {
+  // Ein Wiederholungs-Rekord zaehlt nur bei mindestens demselben Gewicht wie
+  // der bisherige. Sonst waere jeder leichte Ausbelastungssatz ein "Rekord".
+  if (reps > 0 && reps > toNum(best.bestSetReps) && weight >= toNum(best.bestSetRepsWeight)) {
     found.push({
       title: "Meiste Wiederholungen in einem Satz",
       value: `${reps} Wdh.`,
@@ -1533,19 +1567,6 @@ function getTimePR(logs, exerciseId) {
 // ---------------------------------------------------------------------------
 
 const LOAD_WEEK_MS = 7 * 86400000;
-
-// Vergleichszeiträume für die Prozent-Ansicht der Übungs-Charts
-// (buildPercentSeries - Punkt-zu-Punkt-Vergleich "Wert vor X Wochen") und die
-// Atemübungs-Statistik. Bewusst getrennt von MUSCLE_COMPARE_OPTIONS unten:
-// buildPercentSeries kann mit "Gesamt" (Infinity) nichts anfangen, weil es
-// nach einem konkreten Zeitpunkt in der Vergangenheit sucht, keinem Schnitt.
-const WEEK_COMPARE_OPTIONS = [
-  [1, "Vorwoche"],
-  [3, "3 Wochen"],
-  [5, "5 Wochen"],
-  [10, "10 Wochen"],
-  [20, "20 Wochen"],
-];
 
 // Zeiträume für "Sätze pro Muskelgruppe" und "Belastung pro Muskelgruppe"
 // (Karten + ihre Modal-Charts) - an einer Stelle definiert, damit beide
@@ -2393,11 +2414,17 @@ export function getDeloadEffects(logs, deloadWeeks, timeBasedExercises, nowTs = 
 
 const EQUIPMENT_OPTIONS = ["Langhantel", "Kurzhanteln", "Kabelzug", "Maschine", "Kettlebell", "Gewichtsscheibe", "Körpergewicht", "Band", "Sonstiges"];
 
-function getExerciseMeta(exercise) {
+export function getExerciseMeta(exercise) {
   if (exercise?.meta) return exercise.meta;
   const n = (exercise?.name || "").toLowerCase();
-  let equipment = "Sonstiges";
-  if (n.includes("kabel") || n.includes("cable")) equipment = "Kabelzug";
+  // Die mitgelieferten Übungen tragen ihr Gerät selbst. Vorher wurde es aus
+  // dem Namen geraten, und das ging bei 72 von 126 Übungen daneben - sie
+  // landeten alle auf "Sonstiges", womit der Geräte-Filter in der
+  // Übungsliste die Mehrheit der Übungen nicht mehr auseinanderhalten
+  // konnte. Geraten wird jetzt nur noch bei selbst angelegten Übungen.
+  let equipment = EQUIPMENT_OPTIONS.includes(exercise?.equipment) ? exercise.equipment : "Sonstiges";
+  if (exercise?.equipment) { /* schon gesetzt */ }
+  else if (n.includes("kabel") || n.includes("cable")) equipment = "Kabelzug";
   else if (n.includes("maschine") || n.includes("presse")) equipment = "Maschine";
   else if (n.includes("band") || n.includes("gummi")) equipment = "Band";
   else if (n.includes("kurzhantel") || n.includes("dumbbell")) equipment = "Kurzhanteln";
@@ -7843,7 +7870,7 @@ function CalendarView({
                           .map(
                             (s) =>
                               (s.dropset ? "↓" : "") +
-                              (s.duration ? `${s.duration}s` : `${s.weight || 0}kg×${s.reps || 0}`)
+                              shortSet(s)
                           )
                           .join(", ");
                         return (
@@ -9254,7 +9281,7 @@ function ExerciseDetailSheet({
                         {s.dropset ? "↓ " : ""}
                         {timeBasedExercises[exercise.id]
                           ? `${s.duration || 0}s`
-                          : `${s.weight || 0}kg×${s.reps || 0}`}
+                          : shortSet(s)}
                       </span>
                     ))}
                   </div>
@@ -12516,7 +12543,7 @@ function LogView({
                     (s.dropset ? "↓" : "") +
                     (isTimeBased
                       ? `${s.duration || 0}s`
-                      : `${s.weight || 0}kg×${s.reps || 0}`)
+                      : shortSet(s))
                   )
                   .join(", ")}
                 {fmtRir(history.lastRir) ? ` · ${fmtRir(history.lastRir)}` : ""}
@@ -13139,6 +13166,20 @@ export function buildPercentSeries(data, keys, compareWeeks, toleranceDays = PER
 // "80 kg × 8" - die Kurzschreibweise, in der ein Satz überall sonst in der App
 // auch auftaucht (Verlauf, "Letztes Mal"). Null, wo es nichts zu beschreiben
 // gibt, damit der Tooltip die Zeile dann einfach weglässt.
+// Kurzschreibweise fuer Satz-Listen ("Letztes Mal", Verlauf, Kalender).
+// Ohne Gewicht steht dort die Wiederholungszahl allein: "0kg×8" bei einem
+// Klimmzug ist keine Information, sondern ein Formatierungsunfall - und er
+// fiel bisher nur nicht auf, weil Koerpergewichts-Uebungen gar keine
+// Historie hatten (siehe getExerciseHistory).
+function shortSet(s) {
+  if (!s) return "";
+  const dur = toNum(s.duration);
+  if (dur > 0) return `${dur}s`;
+  const weight = toNum(s.weight);
+  const reps = toNum(s.reps);
+  return weight > 0 ? `${fmtDecimal(weight)}kg×${reps}` : `${reps} Wdh.`;
+}
+
 function describeSet(set) {
   if (!set) return null;
   const weight = toNum(set.weight);
@@ -15381,7 +15422,7 @@ function BreathingProgressView({ breathingExercises = [], breathingLogs = [] }) 
       <div className="card">
         <span className="plan-title">Sitzungen pro Woche</span>
         <div className="chip-row" style={{ marginTop: 10, marginBottom: 4 }}>
-          {WEEK_COMPARE_OPTIONS.map(([weeks, label]) => (
+          {MUSCLE_COMPARE_OPTIONS.map(([weeks, label]) => (
             <span
               key={weeks}
               className={`chip chip-sm ${compareWeeks === weeks ? "active" : ""}`}
@@ -15546,7 +15587,7 @@ function HistoryView({
                         (s.dropset ? "↓" : "") +
                         (isTimeBased && s.duration
                           ? `${s.duration}s`
-                          : `${s.weight || 0}kg×${s.reps || 0}`)
+                          : shortSet(s))
                     )
                     .join(", ");
                   return (

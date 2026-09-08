@@ -43,16 +43,20 @@ Daraus folgen drei Regeln:
 
 | Ziel | Stand | Lücke |
 |---|---|---|
-| Überbelastung | teilweise | Schwellen sind Bevölkerungsdurchschnitt, nicht persönlich. Nach einer Pause entstehen Fehlalarme, weil der Vergleichsschnitt niedrig ist. |
+| Überbelastung | gut | Zusätzlich zum Belastungssignal je Muskelgruppe gibt es die Frühwarnung aus Gefühl **und** steigender Belastung (`getFatigueWarning`), gemessen gegen den eigenen Normalwert statt gegen einen Bevölkerungsschnitt. |
 | Unterbelastung | fehlt | `detectLoadSignal` kennt nur `overload`, `overload-watch`, `plateau`. Alles wird nur relativ zum eigenen jüngsten Schnitt gemessen – sinkt der Schnitt langsam mit, fällt schleichender Abbau nie auf. |
 | Progressive Overload | Rohdaten da, Zusammenfassung fehlt | Charts und Plateau-Signal existieren, aber nirgends steht in Klartext „Kraft seit X Wochen flach". Kraft und Volumen werden in einer Kennzahl vermischt, obwohl es zwei verschiedene Wege sind, zu progressieren. |
 | Vergleich früher/heute | gut | Zeiträume, Sparklines, %-Vergleiche, Verlauf. |
+
+Damit ist die Unterbelastung die letzte offene der drei – und sie hängt am Fortschritts-Signal:
+laut Stufe 2 braucht sie *weniger als sonst* **und** *kein Fortschritt* gleichzeitig, das zweite
+Signal existiert noch nicht.
 
 ---
 
 ## Stufenplan
 
-### Stufe 1 – Eingabe: RIR und Sitzungsgefühl
+### Stufe 1 – Eingabe: RIR und Sitzungsgefühl ✅ gebaut
 
 Ohne diese Daten bleibt alles andere eine Schätzung aus Tonnage.
 
@@ -83,7 +87,7 @@ Ohne diese Daten bleibt alles andere eine Schätzung aus Tonnage.
 - **Kein „nur Abweichungen eintragen"-Modell.** Klingt bequem, macht aber „nichts
   eingetragen" zweideutig: wie geplant gelaufen, oder schlicht nicht erfasst?
 
-### Stufe 2 – Die zwei fehlenden Signale
+### Stufe 2 – Die zwei fehlenden Signale ⬜ offen
 
 **Normalbereich je Muskelgruppe** – bewusst *nicht* „Unterbelastungs-Erkennung" genannt:
 Der Bereich wird aus dem eigenen Verhalten gebildet und kann deshalb nur sagen
@@ -122,7 +126,7 @@ vergleicht die aktuelle Woche gegen das Maximum der drei Wochen davor, eine Woch
 Zeit löst deshalb eine Plateau-Meldung aus. Gegenmittel sind der Erst-Satz-Anker oben, der
 Mehrwochen-Trend, und: ausgefallene Einheiten sind **Lücken, keine Nullen**.
 
-### Stufe 3 – Kalibrierungs-Schleife
+### Stufe 3 – Kalibrierungs-Schleife ✅ bis auf die Warnungs-Antworten gebaut
 
 - **Eichsätze mit Vorher-Schätzung:** gelegentlich ein letzter Satz bis zum echten Versagen,
   Schätzung vorher. Danach: „8 geschätzt, 11 geschafft." Über Wochen entsteht die eigene
@@ -138,7 +142,23 @@ Mehrwochen-Trend, und: ausgefallene Einheiten sind **Lücken, keine Nullen**.
     Übungen eines Tages sich ähneln, aber deutlich schneller. Bis die Basis trägt, wird
     **keine Prozentzahl** gezeigt, sondern eine Tendenz, immer mit der Angabe, worauf sie
     beruht („aus 7 müden Tagen").
-- **Antworten auf Warnungen justieren die Schwellen** (siehe Regel 2 oben).
+- **Antworten auf Warnungen justieren die Schwellen** (siehe Regel 2 oben). ⬜ Als einziges
+  Stück dieser Stufe noch offen.
+
+**Wie es tatsächlich gebaut wurde – zwei Abweichungen von oben:**
+- Die Erwartung entsteht aus den bis zu 2 Einheiten **davor und danach**, nicht nur aus den
+  vorherigen. Ein einseitiger Schnitt hinkt einem steigenden Niveau hinterher und schenkt
+  dadurch jedem Tag ein paar Prozent. Für den Vergleich der Gefühlsstufen untereinander wäre
+  das egal, für die angezeigte Zahl nicht – und rückblickend über abgeschlossene Trainings sind
+  beide Seiten verfügbar.
+- Für die Vertrauensschwelle zählen **Trainings**, nicht Beobachtungen: Fünf Übungen an einem
+  müden Tag sind ein müder Tag, kein fünffacher Beleg. Ab 3 Trainings je Stufe eine Tendenz,
+  ab 5 eine Prozentzahl, die Grundlage steht immer dabei.
+- Die Eichsatz-Auswertung rechnet über **alle Übungen zusammen**: Eichsätze kosten Überwindung
+  und bleiben selten, je Übung käme auf Jahre keine tragfähige Zahl zustande. Aus dem Ergebnis
+  wird bewusst **nichts** automatisch umgerechnet – weder bisherige RIR-Angaben noch die
+  Belastung. Wie genau man bei einem All-out-Satz schätzt, ist verwandt mit dem RIR-Schätzen im
+  Alltag, aber nicht dasselbe.
 
 ---
 
@@ -147,21 +167,31 @@ Mehrwochen-Trend, und: ausgefallene Einheiten sind **Lücken, keine Nullen**.
 Umsetzung von Regel 4. Jede Zeile beantwortet: Wofür wird es gebraucht, **wo sieht man es**,
 und ab wann liefert es etwas. Ein Feld ohne Zeile in dieser Tabelle wird nicht gebaut.
 
-| Datum | Speist | Sichtbar als | Ab wann |
-|---|---|---|---|
-| **RIR letzter Satz** | %1RM-Schätzung des Satzes | „Letztes Mal: 100 kg × 8 (1 in Reserve)" im Training | 2. Training |
-| | Rekorderkennung mit Kontext | „100 × 5 mit 2 in Reserve – stärker als der alte Rekord am Limit" | sofort |
-| | Kontext „war der Tag so hart wie sonst?" | Vergleich mit dem üblichen RIR derselben Übung | 3–4 Sitzungen je Übung |
-| | Belastung pro Muskelgruppe | korrekte statt geschätzter Intensität | sofort |
-| | Kalibrierung (Stufe 3) | Vorhersage gegen tatsächliche Leistung | siehe Eichsätze |
-| **Sitzungsgefühl 1–5** | Abgleich Gefühl ↔ Leistung | „An ‚müde'-Tagen liegst du bei 97 % deiner üblichen Leistung" | 10–15 Sitzungen |
-| | Kontext für schwache Wochen | Unterbelastungs-Warnung unterscheidet „wenig Zeit" von „ausgelaugt" | sofort |
-| | Frühwarnung Überlastung | „3 Wochen ‚ausgelaugt' bei steigender Belastung" | ~3 Wochen |
-| **Antwort auf eine Warnung** | persönliche Schwellen | Warnung kommt später oder gar nicht mehr | nach ~3 Antworten |
-| **Eichsatz-Schätzung** | Kalibrierungskurve | „Du unterschätzt dich um 2,4 Wdh." | 3–5 Eichsätze |
+Spalte „Stand": ✅ gebaut, ⬜ noch nicht.
+
+| Datum | Speist | Sichtbar als | Ab wann | Stand |
+|---|---|---|---|---|
+| **RIR letzter Satz** | Kontext zum letzten Mal | „Letztes Mal: 100 kg × 8 · 1 RIR" im Training | 2. Training | ✅ |
+| | Rekorderkennung mit Kontext | „Mehr Reserve als beim alten Rekord – der ging bis ans Limit." | sofort | ✅ |
+| | Kontext „war der Tag so hart wie sonst?" | „Mehr Reserve als üblich (sonst meist 2 RIR)." nach der Eingabe | 3 Sitzungen je Übung | ✅ |
+| | Belastung pro Muskelgruppe | Reserve-Gewichtung des letzten Satzes, ±3 % je Stufe | sofort | ✅ |
+| **Sitzungsgefühl 1–5** | Abgleich Gefühl ↔ Leistung | „An ‚müde'-Tagen liegst du bei 97 % deiner üblichen Leistung" | 3 Trainings je Stufe (Tendenz), 5 (Prozent) | ✅ |
+| | Frühwarnung Überlastung | „Seit 3 Wochen … schlechter als sonst – bei X % höherer Belastung" | ~3 Wochen + 12 Wochen Vergleichszeitraum | ✅ |
+| | Kontext für schwache Wochen | Unterbelastungs-Warnung unterscheidet „wenig Zeit" von „ausgelaugt" | sofort | ⬜ hängt an der Unterbelastung |
+| **Eichsatz-Schätzung** | Kalibrierungskurve | „Du unterschätzt dich im Schnitt um 2 Wiederholungen." | 3 Eichsätze | ✅ |
+| **Antwort auf eine Warnung** | persönliche Schwellen | Warnung kommt später oder gar nicht mehr | nach ~3 Antworten | ⬜ |
 
 Ehrlich dazu: Die Kalibrierungs-Auswertungen brauchen Datenpunkte und liefern in den ersten
 Wochen nichts. Die RIR-Effekte auf Rekorde, „Letztes Mal" und Intensität wirken sofort.
+
+**Zur RIR-Zuordnung – gilt überall:** Die Angabe beschreibt den *letzten* Satz einer Übung.
+Ein Rekord, der in einem früheren Satz fiel, bekommt deshalb **keine** Reserve-Angabe statt einer
+geliehenen; und in der Belastungsrechnung wird nur die Arbeit des letzten Satzes gewichtet.
+Dass damit bei drei Sätzen nur rund ein Drittel der Wirkung übrigbleibt, ist der bewusst
+gezahlte Preis dafür, nichts zu behaupten, was nicht erfasst wurde. Ein früherer Anlauf
+multiplizierte die Summe der ganzen Übung mit dem Faktor – das ist dasselbe wie jeden Satz
+einzeln zu gewichten (`f × (a+b+c) = f·a + f·b + f·c`) und war damit genau die Fehlzuordnung,
+die es zu vermeiden galt.
 
 ## Getroffene Entscheidungen
 
@@ -199,14 +229,26 @@ und die Leiste rechnet mit der längsten Übung.
 
 ## Offene Punkte
 
-- **1RM-Formel statt roher Tonnage** in `loadSetWork`: `Gewicht × Wdh.` vermischt Volumen und
-  Intensität – ein Wechsel von 5×5 auf 3×12 sieht wie ein Belastungssprung aus, obwohl die
-  relative Intensität sinkt. Vorschlag: Mittelwert aus Epley, Brzycki und Lombardi (Lombardi
-  bleibt bei hohen Wiederholungszahlen konservativ und dämpft Brzyckis Ausreißen nach oben).
-  Zurückgestellt, weil RPE/RIR aus Stufe 1 das Problem an der Wurzel löst, statt es besser zu raten.
-- **Bestwert-Bezug zeitlich begrenzen:** `best[exerciseId]` ist der beste Satz *aller Zeiten*.
-  Ein alter Ausreißer verschiebt den Maßstab dauerhaft.
-- **Gym-Trennung** fehlt in `getMuscleLoadSeries` – anders als bei den Einzelübungs-Statistiken
-  wird dort über alle Gyms hinweg gerechnet.
+- **Unterbelastung erkennen** (Stufe 2, Normalbereich je Muskelgruppe) – die letzte offene der
+  drei Zielsetzungen. Braucht das Fortschritts-Signal darunter als zweites Standbein.
+- **Progressive Overload in Klartext:** „Kraft seit 8 Wochen flach, Volumen +18 %". Kraft =
+  geschätztes 1RM des *ersten* Arbeitssatzes je Übung (Begründung in Stufe 2), Volumen getrennt
+  davon. Existiert bisher nirgends – auch nicht als Rechnung im Hintergrund.
+- **Antworten auf Warnungen justieren die Schwellen** (Regel 2). Die Warnungen stellen derzeit
+  etwas fest und hören auf; die Rückfrage und das Merken der Antwort fehlen.
 - **Ausdauer** (Laufen, Rad, Schwimmen, Airbike) als eigene Einheiten mit Session-RPE als
   gemeinsamer Belastungswährung.
+
+### Bewusst verworfen
+
+Damit sie nicht in jeder Runde neu vorgeschlagen werden:
+
+- **Bestwert-Bezug zeitlich begrenzen** (`best[exerciseId]` als Bestwert aller Zeiten) – von Max
+  abgelehnt, September 2026.
+- **Gym-Trennung in `getMuscleLoadSeries`** – von Max abgelehnt, September 2026.
+
+### Erledigt
+
+- **1RM-Formel statt roher Tonnage** in `loadSetWork`: Die Wurzel-Lösung über RIR ist gebaut
+  (siehe Tabelle oben). Die ursprünglich vorgeschlagene Formel-Mischung aus Epley, Brzycki und
+  Lombardi wurde damit hinfällig – geraten wird nicht mehr, es wird gemessen.

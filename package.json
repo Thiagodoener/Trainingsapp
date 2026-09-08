@@ -1,14 +1,21 @@
 {
-  "scripts": { "dev": "vite", "build": "vite build", "preview": "vite preview" },
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
   "dependencies": {
+    "lucide-react": "0.395.0",
     "react": "18.3.1",
     "react-dom": "18.3.1",
-    "recharts": "2.12.7",
-    "lucide-react": "0.395.0"
+    "recharts": "2.12.7"
   },
   "devDependencies": {
     "@vitejs/plugin-react": "4.3.1",
+    "typescript": "5.5.4",
     "vite": "5.4.10",
-    "typescript": "5.5.4"
+    "vitest": "^2.1.8"
   }
 }

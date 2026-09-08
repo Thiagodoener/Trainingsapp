@@ -258,12 +258,12 @@ const SUBGROUPS = {
 // helper and both "62.5" and "62,5" mean the same thing.
 // Weights are stored as numbers but entered/displayed German-style with a
 // comma (62,5). Trailing ".0" is dropped so 60 stays "60", not "60,0".
-function fmtDecimal(value) {
+export function fmtDecimal(value) {
   const n = toNum(value);
   return String(Math.round(n * 100) / 100).replace(".", ",");
 }
 
-const toNum = (value) => {
+export const toNum = (value) => {
   if (typeof value === "number") return Number.isFinite(value) ? value : 0;
   const n = Number(String(value ?? "").trim().replace(",", "."));
   return Number.isFinite(n) ? n : 0;
@@ -318,8 +318,8 @@ const entrySets = (entry) => (Array.isArray(entry?.sets) ? entry.sets.filter(Boo
 // gehoerten zum Plan dieses Trainings. Gemacht wurde aber nur, was abgehakt
 // ist, und genau danach richtet sich jede Auswertung: ohne diesen Filter
 // zaehlt ein vorbelegter, nie ausgefuehrter Satz als geleistete Arbeit.
-const performedSets = (sets) => (Array.isArray(sets) ? sets : []).filter((s) => s && s.done);
-const performedWorkingSets = (sets) => performedSets(sets).filter((s) => !s.warmup);
+export const performedSets = (sets) => (Array.isArray(sets) ? sets : []).filter((s) => s && s.done);
+export const performedWorkingSets = (sets) => performedSets(sets).filter((s) => !s.warmup);
 
 // Ein Satz ist entweder Aufwaermsatz, Dropsatz oder ein normaler Arbeitssatz.
 // Aufwaermsaetze bleiben ueberall aus der Statistik ausgeschlossen; ein
@@ -330,9 +330,9 @@ const SET_KINDS = [
   ["dropset", "Dropsatz"],
   ["calibration", "Eichsatz"],
 ];
-const setKind = (set) =>
+export const setKind = (set) =>
   set?.warmup ? "warmup" : set?.dropset ? "dropset" : set?.calibration ? "calibration" : "normal";
-const setKindFlags = (kind) => ({
+export const setKindFlags = (kind) => ({
   warmup: kind === "warmup",
   dropset: kind === "dropset",
   calibration: kind === "calibration",
@@ -351,7 +351,7 @@ const rirLabel = (rir) => (rir >= RIR_MAX ? `${RIR_MAX}+` : String(rir));
 // Beides heißt dasselbe, aber eine einheitliche Zahl lässt sich zwischen
 // Trainings vergleichen, ohne im Kopf zu übersetzen - und der Sonderfall
 // stand nur an manchen Stellen, was zwei Skalen vortäuschte, wo es eine gibt.
-function fmtRir(rir) {
+export function fmtRir(rir) {
   if (rir == null || !Number.isFinite(Number(rir))) return null;
   const n = Math.max(0, Math.min(RIR_MAX, Math.round(Number(rir))));
   return `${rirLabel(n)} RIR`;
@@ -373,7 +373,7 @@ const feelingLabel = (value) =>
 // Ein Dropsatz haengt immer an dem Arbeitssatz davor - ohne einen solchen
 // (erster Satz der Uebung, oder davor stehen nur Aufwaermsaetze) ergibt er
 // keinen Sinn und wird gar nicht erst angeboten.
-function canBeDropset(sets, idx) {
+export function canBeDropset(sets, idx) {
   for (let i = idx - 1; i >= 0; i -= 1) {
     if (!sets[i]?.warmup) return true;
   }
@@ -386,7 +386,7 @@ function canBeDropset(sets, idx) {
 // am Ende. Ein bereits gesetzter Eichsatz bleibt bestehen, auch wenn spaeter
 // noch ein Satz angehaengt wird: geschaetzt und bis zum Versagen trainiert
 // wurde ja trotzdem.
-function canBeCalibration(sets, idx) {
+export function canBeCalibration(sets, idx) {
   return idx === (Array.isArray(sets) ? sets.length : 0) - 1;
 }
 
@@ -401,7 +401,7 @@ function canBeCalibration(sets, idx) {
 // gerechnet kaeme auf Jahre hinaus nirgends eine tragfaehige Zahl zusammen.
 const CALIBRATION_MIN_SETS = 3;
 
-function getCalibration(logs) {
+export function getCalibration(logs) {
   const rows = [];
   (Array.isArray(logs) ? logs : []).forEach((l) => {
     const ts = new Date(l?.date).getTime();
@@ -433,7 +433,7 @@ function getCalibration(logs) {
 // Sichtbare Nummer je Satz: Aufwaermsaetze zeigen "W", Dropsaetze haengen als
 // Unternummer am vorangehenden Arbeitssatz (3.1, 3.2), alles andere zaehlt
 // hoch. Dropsaetze bekommen also keine eigene Satznummer.
-function setNumberLabels(sets) {
+export function setNumberLabels(sets) {
   let working = 0;
   let drops = 0;
   return (Array.isArray(sets) ? sets : []).map((s) => {
@@ -688,7 +688,7 @@ function effectiveGymId(exerciseId, gymId, gymIndependentExercises) {
   return isGymIndependent(exerciseId, gymIndependentExercises) ? null : gymId;
 }
 
-function getExerciseHistory(logs, exerciseId, excludeSessionId, isTimeBased = false, gymId = null) {
+export function getExerciseHistory(logs, exerciseId, excludeSessionId, isTimeBased = false, gymId = null) {
   const all = logs
     .filter((l) => l.id !== excludeSessionId)
     .slice()
@@ -874,7 +874,7 @@ const TYPICAL_RIR_MIN_SESSIONS = 3;
 const RIR_LOAD_PER_STEP = 0.03;
 const RIR_LOAD_CAP = 0.12;
 
-function rirLoadFactor(rir, typical) {
+export function rirLoadFactor(rir, typical) {
   if (rir == null || typical == null) return 1;
   const now = Number(rir);
   const usual = Number(typical);
@@ -890,7 +890,7 @@ function rirLoadFactor(rir, typical) {
 // angewendet wird. Käme er nur aus den jüngsten Einheiten und hätte sich der
 // Trainingsstil verschoben, läge die halbe Historie auf einer Seite und die
 // Kurve bekäme einen Trend, den es nie gab.
-function typicalRirByExercise(logs) {
+export function typicalRirByExercise(logs) {
   const collected = {};
   const chronological = [...(Array.isArray(logs) ? logs : [])]
     .filter(Boolean)
@@ -953,7 +953,7 @@ const FEELING_EXPECT_MIN = 2;      // darunter ist es keine Erwartung, sondern e
 const FEELING_MIN_SESSIONS_TENDENCY = 3;  // ab hier eine Tendenz in Worten
 const FEELING_MIN_SESSIONS_PERCENT = 5;   // ab hier eine Prozentzahl
 
-function getFeelingPerformance(logs, timeBasedExercises) {
+export function getFeelingPerformance(logs, timeBasedExercises) {
   const safeLogs = (Array.isArray(logs) ? logs : []).filter(Boolean);
   const chronological = [...safeLogs].sort((a, b) => new Date(a.date) - new Date(b.date));
 
@@ -1059,7 +1059,7 @@ const FATIGUE_FEELING_DROP = 0.5;    // um so viel muss das Gefühl darunter lie
 const FATIGUE_LOAD_RISE = 1.1;       // und die Belastung um so viel darüber
 const FATIGUE_LOAD_LOOKBACK = 4;     // Vergleichszeitraum für die Belastung
 
-function getFatigueWarning(logs, muscleLoadSeries, nowTs = Date.now()) {
+export function getFatigueWarning(logs, muscleLoadSeries, nowTs = Date.now()) {
   const safeLogs = (Array.isArray(logs) ? logs : []).filter(Boolean);
   const windowMs = FATIGUE_WINDOW_WEEKS * LOAD_WEEK_MS;
   const baselineMs = windowMs + FATIGUE_BASELINE_WEEKS * LOAD_WEEK_MS;
@@ -1117,7 +1117,7 @@ function getFatigueWarning(logs, muscleLoadSeries, nowTs = Date.now()) {
 // Halbe Werte sind möglich (Median aus einer geraden Anzahl), deshalb wird
 // die Anzeige gerundet - "sonst 1,5 RIR" wäre eine Scheingenauigkeit, die es
 // auf einer Fünf-Stufen-Skala nicht gibt.
-function rirComparison(currentRir, typical) {
+export function rirComparison(currentRir, typical) {
   // Wie in recordReserveNote: Number(null) ist 0. Ohne diese Zeile bliebe der
   // Vergleich stehen, nachdem man die Angabe wieder abgewählt hat - und zwar
   // so, als hätte man 0 gewählt.
@@ -1140,7 +1140,7 @@ function rirComparison(currentRir, typical) {
 // beim letzten Mal. Bewusst nur eine Feststellung, kein Lob und kein Rat
 // (siehe KONZEPT.md, Regel 3) - und nur dort, wo beide Seiten eine Angabe
 // haben. Ohne alten RIR-Wert wäre jede Einordnung geraten.
-function recordReserveNote(currentRir, previousRir) {
+export function recordReserveNote(currentRir, previousRir) {
   // null zuerst abfangen: Number(null) ist 0 und damit "endlich" - eine
   // fehlende Angabe würde sonst als "am Limit" durchgehen und einen
   // Vergleich behaupten, für den es gar keine Grundlage gibt.
@@ -1157,7 +1157,7 @@ function recordReserveNote(currentRir, previousRir) {
   return "Gleiche Reserve wie beim alten Rekord.";
 }
 
-function typicalRir(values, window = TYPICAL_RIR_WINDOW) {
+export function typicalRir(values, window = TYPICAL_RIR_WINDOW) {
   const list = (Array.isArray(values) ? values : [])
     .filter((v) => Number.isFinite(Number(v)))
     .slice(0, Number.isFinite(window) ? window : undefined)
@@ -1227,7 +1227,7 @@ function getExerciseTimeline(logs, exerciseId) {
 // Without an earlier session there is nothing to beat, so nothing counts.
 // setRir = die Reserve, die fuer GENAU DIESEN Satz gilt - also die Angabe der
 // Uebung nur dann, wenn dieser Satz ihr letzter war (siehe getExerciseHistory).
-function describeSetPRs(set, best, isTimeBased = false, hasWeight = true, setRir = null) {
+export function describeSetPRs(set, best, isTimeBased = false, hasWeight = true, setRir = null) {
   if (!set || !set.done || set.warmup) return [];
   if (!best || (best.comparableSessions || 0) === 0) return [];
   const found = [];
@@ -1299,7 +1299,7 @@ function describeSetPRs(set, best, isTimeBased = false, hasWeight = true, setRir
 // These belong next to the exercise name, not to a single set.
 // Hier gilt die Angabe der ganzen Uebung: diese Rekorde fassen alle Saetze
 // zusammen, es gibt also keinen einzelnen Satz, dem sie gehoeren muesste.
-function describeExercisePRs(sets, best, isTimeBased = false, hasWeight = true, sessionRir = null) {
+export function describeExercisePRs(sets, best, isTimeBased = false, hasWeight = true, sessionRir = null) {
   if (!best || (best.comparableSessions || 0) === 0) return [];
   const done = (Array.isArray(sets) ? sets : []).filter((x) => x && x.done && !x.warmup);
   if (done.length === 0) return [];
@@ -1351,7 +1351,7 @@ function isNewPR(set, best, isTimeBased = false) {
 
 
 
-function estimate1RM(weight, reps) {
+export function estimate1RM(weight, reps) {
   const w = Number(weight) || 0;
   const r = Number(reps) || 0;
   if (w <= 0 || r <= 0) return 0;
@@ -1616,7 +1616,7 @@ function muscleSeriesWeekCount(historyWeeks) {
 // Schneidet eine Wochenreihe (alt -> neu) auf die letzten `weeks` Wochen
 // zurecht - für den Zoom im Modal-Chart. Infinity ("Gesamt") liefert die
 // komplette Reihe unverändert.
-function zoomWeekSeries(values, weeks) {
+export function zoomWeekSeries(values, weeks) {
   if (!Array.isArray(values)) return [];
   if (!Number.isFinite(weeks)) return values;
   return values.slice(Math.max(0, values.length - weeks));
@@ -1629,7 +1629,7 @@ function zoomWeekSeries(values, weeks) {
 // `compareWeeks` bliebe bei "Vorwoche" ein einziger Punkt übrig - eine Linie
 // aus einem Punkt gibt es nicht, die Sparkline fiele auf ihren leeren
 // Platzhalter-Strich zurück.
-function compareWindowSeries(values, compareWeeks) {
+export function compareWindowSeries(values, compareWeeks) {
   return zoomWeekSeries(values, Number.isFinite(compareWeeks) ? compareWeeks + 1 : compareWeeks);
 }
 
@@ -1645,7 +1645,7 @@ function loadSetWork(set, mode) {
 // weekCount = wie viele 7-Tage-Fenster zurück betrachtet werden. Fenster 0 ist
 // immer "die letzten 7 Tage", damit die Zahlen zur bestehenden Karte
 // "Sätze pro Muskelgruppe (7 Tage)" passen.
-function getMuscleLoadSeries(
+export function getMuscleLoadSeries(
   logs,
   exBy,
   subgroupOverrides,
@@ -1871,7 +1871,7 @@ function logsHistoryWeeks(logs, nowTs = Date.now()) {
 // Rückgabe null bedeutet "nicht berechenbar" (keine Vorgeschichte oder vorher
 // gar nichts trainiert) - das ist etwas anderes als 0 % und muss in der
 // Anzeige auch anders aussehen.
-function muscleLoadChange(values, compareWeeks, maxLookback = Infinity) {
+export function muscleLoadChange(values, compareWeeks, maxLookback = Infinity) {
   if (!Array.isArray(values) || values.length < 2) return null;
   const usableWeeks = Math.min(compareWeeks, maxLookback);
   if (usableWeeks <= 0) return null;
@@ -1911,7 +1911,7 @@ const OVERLOAD_ALERT_THRESHOLD = 1.3;   // aktuelle Woche > 30% über dem Schnit
 // schlicht noch nicht genug Trainingshistorie gibt. Null heißt "kein
 // auffälliges Signal" - das schließt "diese Woche noch nichts trainiert" und
 // "zu wenig Historie" mit ein.
-function detectLoadSignal(values, historyWeeks = Infinity) {
+export function detectLoadSignal(values, historyWeeks = Infinity) {
   if (!Array.isArray(values) || values.length === 0) return null;
   const current = values[values.length - 1] || 0;
   if (current <= 0) return null;
@@ -12303,7 +12303,7 @@ function useChartColors(theme) {
 const PERCENT_TOLERANCE_SHARE = 0.15;
 const PERCENT_TOLERANCE_MIN_DAYS = 3;
 
-function buildPercentSeries(data, keys, compareWeeks, toleranceDays = PERCENT_TOLERANCE_MIN_DAYS) {
+export function buildPercentSeries(data, keys, compareWeeks, toleranceDays = PERCENT_TOLERANCE_MIN_DAYS) {
   const targetOffsetMs = compareWeeks * LOAD_WEEK_MS;
   const toleranceMs = Math.max(
     toleranceDays * 86400000,

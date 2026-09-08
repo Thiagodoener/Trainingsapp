@@ -3254,6 +3254,9 @@ function TrainingAppInner() {
 
   const clearActiveSession = async () => {
     setSession(null);
+    // Der Reiter "Training" hat ohne Sitzung nichts mehr zu zeigen - wer nach
+    // dem Beenden dort stehen bliebe, sähe eine leere Seite.
+    setTab((t) => (t === "log" ? "dashboard" : t));
     await updateRestEndsAt(0);
     await saveJSON("active-workout", null);
   };
@@ -3424,6 +3427,35 @@ function TrainingAppInner() {
     }
     setBreathingSession(null);
   };
+  // Eine Atemübung nachtragen: legt ein echtes Protokoll an (damit es in allen
+  // Statistiken zählt) und hängt es als erledigten Kalendereintrag an den Tag.
+  const addBreathingLogManually = async (dateKey, { breathingId, name, minutes, holdSeconds }) => {
+    const ex = breathingExercises.find((b) => b.id === breathingId) || null;
+    const tag = dateFromKey(dateKey) || new Date();
+    // Mittags statt Mitternacht: So kann keine Zeitzonen-Verschiebung den
+    // Eintrag auf den Vortag rutschen lassen.
+    const date = new Date(tag.getFullYear(), tag.getMonth(), tag.getDate(), 12, 0, 0).toISOString();
+    const runden = ex ? breathingRounds(ex) : null;
+    const log = {
+      id: uid(),
+      breathingId: ex ? ex.id : null,
+      name: ex ? ex.name : name || "Freie Atemübung",
+      date,
+      rounds: runden,
+      plannedRounds: runden,
+      durationSeconds: Math.max(0, Math.round(toNum(minutes) * 60)),
+      maxHoldSeconds: toNum(holdSeconds) > 0 ? Math.round(toNum(holdSeconds)) : null,
+      // Merkt sich, dass die Sitzung nicht in der App gelaufen ist - die
+      // Dauer ist damit eine Angabe, keine Messung.
+      manual: true,
+    };
+    await persistBreathingLogs([...breathingLogs, log]);
+    await persistCalendarEntries([
+      ...calendarEntries,
+      { id: uid(), date: dateKey, type: "breathing", breathingId: log.breathingId, logId: log.id },
+    ]);
+    showToast("Atemübung nachgetragen");
+  };
   // Moving an entry to another day, swapping its linked plan/exercise, or
   // editing an action's category/text/duration all go through this one
   // patch-merge - only entries that have not happened yet ever reach it
@@ -3592,6 +3624,8 @@ function TrainingAppInner() {
       if (backupFileRef.current) backupFileRef.current.value = "";
     }
   };
+  // Ist im Abschluss-Fenster das Nachtrag-Formular für eine Atemübung offen?
+  const [finishBreathingOpen, setFinishBreathingOpen] = useState(false);
   const [bandManagerOpen, setBandManagerOpen] = useState(false);
   const [bandDraft, setBandDraft] = useState({ name: "", kg: "" });
   const [renamingBandId, setRenamingBandId] = useState(null);
@@ -6136,7 +6170,17 @@ function TrainingAppInner() {
             kurzer Blick in die Statistik das Ende des laufenden Zirkels.
             Deshalb steht sie ausserhalb des Panels, das beim Tabwechsel
             per key neu aufgebaut wird. */}
-        {!loading && (session || tab === "log") && (
+        {/* Ohne laufende Sitzung wird die Trainingsansicht NICHT gerendert.
+            Vorher stand hier "session || tab === 'log'": Beim Beenden eines
+            Trainings wird die Sitzung auf null gesetzt, der Reiter steht in
+            diesem Moment aber noch auf "log" - LogView lief also einmal mit
+            session = null durch, griff darin auf session.entries zu und riss
+            die ganze App in den Fehlerbildschirm ("Da ist etwas
+            schiefgelaufen"). React meldete das als "Rendered fewer hooks than
+            expected", weil der Absturz mitten zwischen zwei Hooks passierte.
+            Damit der Reiter danach nicht leer dasteht, wechselt
+            clearActiveSession zurück auf die Startseite. */}
+        {!loading && session && (
           <div className="tab-panel" hidden={tab !== "log"}>
             <LogView
               session={session}
@@ -6405,6 +6449,7 @@ function TrainingAppInner() {
             breathingExercises={breathingExercises}
             breathingLogs={breathingLogs}
             onScheduleBreathing={scheduleCalendarBreathing}
+            onLogBreathing={addBreathingLogManually}
             onStartScheduledBreathing={startBreathingSession}
             deloadWeeks={deloadWeeks}
             onAddDeloadRange={addDeloadRange}
@@ -6663,10 +6708,34 @@ function TrainingAppInner() {
             </div>
           </div>
 
+          {/* Direkt nach dem Training frei geatmet? Dann steht die Abkürzung
+              genau hier, statt dass man den Kalender aufmachen und den
+              heutigen Tag suchen muss. */}
+          <div style={{ marginTop: 14, paddingTop: 12, borderTop: "1px solid var(--border)" }}>
+            {finishBreathingOpen ? (
+              <BreathingLogForm
+                breathingExercises={breathingExercises}
+                dateLabel="heute"
+                onSave={async (daten) => {
+                  await addBreathingLogManually(toDateKey(new Date()), daten);
+                  setFinishBreathingOpen(false);
+                }}
+                onCancel={() => setFinishBreathingOpen(false)}
+              />
+            ) : (
+              <button
+                className="btn btn-ghost btn-block btn-sm"
+                onClick={() => setFinishBreathingOpen(true)}
+              >
+                <Wind size={14} /> Noch eine Atemübung gemacht?
+              </button>
+            )}
+          </div>
+
           <button
             className="btn btn-primary btn-block btn-sm"
             style={{ marginTop: 14 }}
-            onClick={() => setFinishSummary(null)}
+            onClick={() => { setFinishSummary(null); setFinishBreathingOpen(false); }}
           >
             <Check size={14} /> Fertig
           </button>
@@ -7625,6 +7694,7 @@ function CalendarView({
   breathingExercises = [],
   breathingLogs = [],
   onScheduleBreathing,
+  onLogBreathing,
   onStartScheduledBreathing,
   deloadWeeks = [],
   onAddDeloadRange,
@@ -7639,6 +7709,8 @@ function CalendarView({
   const [selectedDate, setSelectedDate] = useState(toDateKey(today));
   const [addOpen, setAddOpen] = useState(false);
   const [addMode, setAddMode] = useState("action");
+  // Im Atem-Reiter: vormerken oder nachtragen.
+  const [breathingMode, setBreathingMode] = useState("plan");
   const [newActionText, setNewActionText] = useState("");
   const [newActionCategory, setNewActionCategory] = useState(null);
   const [newActionDuration, setNewActionDuration] = useState("");
@@ -8203,7 +8275,9 @@ function CalendarView({
                   </div>
                   {log ? (
                     <div style={{ fontSize: 12.5, color: "var(--text-dim)", marginTop: 6 }}>
-                      {log.rounds} von {log.plannedRounds} Runden
+                      {log.rounds != null && log.plannedRounds != null
+                        ? `${log.rounds} von ${log.plannedRounds} Runden`
+                        : "Nachgetragen"}
                       {log.durationSeconds
                         ? ` · ${Math.max(1, Math.round(log.durationSeconds / 60))} Min.`
                         : ""}
@@ -8346,25 +8420,52 @@ function CalendarView({
                 </button>
               </>
             ) : addMode === "breathing" ? (
-              <div style={{ maxHeight: 260, overflowY: "auto" }}>
-                {breathingExercises.length === 0 ? (
-                  <div className="empty-state" style={{ padding: "10px 0" }}>
-                    Noch keine Atemübung angelegt. Lege sie im Programm-Menü unter „Atemübungen“ an.
-                  </div>
+              <>
+                {/* Zwei verschiedene Absichten am selben Ort: etwas für später
+                    vormerken oder etwas nachtragen, das schon passiert ist. */}
+                <div className="chip-row" style={{ marginTop: 0, marginBottom: 10 }}>
+                  <span
+                    className={`chip chip-sm ${breathingMode === "plan" ? "active" : ""}`}
+                    onClick={() => setBreathingMode("plan")}
+                  >
+                    Vormerken
+                  </span>
+                  <span
+                    className={`chip chip-sm ${breathingMode === "log" ? "active" : ""}`}
+                    onClick={() => setBreathingMode("log")}
+                  >
+                    Nachtragen
+                  </span>
+                </div>
+                {breathingMode === "log" ? (
+                  <BreathingLogForm
+                    breathingExercises={breathingExercises}
+                    dateLabel={fmtDate(dateFromKey(selectedDate))}
+                    onSave={(daten) => { onLogBreathing?.(selectedDate, daten); closeAddDialog(); }}
+                  />
                 ) : (
-                  breathingExercises.map((b) => (
-                    <div className="ex-row" key={b.id}>
-                      <span className="ex-name">{b.name}</span>
-                      <button
-                        className="btn btn-primary btn-sm"
-                        onClick={() => { onScheduleBreathing?.(selectedDate, b.id); closeAddDialog(); }}
-                      >
-                        Eintragen
-                      </button>
-                    </div>
-                  ))
+                  <div style={{ maxHeight: 260, overflowY: "auto" }}>
+                    {breathingExercises.length === 0 ? (
+                      <div className="empty-state" style={{ padding: "10px 0" }}>
+                        Noch keine Atemübung angelegt. Lege sie auf der Startseite
+                        unter dem Zahnrad links oben an.
+                      </div>
+                    ) : (
+                      breathingExercises.map((b) => (
+                        <div className="ex-row" key={b.id}>
+                          <span className="ex-name">{b.name}</span>
+                          <button
+                            className="btn btn-primary btn-sm"
+                            onClick={() => { onScheduleBreathing?.(selectedDate, b.id); closeAddDialog(); }}
+                          >
+                            Eintragen
+                          </button>
+                        </div>
+                      ))
+                    )}
+                  </div>
                 )}
-              </div>
+              </>
             ) : (
               <>
                 <div className="search-box" style={{ marginBottom: 10 }}>
@@ -14367,6 +14468,135 @@ function BreathingSessionView({ session, onFinish, onCancel }) {
 
 // Editor für eine Atemübung: Phasen frei zusammenstellbar, jede mit Name,
 // Richtung und Dauer - oder "offen", wenn die Dauer nicht vorher feststeht.
+// Formular zum NACHTRAGEN einer Atemübung. Wird an zwei Stellen benutzt: im
+// Kalender für einen beliebigen Tag und direkt nach dem Speichern eines
+// Trainings für heute.
+//
+// Warum es das braucht: Ein Atem-Protokoll entstand bis Sept. 2026
+// ausschließlich am Ende einer in der App gelaufenen Sitzung, mit dem
+// Zeitstempel "jetzt". Wer frei atmet - nach dem Training oder beim Laufen,
+// ohne Telefon in der Hand - konnte das nirgends festhalten. Ein geplanter
+// Kalendereintrag half nicht: Der bleibt ohne Protokoll für immer "offen" und
+// taucht in keiner Statistik auf.
+function BreathingLogForm({ breathingExercises = [], dateLabel, onSave, onCancel }) {
+  const [pickedId, setPickedId] = useState(breathingExercises[0]?.id || "frei");
+  const [freeName, setFreeName] = useState("");
+  // Die Dauer ist schon beim Öffnen vorbelegt, nicht erst beim Umschalten -
+  // sonst steht das Feld leer da, obwohl oben bereits eine Übung ausgewählt
+  // ist, und der häufigste Fall (Übung wie geplant gemacht) kostet trotzdem
+  // eine Eingabe.
+  const [minutes, setMinutes] = useState(() => {
+    const total = breathingExercises[0] ? breathingTotalSeconds(breathingExercises[0]) : null;
+    return total == null ? "" : String(Math.max(1, Math.round(total / 60)));
+  });
+  const [holdSeconds, setHoldSeconds] = useState("");
+  const picked = breathingExercises.find((b) => b.id === pickedId) || null;
+  // Hat die gewählte Übung eine offene Phase, ist die Anhaltedauer die
+  // eigentlich interessante Zahl - dann wird das Feld auch gezeigt.
+  const hasOpenPhase = picked
+    ? breathingPhases(picked).some((ph) => ph.seconds == null)
+    : true;
+
+  // Beim Wechsel der Übung die Dauer vorbelegen: die geplante Gesamtzeit der
+  // Übung ist fast immer die richtige Antwort, korrigiert wird nur der
+  // Ausnahmefall.
+  const choose = (id) => {
+    setPickedId(id);
+    const ex = breathingExercises.find((b) => b.id === id) || null;
+    const total = ex ? breathingTotalSeconds(ex) : null;
+    setMinutes(total == null ? "" : String(Math.max(1, Math.round(total / 60))));
+  };
+
+  const gueltig = toNum(minutes) > 0 && (picked || freeName.trim() || pickedId === "frei");
+  return (
+    <>
+      <p style={{ fontSize: 12.5, color: "var(--text-dim)", margin: "0 0 12px" }}>
+        Wird als absolvierte Sitzung für {dateLabel} gespeichert und zählt in
+        allen Atem-Statistiken mit.
+      </p>
+      <label className="field-label">Übung</label>
+      <div className="chip-row chip-row-wrap" style={{ marginTop: 6, marginBottom: 10 }}>
+        {breathingExercises.map((b) => (
+          <span
+            key={b.id}
+            className={`chip chip-sm ${pickedId === b.id ? "active" : ""}`}
+            onClick={() => choose(b.id)}
+          >
+            {b.name}
+          </span>
+        ))}
+        <span
+          className={`chip chip-sm ${pickedId === "frei" ? "active" : ""}`}
+          onClick={() => choose("frei")}
+        >
+          Frei geatmet
+        </span>
+      </div>
+
+      {pickedId === "frei" && (
+        <>
+          <label className="field-label">Bezeichnung (optional)</label>
+          <input
+            type="text"
+            placeholder="z. B. Nach dem Laufen"
+            value={freeName}
+            onChange={(e) => setFreeName(e.target.value)}
+            style={{ marginBottom: 10 }}
+          />
+        </>
+      )}
+
+      <div style={{ display: "flex", gap: 10 }}>
+        <div style={{ flex: 1 }}>
+          <label className="field-label">Dauer (Min.)</label>
+          <input
+            type="number"
+            inputMode="numeric"
+            min="1"
+            placeholder="z. B. 5"
+            value={minutes}
+            onChange={(e) => setMinutes(e.target.value)}
+          />
+        </div>
+        {hasOpenPhase && (
+          <div style={{ flex: 1 }}>
+            <label className="field-label">Längste Anhaltedauer (Sek.)</label>
+            <input
+              type="number"
+              inputMode="numeric"
+              min="0"
+              placeholder="optional"
+              value={holdSeconds}
+              onChange={(e) => setHoldSeconds(e.target.value)}
+            />
+          </div>
+        )}
+      </div>
+
+      <button
+        className="btn btn-primary btn-block btn-sm"
+        style={{ marginTop: 14 }}
+        disabled={!gueltig}
+        onClick={() =>
+          onSave({
+            breathingId: picked ? picked.id : null,
+            name: picked ? picked.name : freeName.trim() || "Freie Atemübung",
+            minutes: toNum(minutes),
+            holdSeconds: toNum(holdSeconds),
+          })
+        }
+      >
+        <Check size={14} /> Nachtragen
+      </button>
+      {onCancel && (
+        <button className="btn btn-ghost btn-block btn-sm" style={{ marginTop: 8 }} onClick={onCancel}>
+          Abbrechen
+        </button>
+      )}
+    </>
+  );
+}
+
 function BreathingEditor({ initial, onSave, onCancel }) {
   const [name, setName] = useState(initial?.name || "");
   const [rounds, setRounds] = useState(String(initial?.rounds ?? 4));

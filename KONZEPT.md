@@ -323,6 +323,31 @@ im Training das Band statt eine Zahl zu tippen.
   Maximum" ist dabei keine sinnvolle Größe, anders als bei einer Hantel, die auf dem ganzen Weg
   gleich schwer bleibt.
 
+**Atemübungen lassen sich nachtragen.**
+Ein Atem-Protokoll entstand bis Sept. 2026 ausschließlich am Ende einer in der App gelaufenen
+Sitzung, mit dem Zeitstempel „jetzt". Wer frei atmet – nach dem Training oder beim Laufen, ohne
+Telefon in der Hand – konnte das nirgends festhalten. Ein geplanter Kalendereintrag half nicht:
+Der bleibt ohne Protokoll für immer „offen" und taucht in keiner Statistik auf.
+- Nachgetragen wird im Kalender (Tag → „+" → Atem → **Nachtragen**) oder direkt im
+  Abschluss-Fenster eines Trainings.
+- Angelegt wird ein **echtes Protokoll**, kein Sondereintrag: Dauer, Runden und Anhaltedauer
+  zählen damit in allen Atem-Statistiken genau wie eine gelaufene Sitzung.
+- Auch **ohne hinterlegte Übung** („Frei geatmet"): Die Statistik fällt schon immer auf den
+  gespeicherten Namen zurück, wenn keine Übung dahintersteht – so eine Sitzung bekommt dort
+  ihre eigene Zeile.
+- Das Feld `manual: true` hält fest, dass die Dauer eine **Angabe** ist und keine Messung.
+- Der Zeitstempel steht auf **12:00 Uhr** des gewählten Tages: Um Mitternacht könnte eine
+  Zeitzonen-Verschiebung den Eintrag auf den Vortag rutschen lassen.
+
+**Die Trainingsansicht wird ohne Sitzung nicht gerendert.**
+Sie hing an `session || tab === "log"`. Beim Beenden eines Trainings wird die Sitzung auf `null`
+gesetzt, der Reiter steht in dem Moment aber noch auf „log" – die Ansicht lief also einmal ohne
+Sitzung durch, griff darin auf `session.entries` zu und riss die ganze App in den
+Fehlerbildschirm. React meldete das als „Rendered fewer hooks than expected", weil der Absturz
+mitten zwischen zwei Hooks passierte; die eigentliche Ursache stand nirgends. Jetzt entscheidet
+allein die Sitzung über das Rendern, und `clearActiveSession` wechselt zurück auf die
+Startseite, damit der Reiter nicht leer dasteht.
+
 **Der Rundenmodus ist keine neue Datenstruktur.**
 Im Zirkel *ist* „Satz N" gleichbedeutend mit „Runde N": Satz 1 aller Übungen ist Runde 1. Die
 Rundenzahl ist deshalb einfach die Satzzahl aller Übungen. Im Plan wird die Runde einmal

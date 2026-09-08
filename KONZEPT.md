@@ -348,6 +348,31 @@ mitten zwischen zwei Hooks passierte; die eigentliche Ursache stand nirgends. Je
 allein die Sitzung über das Rendern, und `clearActiveSession` wechselt zurück auf die
 Startseite, damit der Reiter nicht leer dasteht.
 
+**Jede Bestwert-Zahl nennt ihre Herkunft.**
+„213 kg" ohne den Satz dahinter ist eine Zahl, zu der man nicht einmal die Übung sagen kann –
+und genau das fragt man sich als Erstes. Auf der Fortschritt-Seite war das gelöst, im
+Übungs-Fenster nicht: `getExerciseBestStats` rechnete zwei Maxima aus und warf die Herkunft weg.
+Beide Kacheln (geschätztes 1RM, bestes Satz-Volumen) sind jetzt antippbar und nennen Satz und
+Datum. Dasselbe gilt für „Rekorde (7 Tage)": Die Kachel zählte nur, die Rekorde selbst waren
+nirgends abrufbar. Aufgeschlüsselt wird jetzt nach Übung, Rekordart, Wert, vorherigem Bestwert
+und Datum – und pro Übung zählt nur der **beste Satz** des Trainings, wie beim Pokal in der
+Trainingsansicht: Wer sich 60/70/80 hocharbeitet, schlägt mit allen drei Sätzen den alten
+Bestwert, aber drei Einträge dafür sagen weniger als einer.
+
+**Nebenmuskelgruppen stehen an der Übung, nicht nur in der Rechnung.**
+Die halben Sätze für Nebengruppen waren zuerst nur eine Rechnung – *welche* Gruppen das bei
+einer Übung sind, stand nirgends. Jetzt im Kopf des Übungs-Fensters als blassere Marken neben
+der Hauptgruppe, und im Reiter „Info" ein Satz dazu, was das bedeutet.
+
+**Das Belastungs-Diagramm hat zwei Skalen.**
+Links die relative Belastung, rechts die Veränderung zur Vorwoche in Prozent, als zweite,
+gestrichelte Linie. Grund: Die Kurve selbst ist an den eigenen Bestwert gebunden und liegt
+deshalb je nach Trainingsstand unterschiedlich hoch – eine gute Woche ist als Ausschlag nach
+oben nicht immer zu erkennen. Die Prozentlinie beantwortet genau diese Frage unabhängig vom
+Niveau. Der Tooltip nennt beide Werte. Wochen ohne Vergleichsgrundlage (die erste, und Wochen
+nach einer Pause) bekommen `null` statt 0 – die Linie bricht dort, statt „keine Veränderung" zu
+behaupten.
+
 **Der Rundenmodus ist keine neue Datenstruktur.**
 Im Zirkel *ist* „Satz N" gleichbedeutend mit „Runde N": Satz 1 aller Übungen ist Runde 1. Die
 Rundenzahl ist deshalb einfach die Satzzahl aller Übungen. Im Plan wird die Runde einmal

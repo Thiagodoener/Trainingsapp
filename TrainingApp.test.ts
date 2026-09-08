@@ -37,6 +37,8 @@ import {
   getExerciseMeta,
   exerciseGroupShares,
   set1RM,
+  getRecentPRs,
+  getExerciseBestStats,
 } from "./TrainingApp";
 
 // Diese Tests sichern die Rechenfunktionen ab - also das, was die App
@@ -1070,5 +1072,58 @@ describe("Widerstandsbaender", () => {
     expect(set1RM(bandSatz("Schwarz", 18, 8))).toBe(0);
     // Ohne Band wird wie bisher geschaetzt.
     expect(set1RM({ weight: 100, reps: 8 })).toBeGreaterThan(0);
+  });
+});
+
+
+describe("Rekorde der letzten Tage", () => {
+  const exBy: any = { bankdruecken: { id: "bankdruecken", name: "Bankdrücken", group: "brust" } };
+  const log = (tage: number, sets: any[]) =>
+    training({
+      id: "l" + tage,
+      date: new Date(Date.now() - tage * TAG).toISOString(),
+      entries: [{ id: "e", exerciseId: "bankdruecken", sets }],
+    });
+
+  it("nennt Uebung, Rekordart, Wert und den vorherigen Bestwert", () => {
+    const logs = [log(20, [satz({ weight: 100, reps: 8 })]), log(2, [satz({ weight: 110, reps: 8 })])];
+    const prs = getRecentPRs(logs, exBy, {}, {}, 7);
+    const gewicht = prs.find((p: any) => p.title === "Höchstes Gewicht");
+    expect(gewicht?.exerciseName).toBe("Bankdrücken");
+    expect(gewicht?.value).toBe("110 kg");
+    expect(gewicht?.previous).toBe("100 kg");
+  });
+
+  it("zaehlt beim Hocharbeiten nur den besten Satz", () => {
+    // 60/70/80 schlagen alle den alten Bestwert von 50 - gemeldet wird der
+    // Satz, auf den es ankam, nicht drei Mal dasselbe.
+    const logs = [
+      log(20, [satz({ weight: 50, reps: 8 })]),
+      log(2, [satz({ weight: 60, reps: 8 }), satz({ weight: 70, reps: 8 }), satz({ weight: 80, reps: 8 })]),
+    ];
+    const prs = getRecentPRs(logs, exBy, {}, {}, 7);
+    const gewichte = prs.filter((p: any) => p.title === "Höchstes Gewicht");
+    expect(gewichte).toHaveLength(1);
+    expect(gewichte[0].value).toBe("80 kg");
+  });
+
+  it("schaut nur im gewaehlten Zeitfenster", () => {
+    const logs = [log(30, [satz({ weight: 100, reps: 8 })]), log(20, [satz({ weight: 110, reps: 8 })])];
+    expect(getRecentPRs(logs, exBy, {}, {}, 7)).toEqual([]);
+  });
+});
+
+describe("Bestwerte einer Uebung kennen ihre Herkunft", () => {
+  it("nennt Satz und Datum zu beiden Bestwerten", () => {
+    const logs = [
+      training({ id: "a", date: new Date(Date.now() - 10 * TAG).toISOString(),
+        entries: [{ id: "e", exerciseId: "bankdruecken", sets: [satz({ weight: 100, reps: 8 })] }] }),
+      training({ id: "b", date: new Date(Date.now() - 2 * TAG).toISOString(),
+        entries: [{ id: "e", exerciseId: "bankdruecken", sets: [satz({ weight: 120, reps: 5 })] }] }),
+    ];
+    const b = getExerciseBestStats(logs, "bankdruecken");
+    expect(b.best1RMSource).toMatchObject({ weight: 120, reps: 5 });
+    // Das beste Satzvolumen ist hier der andere Satz: 100x8 = 800 > 120x5 = 600.
+    expect(b.bestSetVolumeSource).toMatchObject({ weight: 100, reps: 8 });
   });
 });

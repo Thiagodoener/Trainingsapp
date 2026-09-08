@@ -1475,20 +1475,30 @@ export function estimate1RM(weight, reps) {
 // Best estimated 1RM and best single-set volume (weight x reps in one set,
 // not summed across a session) ever recorded for a given exercise. Used to
 // show quick "personal best" context whenever someone taps an exercise.
-function getExerciseBestStats(logs, exerciseId) {
+// Die beiden Bestwerte einer Übung - und woher sie stammen.
+//
+// Die Herkunft wurde früher weggeworfen: In den Kacheln stand "213 kg", und
+// aus welchem Satz an welchem Tag das kam, war nirgends abrufbar. Auf der
+// Fortschritt-Seite gibt es das längst; hier fehlte es.
+export function getExerciseBestStats(logs, exerciseId) {
   let best1RM = 0;
+  let best1RMSource = null;
   let bestSetVolume = 0;
+  let bestSetVolumeSource = null;
   (Array.isArray(logs) ? logs : []).forEach((log) => {
     logSetsFor(log, exerciseId).forEach((set) => {
       if (!set.done || set.warmup) return;
       const weight = Number(set.weight) || 0;
       const reps = Number(set.reps) || 0;
       if (weight <= 0 || reps <= 0) return;
-      best1RM = Math.max(best1RM, set1RM(set));
-      bestSetVolume = Math.max(bestSetVolume, weight * reps);
+      const herkunft = { date: log.date, weight, reps, bandName: set.bandName || null };
+      const oneRM = set1RM(set);
+      if (oneRM > best1RM) { best1RM = oneRM; best1RMSource = herkunft; }
+      const vol = weight * reps;
+      if (vol > bestSetVolume) { bestSetVolume = vol; bestSetVolumeSource = herkunft; }
     });
   });
-  return { best1RM, bestSetVolume };
+  return { best1RM, best1RMSource, bestSetVolume, bestSetVolumeSource };
 }
 
 // Das beste geschaetzte 1RM ueber alle Trainings - und der Satz, aus dem es
@@ -3912,6 +3922,13 @@ function TrainingAppInner() {
           color: var(--text-dim);
           padding-left: 0;
         }
+        /* Nebenmuskelgruppe: dieselbe Form wie die Hauptgruppe, nur blasser -
+           sie zaehlt ja auch nur halb. */
+        .tag-secondary {
+          background: transparent;
+          border: 1px dashed var(--border-strong);
+          color: var(--text-dim);
+        }
         .tag-clickable {
           cursor: pointer;
           text-decoration: underline dotted;
@@ -5884,6 +5901,24 @@ function TrainingAppInner() {
           color: #fff;
         }
         .deload-toggle span { flex: 1; }
+        .pr-list-row {
+          padding-bottom: 10px;
+          margin-bottom: 10px;
+          border-bottom: 1px solid var(--border);
+        }
+        .pr-list-row:last-child { padding-bottom: 0; margin-bottom: 0; border-bottom: none; }
+        .pr-list-head {
+          display: flex;
+          justify-content: space-between;
+          align-items: center;
+          gap: 8px;
+        }
+        .pr-list-detail {
+          font-size: 12.5px;
+          line-height: 1.5;
+          color: var(--text-dim);
+          margin-top: 3px;
+        }
         .deload-status {
           font-size: 13px;
           line-height: 1.5;
@@ -7259,6 +7294,62 @@ function ActiveSessionBar({ session, restEndsAt, onOpen }) {
 // Zählt die Rekorde eines einzelnen Trainings nach - dieselbe Regel wie die
 // Abschluss-Zusammenfassung: verglichen wird gegen die Historie OHNE dieses
 // Training, sonst schlüge jeder Satz seinen eigenen Wert.
+// Die Rekorde der letzten Tage, einzeln aufgeschlüsselt: welche Übung, welche
+// Art Rekord, welcher Wert, wann.
+//
+// Gezählt wird pro Übung nur der BESTE Satz des Trainings - genau wie beim
+// Pokal in der Trainingsansicht. Wer sich 60/70/80 hocharbeitet, schlägt mit
+// allen drei Sätzen den alten Bestwert; drei Einträge dafür sagen weniger als
+// einer für den Satz, auf den es ankam.
+export function getRecentPRs(
+  logs, exBy, timeBasedExercises, gymIndependentExercises, days = 7, nowTs = Date.now()
+) {
+  const von = nowTs - days * 86400000;
+  const treffer = [];
+  (Array.isArray(logs) ? logs : []).forEach((log) => {
+    const ts = new Date(log?.date).getTime();
+    if (!Number.isFinite(ts) || ts < von) return;
+    logEntries(log).forEach((entry) => {
+      const ex = exBy[entry.exerciseId];
+      if (!ex) return;
+      const isTime =
+        isTimeBasedInLogs(logs, entry.exerciseId, timeBasedExercises) || !!entry.targetUseTime;
+      const history = getExerciseHistory(
+        logs, entry.exerciseId, log.id, isTime,
+        effectiveGymId(entry.exerciseId, log.gymId, gymIndependentExercises)
+      );
+      const performed = performedWorkingSets(entrySets(entry));
+      const hasWeight = performed.some((x) => toNum(x.weight) > 0);
+      // Derselbe Maßstab wie in der Trainingsansicht: der schwerste Satz,
+      // bei Gleichstand der mit den meisten Wiederholungen.
+      let bester = null;
+      let bestesErgebnis = [];
+      let bestePunkte = -1;
+      performed.forEach((set) => {
+        const prs = describeSetPRs(set, history, isTime, hasWeight, entry.rir);
+        if (prs.length === 0) return;
+        const punkte = isTime
+          ? toNum(set.duration)
+          : toNum(set.weight) * 1000 + toNum(set.reps);
+        if (punkte > bestePunkte) { bestePunkte = punkte; bester = set; bestesErgebnis = prs; }
+      });
+      if (!bester) return;
+      bestesErgebnis.forEach((pr) => {
+        treffer.push({
+          exerciseId: entry.exerciseId,
+          exerciseName: ex.name,
+          date: log.date,
+          title: pr.title,
+          value: pr.value,
+          previous: pr.previous,
+          set: bester,
+        });
+      });
+    });
+  });
+  return treffer.sort((a, b) => new Date(b.date) - new Date(a.date));
+}
+
 function countLogPRs(log, logs, exBy, timeBasedExercises, gymIndependentExercises) {
   let prs = 0;
   logEntries(log).forEach((entry) => {
@@ -9439,6 +9530,8 @@ function ExerciseDetailSheet({
 }) {
   // Drei Reiter statt einer langen Liste: Zahlen zuerst, Einstellungen zuletzt.
   const [detailTab, setDetailTab] = useState(initialTab);
+  // Welche Bestwert-Kachel gerade aufgeschlagen ist ({ title, wert, quelle }).
+  const [bestInfo, setBestInfo] = useState(null);
   const [editingName, setEditingName] = useState(false);
   const [nameDraft, setNameDraft] = useState(exercise.name);
   const [renameError, setRenameError] = useState("");
@@ -9569,6 +9662,15 @@ function ExerciseDetailSheet({
             {!editingName && (
               <span style={{ marginTop: 6, display: "inline-flex", gap: 6, flexWrap: "wrap" }}>
                 <MuscleTag exercise={exercise} subgroupOverrides={exerciseSubgroupOverrides} />
+                {/* Die Nebengruppen. Sie waren bis Sept. 2026 nur in der
+                    Rechnung sichtbar (halber Satz je Nebengruppe), nirgends
+                    in der Bedienung - man konnte also nicht nachsehen, warum
+                    eine Übung bei den Armen mitzählt. */}
+                {(exercise.secondary || []).map((g) => (
+                  <span className="tag tag-secondary" key={g} title="Nebenmuskelgruppe – zählt mit einem halben Satz">
+                    {MUSCLE_GROUPS.find((m) => m.id === g)?.label || g}
+                  </span>
+                ))}
                 <span
                   className="tag tag-equipment tag-clickable"
                   onClick={() => setEditingEquipment(true)}
@@ -9611,13 +9713,49 @@ function ExerciseDetailSheet({
           {bestStats && (bestStats.best1RM > 0 || bestStats.bestSetVolume > 0) && (
             <div className="card stats-summary">
               <div className="stats-grid">
-                <div className="stat-item">
+                <div
+                  className={`stat-item ${bestStats.best1RMSource ? "stat-item-clickable" : ""}`}
+                  onClick={() =>
+                    bestStats.best1RMSource &&
+                    setBestInfo({
+                      title: "Geschätztes 1RM",
+                      wert: `${Math.round(bestStats.best1RM)} kg`,
+                      quelle: bestStats.best1RMSource,
+                      erklaerung:
+                        "Aus Gewicht und Wiederholungen dieses einen Satzes wird geschätzt, was einmal maximal gegangen wäre. Je mehr Wiederholungen, desto ungenauer - über 12 Wiederholungen wird gar nicht mehr geschätzt.",
+                    })
+                  }
+                  title={bestStats.best1RMSource ? "Antippen: aus welchem Satz stammt dieser Wert?" : undefined}
+                >
                   <span className="stat-value">{Math.round(bestStats.best1RM)} kg</span>
-                  <span className="stat-label">Geschätztes 1RM</span>
+                  <span className="stat-label">
+                    Geschätztes 1RM
+                    {bestStats.best1RMSource && (
+                      <ChevronRight size={12} style={{ verticalAlign: -2, marginLeft: 3 }} />
+                    )}
+                  </span>
                 </div>
-                <div className="stat-item">
+                <div
+                  className={`stat-item ${bestStats.bestSetVolumeSource ? "stat-item-clickable" : ""}`}
+                  onClick={() =>
+                    bestStats.bestSetVolumeSource &&
+                    setBestInfo({
+                      title: "Bestes Satz-Volumen",
+                      wert: `${Math.round(bestStats.bestSetVolume)} kg`,
+                      quelle: bestStats.bestSetVolumeSource,
+                      erklaerung:
+                        "Gewicht mal Wiederholungen eines einzelnen Satzes - die meiste Arbeit, die du in dieser Übung je in einem Satz geleistet hast.",
+                    })
+                  }
+                  title={bestStats.bestSetVolumeSource ? "Antippen: aus welchem Satz stammt dieser Wert?" : undefined}
+                >
                   <span className="stat-value">{Math.round(bestStats.bestSetVolume)} kg</span>
-                  <span className="stat-label">Bestes Satz-Volumen</span>
+                  <span className="stat-label">
+                    Bestes Satz-Volumen
+                    {bestStats.bestSetVolumeSource && (
+                      <ChevronRight size={12} style={{ verticalAlign: -2, marginLeft: 3 }} />
+                    )}
+                  </span>
                 </div>
               </div>
             </div>
@@ -9678,6 +9816,30 @@ function ExerciseDetailSheet({
 
           {detailTab === "info" && (
             <>
+          {/* Was die Nebengruppen im Kopf bedeuten - der Kopf zeigt nur, DASS
+              sie mitzaehlen, hier steht, wie stark. */}
+          <p style={{ fontSize: 12.5, color: "var(--text-dim)", lineHeight: 1.5, margin: "0 0 12px" }}>
+            {(exercise.secondary || []).length > 0 ? (
+              <>
+                Zählt voll auf{" "}
+                <strong>{MUSCLE_GROUPS.find((m) => m.id === exercise.group)?.label || exercise.group}</strong>
+                {" "}und je zur Hälfte auf{" "}
+                <strong>
+                  {(exercise.secondary || [])
+                    .map((g) => MUSCLE_GROUPS.find((m) => m.id === g)?.label || g)
+                    .join(" und ")}
+                </strong>
+                . Diese Übung trainiert die Nebengruppen deutlich mit; ein halber Satz
+                ist die übliche grobe Verrechnung dafür, keine Messung.
+              </>
+            ) : (
+              <>
+                Zählt allein auf{" "}
+                <strong>{MUSCLE_GROUPS.find((m) => m.id === exercise.group)?.label || exercise.group}</strong>
+                {" "}– für diese Übung sind keine Nebenmuskelgruppen hinterlegt.
+              </>
+            )}
+          </p>
           {meta.video && (
             <a
               className="btn btn-ghost btn-sm"
@@ -9737,6 +9899,33 @@ function ExerciseDetailSheet({
           )}
         </div>
       </div>
+
+      {/* Woher ein Bestwert stammt - derselbe Aufbau wie das Fenster hinter
+          der 1RM-Kachel im Fortschritt: Wert, der Satz dahinter, das Datum
+          und in einem Satz, wie gerechnet wird. */}
+      {bestInfo && (
+        <Modal title={bestInfo.title} onClose={() => setBestInfo(null)} width={380}>
+          <div className="plan-title" style={{ marginBottom: 10 }}>{bestInfo.wert}</div>
+          <div className="modal-list">
+            <div className="modal-option">
+              <span>Erreicht mit</span>
+              <span>
+                {bestInfo.quelle.bandName
+                  ? `${bestInfo.quelle.bandName} × ${bestInfo.quelle.reps}`
+                  : `${fmtDecimal(bestInfo.quelle.weight)} kg × ${bestInfo.quelle.reps}`}
+              </span>
+            </div>
+            <div className="modal-option">
+              <span>Wann</span>
+              <span>{fmtDate(bestInfo.quelle.date)}</span>
+            </div>
+          </div>
+          <div className="explain-formula" style={{ marginTop: 12 }}>
+            <span className="explain-formula-label">So wird gerechnet</span>
+            <div>{bestInfo.erklaerung}</div>
+          </div>
+        </Modal>
+      )}
 
       {editingEquipment && (
         <Modal title="Gerät wählen" onClose={() => setEditingEquipment(false)}>
@@ -15021,18 +15210,12 @@ function ProgressView({
   // mit derselben Funktion wie die Abzeichen im Training (countLogPRs) - die
   // trennt nach Gym, wie der Rest der App auch, und die Zahl passt damit zu
   // dem, was man beim Trainieren gesehen hat.
-  const recentPRs = useMemo(() => {
-    const von = Date.now() - LOAD_WEEK_MS;
-    return logs
-      .filter((l) => {
-        const ts = new Date(l?.date).getTime();
-        return Number.isFinite(ts) && ts >= von;
-      })
-      .reduce(
-        (sum, l) => sum + countLogPRs(l, logs, exBy, timeBasedExercises, gymIndependentExercises),
-        0
-      );
-  }, [logs, exBy, timeBasedExercises, gymIndependentExercises]);
+  const recentPRs = useMemo(
+    () => getRecentPRs(logs, exBy, timeBasedExercises, gymIndependentExercises, 7),
+    [logs, exBy, timeBasedExercises, gymIndependentExercises]
+  );
+  // Ist die Liste hinter der Rekord-Kachel aufgeschlagen?
+  const [recentPRsOpen, setRecentPRsOpen] = useState(false);
   const deloadInfo = useMemo(
     () => deloadStatus(deloadWeeks, deloadInterval),
     [deloadWeeks, deloadInterval]
@@ -15158,9 +15341,15 @@ function ProgressView({
     return zoomed.map((v, i) => {
       const weeksAgo = weekCount - 1 - i;
       const ts = Date.now() - weeksAgo * LOAD_WEEK_MS;
+      // Veränderung zur Vorwoche - die zweite Linie auf der rechten Achse.
+      // null (nicht 0) für die erste Woche und für Wochen nach einer Pause:
+      // "keine Vergleichsgrundlage" ist etwas anderes als "keine Veränderung".
+      const vorher = i > 0 ? zoomed[i - 1] : null;
+      const change = vorher > 0 && v > 0 ? (v / vorher - 1) * 100 : null;
       return {
         date: fmtDate(new Date(ts).toISOString()),
         load: v,
+        change,
         deload: !!loadDeloadFlags[offset + i],
       };
     });
@@ -15283,9 +15472,18 @@ function ProgressView({
               {stats.best1RMSource && <ChevronRight size={12} style={{ verticalAlign: -2, marginLeft: 3 }} />}
             </span>
           </div>
-          <div className="stat-item">
-            <span className="stat-value">{recentPRs}</span>
-            <span className="stat-label">Rekorde (7 Tage)</span>
+          <div
+            className={`stat-item ${recentPRs.length > 0 ? "stat-item-clickable" : ""}`}
+            onClick={() => recentPRs.length > 0 && setRecentPRsOpen(true)}
+            title={recentPRs.length > 0 ? "Antippen: welche Rekorde waren das?" : undefined}
+          >
+            <span className="stat-value">{recentPRs.length}</span>
+            <span className="stat-label">
+              Rekorde (7 Tage)
+              {recentPRs.length > 0 && (
+                <ChevronRight size={12} style={{ verticalAlign: -2, marginLeft: 3 }} />
+              )}
+            </span>
           </div>
       </div>
 
@@ -15726,6 +15924,30 @@ function ProgressView({
         />
       )}
 
+      {/* Was hinter "Rekorde (7 Tage)" steckt: welche Übung, welche Art
+          Rekord, der Wert, der vorherige Bestwert und wann. */}
+      {recentPRsOpen && (
+        <Modal title="Rekorde der letzten 7 Tage" onClose={() => setRecentPRsOpen(false)} width={400}>
+          <div className="modal-list">
+            {recentPRs.map((r, i) => (
+              <div className="pr-list-row" key={`${r.exerciseId}-${r.title}-${i}`}>
+                <div className="pr-list-head">
+                  <span className="ex-name">{r.exerciseName}</span>
+                  <span className="tag">{fmtDate(r.date)}</span>
+                </div>
+                <div className="pr-list-detail">
+                  {r.title}: <strong>{r.value}</strong>
+                  {r.previous ? ` · vorher ${r.previous}` : " · erster Wert"}
+                </div>
+                <div className="pr-list-detail" style={{ color: "var(--text-faint)" }}>
+                  Aus dem Satz {shortSet(r.set)}
+                </div>
+              </div>
+            ))}
+          </div>
+        </Modal>
+      )}
+
       {best1RMInfo && (
         <Modal title="Bestes geschätztes 1RM" onClose={() => setBest1RMInfo(null)} width={380}>
           <div className="plan-title" style={{ marginBottom: 10 }}>{best1RMInfo.exerciseName}</div>
@@ -15856,7 +16078,7 @@ function ProgressView({
           </div>
           <div style={{ height: 220 }}>
             <ResponsiveContainer width="99%" height="100%" debounce={1}>
-              <LineChart data={loadChartGroupData} margin={{ top: 6, right: 4, left: 0, bottom: 0 }}>
+              <LineChart data={loadChartGroupData} margin={{ top: 6, right: 0, left: 0, bottom: 0 }}>
                 <CartesianGrid strokeDasharray="3 3" stroke={chartColors.grid} vertical={false} />
                 <XAxis
                   dataKey="date"
@@ -15867,11 +16089,27 @@ function ProgressView({
                   interval={Math.max(0, Math.ceil(loadChartGroupData.length / 6) - 1)}
                 />
                 <YAxis
+                  yAxisId="links"
                   stroke={chartColors.axis}
                   fontSize={11}
                   axisLine={false}
                   tickLine={false}
                   width={28}
+                />
+                {/* Rechts dieselbe Kurve noch einmal als Veränderung zur
+                    Vorwoche. Links steht "wie viel Arbeit war das", rechts
+                    "wie viel mehr oder weniger als letzte Woche" - eine gute
+                    Woche ist damit auch dann als Ausschlag zu erkennen, wenn
+                    die Kurve insgesamt gerade tief liegt. */}
+                <YAxis
+                  yAxisId="rechts"
+                  orientation="right"
+                  stroke={chartColors.axis}
+                  fontSize={11}
+                  axisLine={false}
+                  tickLine={false}
+                  width={40}
+                  tickFormatter={(v) => `${Math.round(v)}%`}
                 />
                 <Tooltip
                   contentStyle={{
@@ -15880,14 +16118,33 @@ function ProgressView({
                     borderRadius: 10,
                     fontSize: 12,
                   }}
-                  formatter={(v, _name, item) => [
-                    `${(Math.round(v * 100) / 100).toLocaleString("de-DE")}${
-                      item?.payload?.deload ? " · Entlastungswoche" : ""
-                    }`,
-                    "Relative Belastung",
-                  ]}
+                  formatter={(v, name, item) => {
+                    if (name === "Veränderung") {
+                      return [v == null ? "–" : `${v > 0 ? "+" : ""}${Math.round(v)} %`, "ggü. Vorwoche"];
+                    }
+                    return [
+                      `${(Math.round(v * 100) / 100).toLocaleString("de-DE")}${
+                        item?.payload?.deload ? " · Entlastungswoche" : ""
+                      }`,
+                      "Relative Belastung",
+                    ];
+                  }}
+                />
+                <ReferenceLine yAxisId="rechts" y={0} stroke={chartColors.axis} strokeDasharray="3 3" />
+                <Line
+                  yAxisId="rechts"
+                  type="monotone"
+                  dataKey="change"
+                  name="Veränderung"
+                  stroke={chartColors.series.teal}
+                  strokeWidth={1.5}
+                  strokeDasharray="4 3"
+                  dot={false}
+                  activeDot={{ r: 4 }}
+                  connectNulls={false}
                 />
                 <Line
+                  yAxisId="links"
                   type="monotone"
                   dataKey="load"
                   stroke={chartColors.series.accent}
@@ -15916,6 +16173,10 @@ function ProgressView({
               </LineChart>
             </ResponsiveContainer>
           </div>
+          <p className="deload-basis" style={{ marginTop: 6 }}>
+            Durchgezogen: relative Belastung (Skala links). Gestrichelt:
+            Veränderung zur Vorwoche in Prozent (Skala rechts).
+          </p>
           {loadChartGroupData.some((d) => d.deload) && (
             <p className="deload-basis" style={{ marginTop: 6 }}>
               Hohle Punkte sind Entlastungswochen – absichtlich leichter, deshalb

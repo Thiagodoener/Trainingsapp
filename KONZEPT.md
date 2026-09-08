@@ -121,10 +121,13 @@ Jedes Signal für sich kann das nicht.
   die App nicht – ein Urteil zu fällen, das die Absicht nicht kennt, verstößt gegen Regel 3.
   Gezeigt wird „Kraft seit 8 Wochen flach, Volumen +18 %", gedeutet wird selbst.
 
-**Ein kurzer Tag darf das Bild nicht kippen.** Heute tut er das: die Plateau-Erkennung
-vergleicht die aktuelle Woche gegen das Maximum der drei Wochen davor, eine Woche mit wenig
-Zeit löst deshalb eine Plateau-Meldung aus. Gegenmittel sind der Erst-Satz-Anker oben, der
-Mehrwochen-Trend, und: ausgefallene Einheiten sind **Lücken, keine Nullen**.
+**Ein kurzer Tag darf das Bild nicht kippen.** ✅ Für die Belastungsreihe erledigt (Sept. 2026),
+für das Kraft-Signal steht der Erst-Satz-Anker weiter aus. Die Plateau-Erkennung verglich früher
+die aktuelle Woche gegen das Maximum der drei Wochen davor, mit 5 % Toleranz – das verlangte in
+*jeder* Woche mehr als 5 % Zuwachs und ließ eine einzelne Woche mit wenig Zeit sofort als
+Stillstand erscheinen. Jetzt stehen zwei Wochen gegen zwei Wochen (siehe „Getroffene
+Entscheidungen"). Und: ausgefallene Einheiten sind **Lücken, keine Nullen** – auch im
+Vergleichs-Schnitt der Überlastungs-Erkennung.
 
 ### Stufe 3 – Kalibrierungs-Schleife ✅ bis auf die Warnungs-Antworten gebaut
 
@@ -179,10 +182,11 @@ Spalte „Stand": ✅ gebaut, ⬜ noch nicht.
 | | Frühwarnung Überlastung | „Seit 3 Wochen … schlechter als sonst – bei X % höherer Belastung" | ~3 Wochen + 12 Wochen Vergleichszeitraum | ✅ |
 | | Kontext für schwache Wochen | Unterbelastungs-Warnung unterscheidet „wenig Zeit" von „ausgelaugt" | sofort | ⬜ hängt an der Unterbelastung |
 | **Eichsatz-Schätzung** | Kalibrierungskurve | „Du unterschätzt dich im Schnitt um 2 Wiederholungen." | 3 Eichsätze | ✅ |
-| **Entlastungswoche (Markierung)** | Warnsignale | keine Meldung in der Woche selbst, kein verzerrter Vergleich danach | sofort | ✅ |
-| | Diagramm | hohler Punkt in der Belastungs-Kurve, getönte Wochenzeile im Kalender | sofort | ✅ |
+| **Entlastung (Zeitraum)** | Warnsignale | keine Meldung im Zeitraum selbst, kein verzerrter Vergleich danach | sofort | ✅ |
+| | Diagramm | hohler Punkt in der Belastungs-Kurve, getönte Tage im Kalender mit Beschriftung | sofort | ✅ |
 | | Kachel „kg Volumen" | „+184 % ggü. **Entlastungswoche**" statt „ggü. Vorwoche" | sofort | ✅ |
-| | Zählerstand | „Letzte Entlastungswoche: vor 7 von 8 Wochen." | sofort | ✅ |
+| | Zählerstand | „Letzte Entlastung: vor 7 von 8 Wochen." | sofort | ✅ |
+| **Rhythmus (eigene Angabe)** | Fälligkeit | Hinweis auf der Startseite und Vorschlag im Kalender, sobald er erreicht ist | ab der 2. Entlastung | ✅ |
 | | Wirkung | „Leistung je Satz +3,4 % · Gefühl 3,7 statt 3,2" | 2 Wochen nach der Entlastung | ✅ |
 | **Schätzung nach der Entlastung** | Abgleich Wahrnehmung ↔ Zahlen | „Du hattest ‚besser' geschätzt – gemessen: gleich." | sofort nach der Abgabe | ✅ |
 | **Antwort auf eine Warnung** | persönliche Schwellen | Warnung kommt später oder gar nicht mehr | nach ~3 Antworten | ⬜ |
@@ -224,7 +228,26 @@ Trainings. Für jede Auswertung und jede Anzeige zählt aber ausschließlich, wa
 (`performedSets` / `performedWorkingSets`). Sonst wäre ein vorbelegter, nie ausgeführter Satz
 geleistete Arbeit – und die Statistik würde Trainings behaupten, die nie stattgefunden haben.
 
-**Entlastungswochen sind Lücken, keine Tiefs – aber nur in den Warnungen.**
+**Plateau heißt „vier Wochen ohne Zuwachs", nicht „diese Woche kein neuer Höchstwert".**
+Verglichen wird der Schnitt der letzten zwei Wochen gegen den Schnitt der zwei davor; liegt der
+neue Schnitt nicht mindestens 2 % darüber, ist es ein Plateau. Vorher stand dort: aktuelle Woche
+gegen das Maximum der drei Wochen davor, 5 % Toleranz. Das hieß in der Praxis „mehr als 5 %
+Zuwachs in **jeder** Woche, sonst Stillstand" – bei realistischen 2–3 % pro Woche war das Zeichen
+damit fast dauerhaft an, und ein einzelner kurzer Tag löste es aus. Von den vier Wochen darf
+höchstens eine fehlen (Urlaub, Krankheit, Entlastung); aus einer Woche gegen eine Woche wird kein
+Urteil gefällt. Der Zeitraum ist bewusst kurz gehalten (Wunsch: eher früh melden) – die Mittelung
+über je zwei Wochen federt den einzelnen schwachen Tag trotzdem ab.
+
+**Leere Wochen zählen auch im Überlastungs-Schnitt als Lücke.**
+Bis Sept. 2026 wurde der Vier-Wochen-Schnitt durch alle vier Wochen geteilt, auch durch die
+leeren. Eine Woche Urlaub drückte ihn damit um ein Viertel, und die erste ganz normale Woche
+danach löste einen Überlastungs-Alarm aus: aus `[100, 102, 0, 106]` wurde ein Schnitt von 77 statt
+103, die nächste Woche mit 108 lag damit 40 % darüber statt 5 %. Derselbe Falschalarm wie bei einer
+nicht markierten Entlastung – und ein Verstoß gegen die eigene Regel „Lücken, keine Nullen".
+Eine wirklich leichte Woche (nicht null) zählt dagegen weiterhin mit; wenn sie geplant war, wird
+sie markiert.
+
+**Entlastungen sind Lücken, keine Tiefs – aber nur in den Warnungen.**
 Eine bewusst leichtere Woche liest die App sonst als Einbruch. Gemessen an einem
 steigenden Verlauf mit einer Entlastungswoche bei −55 % Arbeit: in der Woche selbst
 „Plateau", in den vier Wochen danach „Überlastung", ab der fünften wieder Ruhe. Bei
@@ -244,10 +267,20 @@ Deshalb:
   Wiedereinstieg sieht wieder wie ein Sprung aus. Die zwei Wochen direkt vor der Entlastung
   sind der richtige Maßstab, auch wenn es weniger sind. Bleiben weniger als zwei saubere
   Wochen übrig, wird geschwiegen statt geraten.
-- **Markiert wird die Kalenderwoche, gerechnet wird in rollierenden 7-Tage-Fenstern.** Eine
-  markierte Woche fällt deshalb fast immer in zwei Fenster; beide werden übersprungen.
-- **Die App schlägt nie selbst eine Entlastungswoche vor** (Regel 3). Sie zählt mit; der
-  Rhythmus ist die Zahl, die der Mensch selbst eingetragen hat.
+- **Markiert wird ein beliebiger Zeitraum, nicht die Kalenderwoche.** Eine Entlastung läuft
+  nicht zwingend Montag bis Sonntag – Mittwoch bis übernächsten Donnerstag ist genauso ein
+  Zeitraum. Gespeichert wird `{ start, end }`; ältere Einträge ohne `end` werden still als
+  Sieben-Tage-Woche gelesen. Gerechnet wird weiterhin in rollierenden 7-Tage-Fenstern, ein
+  Zeitraum fällt deshalb fast immer in mehrere Fenster; alle davon werden übersprungen.
+- **Bedienung: zwei Tippser.** Ersten Tag antippen, „Entlastung ab hier", letzten Tag antippen.
+  Ein neuer Zeitraum ersetzt bestehende, die er überschneidet – sonst gäbe es zwei Einträge für
+  dieselben Tage, die sich in jeder Auswertung doppelt auswirken.
+- **Die App schlägt nie von sich aus eine Entlastung vor** (Regel 3). Sie sagt, wann der
+  Rhythmus erreicht ist, den der Mensch selbst eingetragen hat – auf der Startseite als
+  Feststellung („Seit 8 Wochen keine Entlastung – dein Rhythmus sind 6 Wochen") und im Kalender
+  als Vorschlag an genau dem Tag, an dem er fällig wurde, mit einem Knopf zum Ausblenden.
+  Ausgeblendet wird der *Zeitpunkt*, nicht der Hinweis an sich: Nach der nächsten Entlastung
+  verschiebt sich die Fälligkeit, und der Hinweis kommt beim nächsten Mal von selbst wieder.
 - **Die Wirkung wird je Übung gemessen**, nicht als Wochensumme: Sonst hinge das Ergebnis
   vor allem daran, wie viel Zeit gerade da war. Wer nach der Entlastung eine Einheit mehr
   schafft, sähe automatisch besser aus, ohne stärker geworden zu sein.

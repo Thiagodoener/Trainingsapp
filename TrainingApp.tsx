@@ -960,7 +960,7 @@ export function getFeelingPerformance(logs, timeBasedExercises, deloadWeeks = nu
   // unter der Erwartung, und als Nachbar-Einheit zöge sie die Erwartung der
   // normalen Trainings ringsherum nach unten - die sähen dadurch besser aus,
   // als sie waren.
-  const deloadMarked = deloadStarts(deloadWeeks).length > 0;
+  const deloadMarked = deloadRanges(deloadWeeks).length > 0;
   const safeLogs = (Array.isArray(logs) ? logs : [])
     .filter(Boolean)
     .filter((l) => !deloadMarked || !isDeloadDate(new Date(l?.date), deloadWeeks));
@@ -1074,7 +1074,7 @@ export function getFatigueWarning(logs, muscleLoadSeries, nowTs = Date.now(), de
   // im Vergleichszeitraum würde die Warnung zu leicht auslösen (weil der
   // Schnitt davor sinkt) bzw. im beobachteten Zeitraum eine echte Warnung
   // verschlucken (weil der aktuelle Schnitt sinkt).
-  const deloadMarked = deloadStarts(deloadWeeks).length > 0;
+  const deloadMarked = deloadRanges(deloadWeeks).length > 0;
   const safeLogs = (Array.isArray(logs) ? logs : [])
     .filter(Boolean)
     .filter((l) => !deloadMarked || !isDeloadDate(new Date(l?.date), deloadWeeks));
@@ -1591,23 +1591,24 @@ const STAT_EXPLANATIONS = {
       "Deshalb wird jeder Satz an deinem eigenen besten Satz in genau dieser Übung gemessen: \"Wie viel von meinem Bestwert war das?\" Ein Satz auf Bestniveau zählt 1,0. Ein Kurzhantel-Satz mit 22 kg ist damit genauso viel wert wie ein Langhantel-Satz mit 60 kg, wenn beide gleich nah am jeweiligen persönlichen Bestwert liegen.",
       "Ein neuer Rekord verfälscht die Vergangenheit dabei nicht - er wird auf alle Wochen gleich angewendet und kürzt sich beim Prozentvergleich wieder heraus.",
       "Zusätzlich zählt, wie hart du den letzten Satz einer Übung beendet hast: Derselbe Satz ist nicht dieselbe Belastung, wenn er einmal am Limit und einmal mit vier Wiederholungen in Reserve endete. Gewichtet wird nur dieser eine Satz, denn nur für ihn gibt es die Angabe - die früheren Sätze bleiben unangetastet. Verglichen wird mit deiner eigenen üblichen Reserve für genau diese Übung; ohne Angabe ändert sich nichts.",
-      "Die Warnzeichen rechts kommen aus derselben Reihe: ein Hinweis, wenn die aktuelle Woche mehr als 15 % über dem Schnitt der 4 Wochen davor liegt, ein deutlicher Alarm ab 30 %, und ein Plateau-Zeichen, wenn seit 3 Wochen kein neuer Höchstwert mehr dazugekommen ist. Das sind Fragen, keine Urteile - wie es sich anfühlt, weißt nur du.",
+      "Die Warnzeichen rechts kommen aus derselben Reihe: ein Hinweis, wenn die aktuelle Woche mehr als 15 % über dem Schnitt der 4 Wochen davor liegt, ein deutlicher Alarm ab 30 %, und ein Plateau-Zeichen, wenn die letzten zwei Wochen im Schnitt nicht über den zwei Wochen davor liegen. Das sind Fragen, keine Urteile - wie es sich anfühlt, weißt nur du.",
     ],
     formula: [
       "Wert eines Satzes = (kg × Wdh.) ÷ bester Satz dieser Übung. Bei Übungen ohne Gewicht zählen die Wiederholungen, bei Zeit-Übungen die Sekunden.",
       "Reserve-Gewichtung = nur auf den letzten abgehakten Arbeitssatz: je Stufe RIR unter deinem Üblichen 3 % mehr, je Stufe darüber 3 % weniger, höchstens 12 % in beide Richtungen. Ohne RIR-Angabe: keine Änderung.",
       "Wochenwert = Summe aller Satzwerte der Muskelgruppe in einem 7-Tage-Fenster. Dropsätze zählen hier voll mit.",
+      "Plateau = Schnitt der letzten 2 Wochen ≤ Schnitt der 2 Wochen davor plus 2 %. Wochen ohne Training und markierte Entlastungen zählen als Lücke; von den vier Wochen darf höchstens eine fehlen, sonst wird nichts gemeldet.",
       "Änderung = (diese Woche − Schnitt der gewählten Wochen davor) ÷ Schnitt × 100.",
     ],
   },
   deload: {
     title: "Entlastungswochen",
     paragraphs: [
-      "Eine Entlastungswoche ist eine absichtlich leichtere Woche. Damit die App sie nicht für einen Einbruch hält, markierst du sie im Kalender - einen Tag der Woche antippen genügt.",
-      "Was das ändert: In einer markierten Woche zeigt die App keine Warnzeichen, und in den Wochen danach lässt sie die leichte Woche aus dem Vergleich heraus. Sonst würde dein ganz normaler Wiedereinstieg wie ein Sprung nach oben aussehen - der Schnitt, gegen den verglichen wird, wäre ja nach unten gezogen.",
+      "Eine Entlastung ist ein absichtlich leichterer Zeitraum. Damit die App ihn nicht für einen Einbruch hält, trägst du ihn im Kalender ein: ersten Tag antippen, „Entlastung ab hier\" wählen, letzten Tag antippen. Der Zeitraum darf beliebig laufen - Mittwoch bis übernächsten Donnerstag genauso wie Montag bis Sonntag.",
+      "Was das ändert: Im markierten Zeitraum zeigt die App keine Warnzeichen, und in den Wochen danach lässt sie ihn aus dem Vergleich heraus. Sonst würde dein ganz normaler Wiedereinstieg wie ein Sprung nach oben aussehen - der Schnitt, gegen den verglichen wird, wäre ja nach unten gezogen.",
       "Sichtbar bleibt sie trotzdem: In den Diagrammen und in den Zeitraum-Vergleichen steht die Delle unverändert da. Sie soll nur nicht kommentiert werden.",
       "Der Zähler darunter sagt, wie lange die letzte her ist. Wann du entlastest, entscheidest du - die App schlägt von sich aus nie eine Entlastungswoche vor.",
-      "Nach jeder Entlastung vergleicht sie die zwei Wochen davor mit den zwei Wochen danach. Damit die eigene Wahrnehmung nicht von der Zahl überschrieben wird, fragt sie vorher nach deiner Schätzung.",
+      "Nach jeder Entlastung vergleicht sie die zwei Wochen davor mit den zwei Wochen danach - „danach\" beginnt am Tag nach dem Ende, bei einer langen Entlastung also später. Damit die eigene Wahrnehmung nicht von der Zahl überschrieben wird, fragt sie vorher nach deiner Schätzung.",
     ],
     formula: [
       "Verglichen wird die Arbeit je Satz, getrennt für jede Übung, und dann über die Übungen gemittelt, die in beiden Zeiträumen vorkommen. Nicht die Gesamtarbeit einer Woche - sonst würde vor allem gemessen, wie viel Zeit gerade da war.",
@@ -1935,8 +1936,21 @@ export function muscleLoadChange(values, compareWeeks, maxLookback = Infinity, d
 // Schwellen für die Plateau-/Überlastungs-Erkennung in detectLoadSignal.
 // Fest codiert statt einstellbar - ein sinnvoller erster Standard ist
 // wichtiger als Konfigurierbarkeit, kann bei Bedarf später ein Setting werden.
-const PLATEAU_WEEKS = 3;        // so viele Wochen ohne neuen Höchstwert = Plateau
-const PLATEAU_TOLERANCE = 1.05; // 5% Toleranz, damit normales Schwanken nicht triggert
+// Plateau = "seit vier Wochen bewegt sich nichts". Verglichen wird der Schnitt
+// der letzten beiden Wochen gegen den Schnitt der beiden davor.
+//
+// Vorher stand hier: aktuelle Woche gegen das Maximum der drei Wochen davor,
+// mit 5 % Toleranz. Das verlangte in JEDER einzelnen Woche mehr als 5 %
+// Zuwachs - bei realistischen 2-3 % pro Woche war das Zeichen deshalb fast
+// dauerhaft an, und eine einzelne Woche mit wenig Zeit löste es sofort aus.
+// KONZEPT.md hatte genau das schon als Fehler notiert ("Ein kurzer Tag darf
+// das Bild nicht kippen"). Zwei Wochen gegen zwei Wochen federt einen
+// schwachen Tag ab, ohne den Zeitraum unnötig lang zu machen.
+const PLATEAU_BLOCK_WEEKS = 2;  // so viele Wochen je Block
+const PLATEAU_GROWTH = 1.02;    // darunter gilt der Zuwachs als "nichts bewegt"
+// Von den vier Wochen darf höchstens eine fehlen (Urlaub, Krankheit,
+// Entlastung). Aus einer Woche gegen eine Woche wird kein Urteil gefällt.
+const PLATEAU_MIN_WEEKS = 3;
 const OVERLOAD_LOOKBACK = 4;    // Vergleichs-Schnitt aus den 4 Wochen davor
 // Zwei Stufen, angelehnt an die Acute:Chronic-Workload-Ratio aus der
 // Sportwissenschaft (Gabbett): Ratio ~1,3 gilt dort schon als Punkt, ab dem
@@ -1959,7 +1973,8 @@ const OVERLOAD_ALERT_THRESHOLD = 1.3;   // aktuelle Woche > 30% über dem Schnit
 //   anderen).
 // - "overload-watch": spürbarer, aber (noch) nicht dramatischer Anstieg -
 //   Vorstufe zu "overload", kein Grund zur Sorge, aber im Auge behalten.
-// - "plateau": seit PLATEAU_WEEKS Wochen keine neue Bestleistung mehr.
+// - "plateau": über vier Wochen hinweg kein Zuwachs - die letzten zwei Wochen
+//   liegen im Schnitt nicht über den zwei davor.
 // historyWeeks (siehe logsHistoryWeeks) verhindert ein Urteil, wenn es dafür
 // schlicht noch nicht genug Trainingshistorie gibt. Null heißt "kein
 // auffälliges Signal" - das schließt "diese Woche noch nichts trainiert" und
@@ -1974,23 +1989,48 @@ export function detectLoadSignal(values, historyWeeks = Infinity, deloadFlags = 
   if (Array.isArray(deloadFlags) && deloadFlags[values.length - 1]) return null;
 
   const overloadSlice = weeksBefore(values, values.length - 1, OVERLOAD_LOOKBACK, deloadFlags);
-  if (overloadSlice.length >= OVERLOAD_MIN_CLEAN && historyWeeks >= OVERLOAD_LOOKBACK) {
-    const withData = overloadSlice.filter((v) => v > 0).length;
-    const baseline = overloadSlice.reduce((sum, v) => sum + (v || 0), 0) / overloadSlice.length;
-    if (withData >= 2 && baseline > 0) {
+  // Wochen ohne Training zaehlen als Luecke, nicht als Null - dieselbe Regel,
+  // die KONZEPT.md fuer ausgefallene Einheiten aufstellt.
+  //
+  // Vorher wurde durch alle vier Wochen geteilt, auch durch die leeren. Eine
+  // Woche Urlaub druckte den Schnitt damit um ein Viertel nach unten, und die
+  // erste ganz normale Woche danach loeste einen Ueberlastungs-Alarm aus:
+  // aus [100, 102, 0, 106] wurde ein Schnitt von 77 statt 103, die naechste
+  // Woche mit 108 lag damit 40 % darueber statt 5 %. Genau derselbe
+  // Falschalarm wie bei einer nicht markierten Entlastung.
+  const overloadWeeks = overloadSlice.filter((v) => v > 0);
+  if (overloadWeeks.length >= OVERLOAD_MIN_CLEAN && historyWeeks >= OVERLOAD_LOOKBACK) {
+    const baseline = overloadWeeks.reduce((sum, v) => sum + v, 0) / overloadWeeks.length;
+    if (baseline > 0) {
       if (current > baseline * OVERLOAD_ALERT_THRESHOLD) return { type: "overload" };
       if (current > baseline * OVERLOAD_WATCH_THRESHOLD) return { type: "overload-watch" };
     }
   }
 
-  const plateauSlice = weeksBefore(values, values.length - 1, PLATEAU_WEEKS, deloadFlags);
+  // Zwei Blöcke à zwei Wochen: die letzten beiden (einschließlich der
+  // laufenden) gegen die beiden davor. Wochen ohne Training und markierte
+  // Entlastungen zählen als Lücke, nicht als Null - sonst würde eine
+  // ausgefallene Woche als Stillstand gelesen.
+  const usable = (fromIdx, toIdx) => {
+    const out = [];
+    for (let i = Math.max(0, fromIdx); i <= toIdx && i < values.length; i++) {
+      if (Array.isArray(deloadFlags) && deloadFlags[i]) continue;
+      const v = values[i] || 0;
+      if (v > 0) out.push(v);
+    }
+    return out;
+  };
+  const lastIdx = values.length - 1;
+  const recent = usable(lastIdx - PLATEAU_BLOCK_WEEKS + 1, lastIdx);
+  const prior = usable(lastIdx - 2 * PLATEAU_BLOCK_WEEKS + 1, lastIdx - PLATEAU_BLOCK_WEEKS);
   if (
-    plateauSlice.length === PLATEAU_WEEKS &&
-    historyWeeks >= PLATEAU_WEEKS &&
-    plateauSlice.every((v) => v > 0)
+    historyWeeks >= 2 * PLATEAU_BLOCK_WEEKS &&
+    recent.length > 0 &&
+    prior.length > 0 &&
+    recent.length + prior.length >= PLATEAU_MIN_WEEKS
   ) {
-    const priorBest = Math.max(...plateauSlice);
-    if (current <= priorBest * PLATEAU_TOLERANCE) {
+    const mean = (list) => list.reduce((sum, v) => sum + v, 0) / list.length;
+    if (mean(recent) <= mean(prior) * PLATEAU_GROWTH) {
       return { type: "plateau" };
     }
   }
@@ -2090,6 +2130,14 @@ export function weekStartKey(date) {
   return toDateKey(new Date(d.getFullYear(), d.getMonth(), d.getDate() - offset));
 }
 
+// Tage auf ein Datum addieren, ohne bei Sommerzeit-Umstellungen zu verrutschen:
+// über die Kalender-Felder statt über Millisekunden.
+export function addDays(date, days) {
+  const d = date instanceof Date ? date : dateFromKey(date);
+  if (!d) return null;
+  return new Date(d.getFullYear(), d.getMonth(), d.getDate() + days);
+}
+
 // Gegenstück zu toDateKey: "2026-09-07" zurück in ein lokales Datum. Bewusst
 // nicht new Date("2026-09-07") - das liest ISO-Daten als UTC und kippt je nach
 // Zeitzone auf den Vortag.
@@ -2100,45 +2148,72 @@ export function dateFromKey(key) {
   return new Date(y, m - 1, d);
 }
 
-// Die markierten Wochen als sortierte Liste von Montagen. Nimmt sowohl die
-// gespeicherten Objekte ({ start, guess }) als auch blanke Datums-Schlüssel
-// entgegen, damit Aufrufer nicht jedes Mal umbauen müssen.
-export function deloadStarts(deloadWeeks) {
+// Ein Eintrag ist ein Zeitraum: { id, start, end, guess }, beides
+// Datums-Schlüssel, `end` einschließlich. Eine Entlastung muss nicht Montag
+// bis Sonntag laufen - Mittwoch bis übernächsten Donnerstag ist genauso ein
+// Zeitraum. Ältere Einträge ohne `end` sind Kalenderwochen und werden hier
+// still auf sieben Tage ergänzt; blanke Datums-Schlüssel ebenso.
+export function deloadRanges(deloadWeeks) {
   const list = Array.isArray(deloadWeeks) ? deloadWeeks : [];
-  const keys = new Set();
-  list.forEach((w) => {
-    const key = typeof w === "string" ? w : w?.start;
-    if (typeof key === "string" && dateFromKey(key)) keys.add(key);
+  const out = [];
+  list.forEach((w, i) => {
+    const startKey = typeof w === "string" ? w : w?.start;
+    const startDate = dateFromKey(startKey);
+    if (!startDate) return;
+    const endDate = dateFromKey(typeof w === "string" ? null : w?.end) || addDays(startDate, 6);
+    // Verdrehte Eingaben (Ende vor Anfang) werden gedreht statt verworfen.
+    const [von, bis] = endDate.getTime() < startDate.getTime() ? [endDate, startDate] : [startDate, endDate];
+    out.push({
+      id: (typeof w === "string" ? null : w?.id) || "deload-" + i,
+      start: toDateKey(von),
+      end: toDateKey(bis),
+      guess: (typeof w === "string" ? null : w?.guess) || null,
+      startTs: von.getTime(),
+      // Das Ende ist einschließlich, gerechnet wird bis zum Ende dieses Tages.
+      endTs: bis.getTime() + 86400000,
+    });
   });
-  return [...keys].sort();
+  return out.sort((a, b) => a.startTs - b.startTs);
 }
 
-// Liegt dieser Tag in einer markierten Woche?
+// Liegt dieser Tag in einem markierten Zeitraum?
 export function isDeloadDate(date, deloadWeeks) {
-  const key = weekStartKey(date);
-  if (!key) return false;
-  return deloadStarts(deloadWeeks).includes(key);
+  const d = date instanceof Date ? date : dateFromKey(date) || new Date(date);
+  const ts = d?.getTime?.();
+  if (!Number.isFinite(ts)) return false;
+  return deloadRanges(deloadWeeks).some((r) => ts >= r.startTs && ts < r.endTs);
+}
+
+// Für die Kalender-Darstellung: gehört der Tag zu einem Zeitraum, und ist er
+// dessen erster oder letzter Tag? Der erste bekommt die Beschriftung.
+export function deloadDayInfo(date, deloadWeeks) {
+  const d = date instanceof Date ? date : dateFromKey(date);
+  if (!d) return null;
+  const key = toDateKey(d);
+  const range = deloadRanges(deloadWeeks).find((r) => {
+    const ts = d.getTime();
+    return ts >= r.startTs && ts < r.endTs;
+  });
+  if (!range) return null;
+  return { range, isStart: key === range.start, isEnd: key === range.end };
 }
 
 // Markierungen passend zu einer Wochenreihe aus getMuscleLoadSeries
 // (alt -> neu, Position 0 ist die älteste Woche).
 //
 // Wichtig: Diese Reihen rechnen in rollierenden 7-Tage-Fenstern ab heute,
-// nicht in Kalenderwochen Montag-Sonntag. Eine markierte Woche fällt deshalb
-// fast immer in zwei dieser Fenster. Markiert wird jedes Fenster, das sich
-// mit ihr überschneidet - lieber ein Fenster zu viel überspringen als einen
-// halb verfälschten Vergleich anstellen.
+// nicht in Kalenderwochen. Ein markierter Zeitraum fällt deshalb fast immer
+// in zwei dieser Fenster, bei längeren Zeiträumen in mehr. Markiert wird
+// jedes Fenster, das sich mit ihm überschneidet - lieber ein Fenster zu viel
+// überspringen als einen halb verfälschten Vergleich anstellen.
 export function deloadWeekFlags(deloadWeeks, weekCount, nowTs = Date.now()) {
   const flags = new Array(Math.max(0, weekCount)).fill(false);
-  const starts = deloadStarts(deloadWeeks);
-  if (starts.length === 0 || flags.length === 0) return flags;
-  starts.forEach((key) => {
-    const start = dateFromKey(key)?.getTime();
-    if (!Number.isFinite(start)) return;
-    const end = start + 7 * 86400000;
+  const ranges = deloadRanges(deloadWeeks);
+  if (ranges.length === 0 || flags.length === 0) return flags;
+  ranges.forEach((r) => {
     for (let i = 0; i < flags.length; i++) {
       const bucketEnd = nowTs - (flags.length - 1 - i) * LOAD_WEEK_MS;
-      if (start < bucketEnd && end > bucketEnd - LOAD_WEEK_MS) flags[i] = true;
+      if (r.startTs < bucketEnd && r.endTs > bucketEnd - LOAD_WEEK_MS) flags[i] = true;
     }
   });
   return flags;
@@ -2147,15 +2222,15 @@ export function deloadWeekFlags(deloadWeeks, weekCount, nowTs = Date.now()) {
 // Der Vergleichszeitraum: die `count` Wochen vor `endIdx`, ohne die
 // Entlastungswochen darin. Ohne Markierungen (deloadFlags = null) ist das
 // exakt derselbe zusammenhängende Ausschnitt wie früher - für alle, die keine
-// Entlastungswochen eintragen, ändert sich also nichts.
+// Entlastung eintragen, ändert sich also nichts.
 //
 // Wichtig ist, was hier NICHT passiert: Der Zeitraum wird nicht nach hinten
 // verlängert, um die fehlenden Wochen zu ersetzen. Ein erster Anlauf tat
-// genau das - und erzeugte damit im Test eine Überlastungs-Meldung, die es
-// ohne Markierung nicht gab: Wer stetig mehr trainiert, dessen Wochen von
-// vor zwei Monaten liegen tiefer, der Schnitt sinkt, und der normale
-// Wiedereinstieg sieht wieder wie ein Sprung aus. Die Wochen direkt vor der
-// Entlastung sind der richtige Vergleich, auch wenn es weniger sind.
+// genau das - und erzeugte damit eine Überlastungs-Meldung, die es ohne
+// Markierung nicht gab: Wer stetig mehr trainiert, dessen Wochen von vor zwei
+// Monaten liegen tiefer, der Schnitt sinkt, und der normale Wiedereinstieg
+// sieht wieder wie ein Sprung aus. Die Wochen direkt vor der Entlastung sind
+// der richtige Vergleich, auch wenn es weniger sind.
 function weeksBefore(values, endIdx, count, deloadFlags) {
   const marked = Array.isArray(deloadFlags);
   const out = [];
@@ -2166,35 +2241,39 @@ function weeksBefore(values, endIdx, count, deloadFlags) {
   return out.reverse();
 }
 
-// Wo die letzte Entlastungswoche liegt und wie lange sie her ist. Eine schon
-// eingetragene, aber noch bevorstehende Woche zählt dabei nicht als "letzte" -
-// sie steht getrennt als `nextStart` daneben.
+// Wo die letzte Entlastung liegt und wie lange sie her ist. Ein schon
+// eingetragener, aber noch bevorstehender Zeitraum zählt dabei nicht als
+// "letzter" - er steht getrennt als `next` daneben.
+//
+// Gezählt wird von Anfang zu Anfang, nicht von Ende zu Anfang: "alle 8 Wochen"
+// beschreibt den Abstand zwischen zwei Entlastungen, und der hängt sonst
+// davon ab, wie lang die letzte war.
 //
 // Bewusst nur Zahlen, kein Rat: `intervalWeeks` ist der Rhythmus, den der
 // Mensch selbst eingetragen hat. Die App leitet daraus keine Empfehlung ab,
-// sie zeigt den Zählerstand (Regel 3).
+// sie sagt, wann er erreicht ist (Regel 3).
 export function deloadStatus(deloadWeeks, intervalWeeks = null, nowTs = Date.now()) {
-  const starts = deloadStarts(deloadWeeks);
-  if (starts.length === 0) return null;
-  const currentKey = weekStartKey(new Date(nowTs));
-  const currentTs = dateFromKey(currentKey)?.getTime();
-  const past = starts.filter((k) => (dateFromKey(k)?.getTime() ?? Infinity) <= currentTs);
-  const future = starts.filter((k) => (dateFromKey(k)?.getTime() ?? -Infinity) > currentTs);
-  const lastStart = past.length ? past[past.length - 1] : null;
-  const nextStart = future.length ? future[0] : null;
-  const weeksBetween = (aKey, bKey) =>
-    Math.round(((dateFromKey(bKey)?.getTime() ?? 0) - (dateFromKey(aKey)?.getTime() ?? 0)) / LOAD_WEEK_MS);
+  const ranges = deloadRanges(deloadWeeks);
+  if (ranges.length === 0) return null;
+  const current = ranges.find((r) => nowTs >= r.startTs && nowTs < r.endTs) || null;
+  const past = ranges.filter((r) => r.startTs <= nowTs);
+  const future = ranges.filter((r) => r.startTs > nowTs);
+  const last = past.length ? past[past.length - 1] : null;
+  const next = future.length ? future[0] : null;
+  const interval =
+    Number.isFinite(Number(intervalWeeks)) && Number(intervalWeeks) > 0 ? Number(intervalWeeks) : null;
+  const weeksSince = last ? Math.floor((nowTs - last.startTs) / LOAD_WEEK_MS) : null;
   return {
-    count: starts.length,
-    lastStart,
-    // 0 heißt: die laufende Woche ist die Entlastungswoche.
-    weeksSince: lastStart ? weeksBetween(lastStart, currentKey) : null,
-    isCurrentWeek: lastStart === currentKey,
-    nextStart,
-    weeksUntilNext: nextStart ? weeksBetween(currentKey, nextStart) : null,
-    intervalWeeks: Number.isFinite(Number(intervalWeeks)) && Number(intervalWeeks) > 0
-      ? Number(intervalWeeks)
-      : null,
+    count: ranges.length,
+    last,
+    next,
+    current,
+    weeksSince,
+    daysUntilNext: next ? Math.ceil((next.startTs - nowTs) / 86400000) : null,
+    intervalWeeks: interval,
+    // Wann der eigene Rhythmus erreicht ist - und ob er es schon ist.
+    dueAt: last && interval ? last.startTs + interval * LOAD_WEEK_MS : null,
+    due: !!(last && interval && !current && !next && nowTs >= last.startTs + interval * LOAD_WEEK_MS),
   };
 }
 
@@ -2203,8 +2282,9 @@ const DELOAD_EFFECT_MIN_EXERCISES = 2; // darunter ist der Vergleich ein Einzelf
 const DELOAD_EFFECT_MIN_SESSIONS = 2;  // je Seite, sonst hängt alles an einem Tag
 const DELOAD_PATTERN_MIN = 3;          // ab so vielen Entlastungen ein Durchschnitt
 
-// Was eine einzelne Entlastungswoche gebracht hat: die zwei Wochen davor
-// gegen die zwei Wochen danach.
+// Was eine einzelne Entlastung gebracht hat: die zwei Wochen davor gegen die
+// zwei Wochen danach. "Danach" beginnt am Tag nach dem Ende des Zeitraums -
+// bei einer langen Entlastung also später als bei einer kurzen.
 //
 // Verglichen wird die Leistung JE ÜBUNG, nicht die Gesamtarbeit einer Woche.
 // Sonst würde vor allem gemessen, wie viel Zeit gerade da war: Wer nach der
@@ -2212,11 +2292,13 @@ const DELOAD_PATTERN_MIN = 3;          // ab so vielen Entlastungen ein Durchsch
 // Ergebnis, ohne stärker geworden zu sein. Gemittelt wird über die Übungen,
 // die auf beiden Seiten vorkommen - eine Übung, die nur einmal auftaucht,
 // hätte keinen Vergleichswert.
-export function getDeloadEffect(logs, deloadStart, timeBasedExercises, nowTs = Date.now()) {
-  const start = dateFromKey(deloadStart)?.getTime();
-  if (!Number.isFinite(start)) return null;
-  const beforeFrom = start - DELOAD_EFFECT_WEEKS * LOAD_WEEK_MS;
-  const afterFrom = start + LOAD_WEEK_MS;               // die Entlastungswoche selbst zählt nicht mit
+export function getDeloadEffect(logs, range, timeBasedExercises, nowTs = Date.now()) {
+  const r = range && typeof range === "object" && range.startTs
+    ? range
+    : deloadRanges([range])[0];
+  if (!r) return null;
+  const beforeFrom = r.startTs - DELOAD_EFFECT_WEEKS * LOAD_WEEK_MS;
+  const afterFrom = r.endTs;
   const afterTo = afterFrom + DELOAD_EFFECT_WEEKS * LOAD_WEEK_MS;
   // Solange die Wochen danach noch laufen, gibt es nichts zu vergleichen.
   if (nowTs < afterTo) return null;
@@ -2227,7 +2309,7 @@ export function getDeloadEffect(logs, deloadStart, timeBasedExercises, nowTs = D
       const ts = new Date(l?.date).getTime();
       return Number.isFinite(ts) && ts >= from && ts < to;
     });
-  const before = pick(beforeFrom, start);
+  const before = pick(beforeFrom, r.startTs);
   const after = pick(afterFrom, afterTo);
   if (before.length < DELOAD_EFFECT_MIN_SESSIONS || after.length < DELOAD_EFFECT_MIN_SESSIONS) return null;
 
@@ -2279,7 +2361,9 @@ export function getDeloadEffect(logs, deloadStart, timeBasedExercises, nowTs = D
   const feelAfter = feelingsOf(after);
 
   return {
-    start: deloadStart,
+    start: r.start,
+    end: r.end,
+    days: Math.round((r.endTs - r.startTs) / 86400000),
     exercises: ratios.length,
     sessionsBefore: before.length,
     sessionsAfter: after.length,
@@ -2291,13 +2375,13 @@ export function getDeloadEffect(logs, deloadStart, timeBasedExercises, nowTs = D
   };
 }
 
-// Alle auswertbaren Entlastungswochen, neueste zuerst, plus der Durchschnitt -
+// Alle auswertbaren Entlastungen, neueste zuerst, plus der Durchschnitt -
 // letzterer erst ab DELOAD_PATTERN_MIN Entlastungen. Bei einer Entlastung alle
 // 6-8 Wochen sind das rund sieben Datenpunkte im Jahr; eine Zahl aus einem
 // einzigen Vorgang wäre eine Behauptung, kein Muster.
 export function getDeloadEffects(logs, deloadWeeks, timeBasedExercises, nowTs = Date.now()) {
-  const results = deloadStarts(deloadWeeks)
-    .map((start) => getDeloadEffect(logs, start, timeBasedExercises, nowTs))
+  const results = deloadRanges(deloadWeeks)
+    .map((r) => getDeloadEffect(logs, r, timeBasedExercises, nowTs))
     .filter(Boolean)
     .reverse();
   const pattern =
@@ -2403,6 +2487,7 @@ const BACKUP_KEYS = [
   "collapsed-folders",
   "deload-weeks",
   "deload-interval",
+  "deload-suggestion-hidden",
 ];
 
 async function buildBackup() {
@@ -2642,6 +2727,20 @@ function TrainingAppInner() {
   // null heißt "kein fester Rhythmus", dann steht nur der Zählerstand da.
   const [deloadWeeks, setDeloadWeeks] = useState([]);
   const [deloadInterval, setDeloadInterval] = useState(null);
+  // Welcher Faelligkeits-Zeitpunkt weggetippt wurde. Gespeichert wird der
+  // Zeitpunkt, nicht ein blosses "aus": Sobald die naechste Entlastung
+  // eingetragen ist, verschiebt sich die Faelligkeit - und der Hinweis kommt
+  // beim naechsten Mal von selbst wieder.
+  const [deloadSuggestionHiddenAt, setDeloadSuggestionHiddenAt] = useState(null);
+  // Zählerstand zur Entlastung. Wird an drei Stellen gebraucht - Hinweis auf
+  // der Startseite, Vorschlag im Kalender, Karte im Fortschritt -, deshalb
+  // einmal hier oben gerechnet.
+  const deloadInfo = useMemo(
+    () => deloadStatus(deloadWeeks, deloadInterval),
+    [deloadWeeks, deloadInterval]
+  );
+  const deloadSuggestionHidden =
+    !!deloadInfo?.dueAt && deloadSuggestionHiddenAt === toDateKey(new Date(deloadInfo.dueAt));
   const [exerciseNotes, setExerciseNotes] = useState({});
   const [exerciseNameOverrides, setExerciseNameOverrides] = useState({});
   const [exerciseSubgroupOverrides, setExerciseSubgroupOverrides] = useState({});
@@ -2700,7 +2799,7 @@ function TrainingAppInner() {
 
   useEffect(() => {
     (async () => {
-      const [p, l, c, f, en, no, tb, gi, active, prog, activeProg, sg, ce, cc, eq, th, gy, activeGy, restEnd, brEx, brLogs, dw, di] = await Promise.all([
+      const [p, l, c, f, en, no, tb, gi, active, prog, activeProg, sg, ce, cc, eq, th, gy, activeGy, restEnd, brEx, brLogs, dw, di, dsh] = await Promise.all([
         loadJSON("training-plans", []),
         loadJSON("workout-logs", []),
         loadJSON("custom-exercises", []),
@@ -2724,6 +2823,7 @@ function TrainingAppInner() {
         loadJSON("breathing-logs", []),
         loadJSON("deload-weeks", []),
         loadJSON("deload-interval", null),
+        loadJSON("deload-suggestion-hidden", null),
       ]);
       // Migration: users who already had folders before "programs" existed
       // get one default program that all their existing folders are
@@ -2768,6 +2868,7 @@ function TrainingAppInner() {
       setCalendarCategories(cc);
       setDeloadWeeks(Array.isArray(dw) ? dw : []);
       setDeloadInterval(Number.isFinite(Number(di)) && Number(di) > 0 ? Number(di) : null);
+      setDeloadSuggestionHiddenAt(typeof dsh === "string" ? dsh : null);
       setGyms(gy);
       setActiveGymId(activeGy && gy.some((g) => g.id === activeGy) ? activeGy : gy[0]?.id || null);
       setExerciseEquipmentOverrides(eq);
@@ -2860,32 +2961,57 @@ function TrainingAppInner() {
     setDeloadWeeks(next);
     await saveJSON("deload-weeks", next);
   };
-  // Eine Woche als Entlastungswoche an- oder abwählen. Der Montag ist der
-  // Schlüssel, egal welchen Tag der Woche man antippt.
-  const toggleDeloadWeek = async (date) => {
-    const key = weekStartKey(date);
-    if (!key) return;
-    const existing = deloadWeeks.find((w) => (typeof w === "string" ? w : w?.start) === key);
-    if (existing) {
-      await persistDeloadWeeks(
-        deloadWeeks.filter((w) => (typeof w === "string" ? w : w?.start) !== key)
-      );
-      showToast("Entlastungswoche entfernt");
-    } else {
-      await persistDeloadWeeks([...deloadWeeks, { id: uid(), start: key, guess: null }]);
-      showToast("Als Entlastungswoche markiert");
-    }
+  // Einen Zeitraum als Entlastung eintragen. Zwei Tage, in beliebiger
+  // Reihenfolge angetippt - Montag bis Sonntag ist ein möglicher Zeitraum,
+  // aber kein vorgeschriebener.
+  const addDeloadRange = async (fromDate, toDate) => {
+    const a = fromDate instanceof Date ? fromDate : dateFromKey(fromDate);
+    const b = (toDate instanceof Date ? toDate : dateFromKey(toDate)) || a;
+    if (!a || !b) return;
+    const [von, bis] = b.getTime() < a.getTime() ? [b, a] : [a, b];
+    const startKey = toDateKey(von);
+    const endKey = toDateKey(bis);
+    // Überschneidet der neue Zeitraum bestehende, ersetzt er sie - sonst
+    // entstünden zwei Einträge für dieselben Tage, die sich in jeder
+    // Auswertung doppelt auswirken.
+    const behalten = deloadRanges(deloadWeeks).filter(
+      (r) => r.endTs <= von.getTime() || r.startTs > bis.getTime()
+    );
+    await persistDeloadWeeks([
+      ...behalten.map((r) => ({ id: r.id, start: r.start, end: r.end, guess: r.guess })),
+      { id: uid(), start: startKey, end: endKey, guess: null },
+    ]);
+    const tage = Math.round((bis.getTime() - von.getTime()) / 86400000) + 1;
+    showToast(`Entlastung eingetragen: ${tage} ${tage === 1 ? "Tag" : "Tage"}`);
   };
-  // Die eigene Schätzung zu einer Entlastungswoche, bevor die Zahlen dazu
-  // sichtbar werden.
+  // Den Zeitraum entfernen, in dem dieser Tag liegt.
+  const removeDeloadAt = async (date) => {
+    const d = date instanceof Date ? date : dateFromKey(date);
+    if (!d) return;
+    const ts = d.getTime();
+    const bleibt = deloadRanges(deloadWeeks).filter((r) => !(ts >= r.startTs && ts < r.endTs));
+    if (bleibt.length === deloadRanges(deloadWeeks).length) return;
+    await persistDeloadWeeks(
+      bleibt.map((r) => ({ id: r.id, start: r.start, end: r.end, guess: r.guess }))
+    );
+    showToast("Entlastung entfernt");
+  };
+  // Die eigene Schätzung zu einer Entlastung, bevor die Zahlen dazu sichtbar
+  // werden.
   const setDeloadGuess = async (start, guess) => {
     await persistDeloadWeeks(
-      deloadWeeks.map((w) => {
-        const key = typeof w === "string" ? w : w?.start;
-        if (key !== start) return w;
-        return { id: w?.id || uid(), start: key, guess };
-      })
+      deloadRanges(deloadWeeks).map((r) =>
+        r.start === start
+          ? { id: r.id, start: r.start, end: r.end, guess }
+          : { id: r.id, start: r.start, end: r.end, guess: r.guess }
+      )
     );
+  };
+  const hideDeloadSuggestion = async () => {
+    const key = deloadInfo?.dueAt ? toDateKey(new Date(deloadInfo.dueAt)) : null;
+    if (!key) return;
+    setDeloadSuggestionHiddenAt(key);
+    await saveJSON("deload-suggestion-hidden", key);
   };
   const persistDeloadInterval = async (next) => {
     setDeloadInterval(next);
@@ -3444,6 +3570,10 @@ function TrainingAppInner() {
           --success: #79ac6d;
           --danger: #e0705c;
           --fill: rgba(255,255,255,0.07);
+          /* Bank hinter einer markierten Entlastung. Bewusst ein eigener Wert
+             und nicht --fill oder --surface-alt: Auf schwarzem Grund sind
+             beide so dunkel, dass die Markierung praktisch verschwindet. */
+          --deload-band: rgba(255,255,255,0.13);
           --shadow-strength: 0.5;
           /* Diagrammfarben: gedaempft und untereinander abgestimmt. */
           --chart-accent: #dd8442;
@@ -3470,6 +3600,7 @@ function TrainingAppInner() {
           --success: #3f7a4e;
           --danger: #c0402e;
           --fill: rgba(60,60,67,0.06);
+          --deload-band: rgba(60,60,67,0.11);
           --shadow-strength: 0.10;
           --chart-accent: #b25a26;
           --chart-gold: #9a7414;
@@ -5528,13 +5659,73 @@ function TrainingAppInner() {
           grid-template-columns: repeat(7, 1fr);
           gap: 3px;
         }
-        /* Entlastungswoche: eine ruhige Bank hinter der ganzen Zeile.
-           Bewusst neutral gehalten - Rot und Gelb gehoeren den
-           Belastungssignalen, eine geplante Woche ist keine Warnung. */
-        .cal-week-row.is-deload-week {
-          background: var(--fill);
-          border-radius: 8px;
+        /* Entlastung: die betroffenen TAGE bekommen eine ruhige Bank, nicht
+           mehr die ganze Kalenderwoche - ein Zeitraum darf mitten in der
+           Woche anfangen. Bewusst neutral in der Farbe: Rot und Gelb
+           gehoeren den Belastungssignalen, eine geplante Entlastung ist
+           keine Warnung. Deutlich wird sie ueber die Flaeche, die Randlinie
+           und die Beschriftung am ersten Tag. */
+        .cal-day.is-deload {
+          background: var(--deload-band);
+          box-shadow: inset 0 2px 0 var(--border-strong), inset 0 -2px 0 var(--border-strong);
         }
+        .cal-day.is-deload-start {
+          border-top-left-radius: 8px;
+          border-bottom-left-radius: 8px;
+        }
+        .cal-day.is-deload-end {
+          border-top-right-radius: 8px;
+          border-bottom-right-radius: 8px;
+        }
+        .cal-day.is-deload-draft {
+          background: var(--fill);
+          box-shadow: inset 0 2px 0 var(--accent);
+        }
+        .cal-deload-label {
+          display: block;
+          margin: 1px 1px 0;
+          font-size: 8px;
+          line-height: 1.2;
+          letter-spacing: 0;
+          font-weight: 500;
+          color: var(--text);
+          white-space: nowrap;
+          overflow: hidden;
+          text-overflow: ellipsis;
+        }
+        .cal-deload-label.is-due { color: var(--accent); }
+        .deload-draft-bar {
+          display: flex;
+          align-items: center;
+          gap: 8px;
+          margin-bottom: 8px;
+          padding: 8px 10px 8px 12px;
+          border-radius: 10px;
+          background: var(--accent);
+          color: #fff;
+          font-size: 12.5px;
+        }
+        .deload-draft-bar span { flex: 1; }
+        .deload-draft-bar .btn-icon { color: #fff; }
+        .deload-due-note {
+          margin-top: 10px;
+          padding: 10px 12px;
+          border-radius: 10px;
+          background: var(--fill);
+          font-size: 12.5px;
+          line-height: 1.5;
+          color: var(--text);
+        }
+        .deload-due-actions {
+          display: flex;
+          gap: 6px;
+          margin-top: 8px;
+        }
+        .deload-toggle.is-draft {
+          background: var(--fill);
+          color: var(--text);
+        }
+        .deload-toggle .deload-remove { color: #fff; }
         .deload-toggle {
           display: flex;
           align-items: center;
@@ -6061,6 +6252,7 @@ function TrainingAppInner() {
             timeBasedExercises={timeBasedExercises}
             gymIndependentExercises={gymIndependentExercises}
             deloadWeeks={deloadWeeks}
+            deloadStatusInfo={deloadInfo}
             onStartWorkout={(plan, entryId) => startScheduledWorkout(plan, entryId)}
             onStartBreathing={(exercise, entryId) => startBreathingSession(exercise, entryId)}
             onOpenProgress={() => setTab("progress")}
@@ -6089,7 +6281,11 @@ function TrainingAppInner() {
             onScheduleBreathing={scheduleCalendarBreathing}
             onStartScheduledBreathing={startBreathingSession}
             deloadWeeks={deloadWeeks}
-            onToggleDeloadWeek={toggleDeloadWeek}
+            onAddDeloadRange={addDeloadRange}
+            onRemoveDeloadAt={removeDeloadAt}
+            deloadStatusInfo={deloadInfo}
+            deloadSuggestionHidden={deloadSuggestionHidden}
+            onHideDeloadSuggestion={hideDeloadSuggestion}
           />
         ) : tab === "exercises" ? (
           <ExercisesView
@@ -6777,6 +6973,7 @@ function DashboardView({
   timeBasedExercises,
   gymIndependentExercises,
   deloadWeeks = [],
+  deloadStatusInfo = null,
   onStartWorkout,
   onStartBreathing,
   onOpenProgress,
@@ -7044,7 +7241,20 @@ function DashboardView({
             </div>
           </div>
         )}
-        {signals.length === 0 && !fatigueWarning ? (
+        {/* Der eigene Rhythmus ist erreicht. Eine Feststellung mit einer
+            Zahl, keine Aufforderung - ob jetzt entlastet wird, entscheidet
+            der Mensch (KONZEPT.md, Regel 3). Das Intervall ist ohnehin die
+            Zahl, die er selbst eingetragen hat. */}
+        {deloadStatusInfo?.due && (
+          <div className="fatigue-note">
+            <BatteryLow size={14} className="fatigue-note-icon" />
+            <div>
+              Seit {deloadStatusInfo.weeksSince} Wochen keine Entlastung – dein
+              Rhythmus sind {deloadStatusInfo.intervalWeeks} Wochen.
+            </div>
+          </div>
+        )}
+        {signals.length === 0 && !fatigueWarning && !deloadStatusInfo?.due ? (
           <div style={{ color: "var(--text-dim)", fontSize: 13 }}>
             Keine Auffälligkeiten.
           </div>
@@ -7112,7 +7322,11 @@ function CalendarView({
   onScheduleBreathing,
   onStartScheduledBreathing,
   deloadWeeks = [],
-  onToggleDeloadWeek,
+  onAddDeloadRange,
+  onRemoveDeloadAt,
+  deloadStatusInfo = null,
+  deloadSuggestionHidden = false,
+  onHideDeloadSuggestion,
 }) {
   const today = new Date();
   const [viewYear, setViewYear] = useState(today.getFullYear());
@@ -7136,6 +7350,10 @@ function CalendarView({
   const [editActionText, setEditActionText] = useState("");
   const [editActionDuration, setEditActionDuration] = useState("");
   const [editSwapQuery, setEditSwapQuery] = useState("");
+  // Erster angetippter Tag einer Entlastung. Solange er gesetzt ist, schliesst
+  // der naechste Tipp im Kalender den Zeitraum ab - deshalb der deutlich
+  // sichtbare Streifen ueber dem Gitter mit dem Abbrechen-Knopf.
+  const [deloadDraft, setDeloadDraft] = useState(null);
 
   const todayKey = toDateKey(today);
   const monthMatrix = useMemo(() => getMonthMatrix(viewYear, viewMonth), [viewYear, viewMonth]);
@@ -7210,7 +7428,7 @@ function CalendarView({
     (l) => !planned.some((e) => e.logId === l.id)
   );
   const selectedEntries = planned;
-  const selectedIsDeload = isDeloadDate(dateFromKey(selectedDate), deloadWeeks);
+  const selectedDeload = deloadDayInfo(dateFromKey(selectedDate), deloadWeeks);
 
   const handleAddAction = () => {
     const trimmed = newActionText.trim();
@@ -7253,6 +7471,25 @@ function CalendarView({
   const filteredBreathingForSwap = breathingExercises.filter((b) =>
     b.name.toLowerCase().includes(editSwapQuery.toLowerCase())
   );
+
+  // Der Bereich, der sich waehrend der Auswahl schon mitfaerbt: vom ersten
+  // angetippten Tag bis zum gerade ausgewaehlten, in beliebiger Richtung.
+  const draftRange = deloadDraft
+    ? [deloadDraft, selectedDate].sort()
+    : null;
+  const finishDraft = (key) => {
+    const von = deloadDraft;
+    setDeloadDraft(null);
+    setSelectedDate(key);
+    onAddDeloadRange?.(dateFromKey(von), dateFromKey(key));
+  };
+  // Der Rhythmus ist erreicht - hier steht der Vorschlag, im Kalender an dem
+  // Tag, an dem er faellig wurde. Bewusst ein Vorschlag und keine Ansage: ob
+  // und wann entlastet wird, entscheidet der Mensch (KONZEPT.md, Regel 3).
+  const deloadDueKey =
+    deloadStatusInfo?.due && deloadStatusInfo.dueAt
+      ? toDateKey(new Date(deloadStatusInfo.dueAt))
+      : null;
 
   const handleCreateCategory = () => {
     const trimmed = newCategoryName.trim();
@@ -7330,6 +7567,18 @@ function CalendarView({
         </Modal>
       )}
 
+      {deloadDraft && (
+        <div className="deload-draft-bar">
+          <BatteryLow size={14} />
+          <span>
+            Entlastung ab {fmtDate(dateFromKey(deloadDraft))} – jetzt den letzten Tag antippen.
+          </span>
+          <button className="btn-icon" onClick={() => setDeloadDraft(null)} title="Abbrechen">
+            <X size={14} />
+          </button>
+        </div>
+      )}
+
       <div className="cal-weekday-row">
         {["Mo", "Di", "Mi", "Do", "Fr", "Sa", "So"].map((d) => (
           <span key={d}>{d}</span>
@@ -7339,10 +7588,9 @@ function CalendarView({
       <div className="cal-grid">
         {monthMatrix.map((week, wi) => {
           const isCurrentWeek = week.some((d) => toDateKey(d) === todayKey);
-          const isDeloadWeek = isDeloadDate(week[0], deloadWeeks);
           return (
             <div
-              className={`cal-week-row ${isCurrentWeek ? "is-current-week" : ""} ${isDeloadWeek ? "is-deload-week" : ""}`}
+              className={`cal-week-row ${isCurrentWeek ? "is-current-week" : ""}`}
               key={wi}
             >
               {week.map((d) => {
@@ -7360,6 +7608,13 @@ function CalendarView({
                 ];
                 const isToday = key === todayKey;
                 const isSelected = key === selectedDate;
+                // Entlastung: der Tag selbst wird eingefaerbt, nicht mehr die
+                // ganze Kalenderwoche - ein Zeitraum kann jetzt mitten in der
+                // Woche anfangen und in der naechsten enden.
+                const deloadInfo = deloadDayInfo(d, deloadWeeks);
+                // Waehrend der Auswahl faerbt sich der Bereich zwischen dem
+                // ersten angetippten Tag und dem Tag darunter schon mit.
+                const inDraft = draftRange && key >= draftRange[0] && key <= draftRange[1];
                 // Every week is treated the same, so the month grid keeps an
                 // even rhythm instead of one row bulging out.
                 const visibleEntries = dayEntries.slice(0, 3);
@@ -7367,10 +7622,28 @@ function CalendarView({
                 return (
                   <div
                     key={key}
-                    className={`cal-day ${!inMonth ? "is-outside" : ""} ${isToday ? "is-today" : ""} ${isSelected ? "is-selected" : ""}`}
-                    onClick={() => setSelectedDate(key)}
+                    className={[
+                      "cal-day",
+                      !inMonth ? "is-outside" : "",
+                      isToday ? "is-today" : "",
+                      isSelected ? "is-selected" : "",
+                      deloadInfo ? "is-deload" : "",
+                      deloadInfo?.isStart ? "is-deload-start" : "",
+                      deloadInfo?.isEnd ? "is-deload-end" : "",
+                      inDraft ? "is-deload-draft" : "",
+                    ].filter(Boolean).join(" ")}
+                    onClick={() => (deloadDraft ? finishDraft(key) : setSelectedDate(key))}
                   >
                     <span className="cal-day-num">{d.getDate()}</span>
+                    {/* Nur der erste Tag wird beschriftet, und zwar ohne
+                        Symbol davor: In einer Spalte von rund 46 Pixeln passt
+                        beides zusammen nicht, das Wort wuerde abgeschnitten. */}
+                    {deloadInfo?.isStart && (
+                      <span className="cal-deload-label">Entlastung</span>
+                    )}
+                    {key === deloadDueKey && !deloadSuggestionHidden && !deloadInfo && (
+                      <span className="cal-deload-label is-due">fällig</span>
+                    )}
                     <div className="cal-day-entries">
                       {visibleEntries.map((entry) => {
                         if (entry.type === "done") {
@@ -7441,21 +7714,66 @@ function CalendarView({
           </button>
         </div>
 
-        {/* Die Entlastungswoche gehört zum Tag darüber, weil man sie hier
-            plant: Woche antippen, fertig. Sie lässt sich vorher setzen (man
-            plant sie ja) und nachträglich (falls man es vergisst). Was sie
-            bewirkt, steht in der Statistik - siehe KONZEPT.md. */}
-        <div
-          className={`deload-toggle ${selectedIsDeload ? "is-active" : ""}`}
-          onClick={() => onToggleDeloadWeek?.(dateFromKey(selectedDate))}
-          title="Diese Kalenderwoche als Entlastungswoche markieren"
-        >
-          <BatteryLow size={14} />
-          <span>
-            {selectedIsDeload ? "Entlastungswoche" : "Als Entlastungswoche markieren"}
-          </span>
-          {selectedIsDeload && <Check size={14} />}
-        </div>
+        {/* Die Entlastung gehört zum Tag darüber, weil man sie hier plant:
+            ersten Tag antippen, letzten Tag antippen, fertig. Sie lässt sich
+            vorher setzen (man plant sie ja) und nachträglich (falls man es
+            vergisst). Was sie bewirkt, steht in der Statistik - siehe
+            KONZEPT.md. */}
+        {selectedDeload ? (
+          <div className="deload-toggle is-active">
+            <BatteryLow size={14} />
+            <span>
+              Entlastung {fmtDate(dateFromKey(selectedDeload.range.start))} bis{" "}
+              {fmtDate(dateFromKey(selectedDeload.range.end))}
+              {" · "}
+              {Math.round((selectedDeload.range.endTs - selectedDeload.range.startTs) / 86400000)} Tage
+            </span>
+            <button
+              className="btn-icon deload-remove"
+              onClick={() => onRemoveDeloadAt?.(dateFromKey(selectedDate))}
+              title="Entlastung entfernen"
+            >
+              <Trash2 size={13} />
+            </button>
+          </div>
+        ) : deloadDraft ? (
+          <div className="deload-toggle is-draft">
+            <BatteryLow size={14} />
+            <span>Letzten Tag der Entlastung antippen.</span>
+            <button className="btn-icon" onClick={() => setDeloadDraft(null)} title="Abbrechen">
+              <X size={13} />
+            </button>
+          </div>
+        ) : (
+          <div
+            className="deload-toggle"
+            onClick={() => setDeloadDraft(selectedDate)}
+            title="Diesen Tag als Beginn einer Entlastung setzen"
+          >
+            <BatteryLow size={14} />
+            <span>Entlastung ab hier</span>
+          </div>
+        )}
+
+        {/* Der Rhythmus ist erreicht. Eine Feststellung mit einem Knopf daneben,
+            kein Termin, den die App selbst einträgt. */}
+        {deloadDueKey === selectedDate && !deloadSuggestionHidden && !selectedDeload && (
+          <div className="deload-due-note">
+            <div>
+              Dein Rhythmus von {deloadStatusInfo.intervalWeeks} Wochen ist hier erreicht –
+              die letzte Entlastung begann am{" "}
+              {fmtDate(dateFromKey(deloadStatusInfo.last.start))}.
+            </div>
+            <div className="deload-due-actions">
+              <span className="chip chip-sm" onClick={() => setDeloadDraft(selectedDate)}>
+                Entlastung ab hier
+              </span>
+              <span className="chip chip-sm" onClick={() => onHideDeloadSuggestion?.()}>
+                Ausblenden
+              </span>
+            </div>
+          </div>
+        )}
 
         {selectedEntries.length === 0 && selectedLogs.length === 0 && !addOpen && (
           <div className="empty-state" style={{ padding: "14px 0" }}>Noch keine Einträge an diesem Tag.</div>
@@ -14012,12 +14330,8 @@ function ProgressView({
     () => getDeloadEffects(logs, deloadWeeks, timeBasedExercises),
     [logs, deloadWeeks, timeBasedExercises]
   );
-  const deloadGuessOf = (start) => {
-    const found = (Array.isArray(deloadWeeks) ? deloadWeeks : []).find(
-      (w) => (typeof w === "string" ? w : w?.start) === start
-    );
-    return typeof found === "string" ? null : found?.guess || null;
-  };
+  const deloadGuessOf = (start) =>
+    deloadRanges(deloadWeeks).find((r) => r.start === start)?.guess || null;
 
   // Folders can be marked "ohne Statistik" (e.g. EMOM/Conditioning) so their
   // sets don't dilute "Sätze pro Muskelgruppe" - that card is deliberately a
@@ -14402,26 +14716,28 @@ function ProgressView({
 
         {!deloadInfo ? (
           <div className="empty-state" style={{ padding: "12px 0 4px" }}>
-            Noch keine Entlastungswoche markiert. Im Kalender einen Tag der
-            Woche antippen und „Als Entlastungswoche markieren" wählen.
+            Noch keine Entlastung eingetragen. Im Kalender den ersten Tag
+            antippen, „Entlastung ab hier" wählen und dann den letzten Tag
+            antippen – der Zeitraum darf beliebig laufen, nicht nur Montag
+            bis Sonntag.
           </div>
         ) : (
           <div className="deload-status">
-            {deloadInfo.isCurrentWeek
-              ? "Diese Woche ist eine Entlastungswoche."
+            {deloadInfo.current
+              ? `Läuft gerade: Entlastung bis ${fmtDate(dateFromKey(deloadInfo.current.end))}.`
               : deloadInfo.weeksSince == null
-              ? "Noch keine Entlastungswoche absolviert."
+              ? "Noch keine Entlastung absolviert."
               : deloadInfo.weeksSince === 0
-              ? "Letzte Entlastungswoche: diese Woche."
-              : `Letzte Entlastungswoche: vor ${deloadInfo.weeksSince} ${
+              ? "Letzte Entlastung: diese Woche."
+              : `Letzte Entlastung: vor ${deloadInfo.weeksSince} ${
                   deloadInfo.weeksSince === 1 ? "Woche" : "Wochen"
                 }${deloadInfo.intervalWeeks ? ` von ${deloadInfo.intervalWeeks}` : ""}.`}
-            {deloadInfo.nextStart && (
+            {deloadInfo.next && (
               <>
                 {" "}
-                Nächste geplant ab {fmtDate(dateFromKey(deloadInfo.nextStart))}
-                {deloadInfo.weeksUntilNext > 0
-                  ? ` (in ${deloadInfo.weeksUntilNext} ${deloadInfo.weeksUntilNext === 1 ? "Woche" : "Wochen"})`
+                Nächste geplant ab {fmtDate(dateFromKey(deloadInfo.next.start))}
+                {deloadInfo.daysUntilNext > 0
+                  ? ` (in ${deloadInfo.daysUntilNext} ${deloadInfo.daysUntilNext === 1 ? "Tag" : "Tagen"})`
                   : ""}
                 .
               </>
@@ -14466,7 +14782,8 @@ function ProgressView({
               return (
                 <div className="deload-effect" key={r.start}>
                   <div className="deload-effect-title">
-                    Entlastungswoche ab {fmtDate(dateFromKey(r.start))}
+                    Entlastung {fmtDate(dateFromKey(r.start))} bis {fmtDate(dateFromKey(r.end))}
+                    {" · "}{r.days} {r.days === 1 ? "Tag" : "Tage"}
                   </div>
                   {!guess ? (
                     <>

@@ -21,6 +21,14 @@ import {
   getMuscleLoadSeries,
   canBeCalibration,
   canBeDropset,
+  weekStartKey,
+  dateFromKey,
+  deloadStarts,
+  isDeloadDate,
+  deloadWeekFlags,
+  deloadStatus,
+  getDeloadEffect,
+  getDeloadEffects,
   performedWorkingSets,
   setNumberLabels,
 } from "./TrainingApp";
@@ -467,5 +475,258 @@ describe("Saetze zaehlen und benennen", () => {
   it("bietet einen Dropsatz nur nach einem Arbeitssatz an", () => {
     expect(canBeDropset([satz({ warmup: true }), satz()], 1)).toBe(false);
     expect(canBeDropset([satz(), satz()], 1)).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Entlastungswochen
+//
+// Der Kern dieser Tests ist der Grund, aus dem es die Markierung ueberhaupt
+// gibt. Ohne sie meldet die App in einer bewusst leichten Woche ein Plateau
+// und danach wochenlang eine Ueberlastung - beides steht hier als "vorher"
+// ausdruecklich drin, sonst waere spaeter nicht mehr nachvollziehbar, wovor
+// die Markierung schuetzt.
+// ---------------------------------------------------------------------------
+
+describe("Entlastungswochen: Datum und Woche", () => {
+  it("findet den Montag der Woche, egal welchen Tag man antippt", () => {
+    // 9.9.2026 ist ein Mittwoch, 13.9. der Sonntag danach.
+    expect(weekStartKey(new Date(2026, 8, 9))).toBe("2026-09-07");
+    expect(weekStartKey(new Date(2026, 8, 13))).toBe("2026-09-07");
+    expect(weekStartKey(new Date(2026, 8, 7))).toBe("2026-09-07");
+    expect(weekStartKey(new Date(2026, 8, 14))).toBe("2026-09-14");
+  });
+
+  it("liest einen Datums-Schluessel als lokales Datum, nicht als UTC", () => {
+    // new Date("2026-09-07") waere UTC und in westlichen Zeitzonen der 6.9. -
+    // die Markierung laege dann eine Woche daneben.
+    const d = dateFromKey("2026-09-07")!;
+    expect([d.getFullYear(), d.getMonth(), d.getDate()]).toEqual([2026, 8, 7]);
+  });
+
+  it("nimmt gespeicherte Objekte und blanke Schluessel gleichermassen", () => {
+    expect(deloadStarts([{ start: "2026-09-07" }, "2026-08-03"])).toEqual([
+      "2026-08-03", "2026-09-07",
+    ]);
+    expect(deloadStarts([{ start: "quatsch" }, null, 7])).toEqual([]);
+  });
+
+  it("erkennt jeden Tag einer markierten Woche", () => {
+    const wochen = [{ start: "2026-09-07" }];
+    expect(isDeloadDate(new Date(2026, 8, 10), wochen)).toBe(true);
+    expect(isDeloadDate(new Date(2026, 8, 14), wochen)).toBe(false);
+  });
+});
+
+describe("Entlastungswochen: Markierung der Wochenreihen", () => {
+  const jetzt = new Date(2026, 8, 16, 12).getTime(); // Mittwoch
+
+  it("markiert jedes 7-Tage-Fenster, das sich mit der Woche ueberschneidet", () => {
+    // Die Wochenreihen rechnen ab heute rueckwaerts, nicht in Kalenderwochen -
+    // eine markierte Woche faellt deshalb fast immer in zwei Fenster.
+    const flags = deloadWeekFlags([{ start: "2026-09-07" }], 6, jetzt);
+    expect(flags).toHaveLength(6);
+    expect(flags.filter(Boolean).length).toBe(2);
+    // Die aelteste Position liegt gut fuenf Wochen zurueck und kann die
+    // Woche vom 7.9. nicht enthalten.
+    expect(flags[0]).toBe(false);
+  });
+
+  it("liefert ohne Markierung nur false", () => {
+    expect(deloadWeekFlags([], 4, jetzt)).toEqual([false, false, false, false]);
+    expect(deloadWeekFlags(null, 3, jetzt)).toEqual([false, false, false]);
+  });
+});
+
+describe("Entlastungswochen: Warnsignale", () => {
+  const F = false, T = true;
+  // Acht Wochen mit rund 2 % Zuwachs - die Groessenordnung, in der sich eine
+  // Belastung ueber Monate tatsaechlich bewegt. Die Entlastungswoche liegt in
+  // zwei Fenstern (siehe deloadWeekFlags), deshalb zwei Markierungen.
+  const inDerWoche = [96, 98, 100, 102, 104, 106, 108, 50];
+  const inDerWocheFlags = [F, F, F, F, F, F, F, T];
+  const einsDanach = [98, 100, 102, 104, 106, 74, 52, 108];
+  const einsDanachFlags = [F, F, F, F, F, T, T, F];
+  const dreiDanach = [102, 104, 106, 74, 52, 108, 110, 112];
+  const dreiDanachFlags = [F, F, F, T, T, F, F, F];
+
+  it("vorher: meldet in der Entlastungswoche ein Plateau", () => {
+    expect(detectLoadSignal(inDerWoche)?.type).toBe("plateau");
+  });
+
+  it("vorher: meldet danach wochenlang eine Ueberlastung", () => {
+    expect(detectLoadSignal(einsDanach)?.type).toBe("overload-watch");
+    expect(detectLoadSignal(dreiDanach)?.type).toBe("overload");
+  });
+
+  it("markiert: schweigt in der Entlastungswoche selbst", () => {
+    expect(detectLoadSignal(inDerWoche, Infinity, inDerWocheFlags)).toBe(null);
+  });
+
+  it("markiert: keine Meldung mehr in den Wochen danach", () => {
+    // Der Vergleichszeitraum wird nicht nach hinten verlaengert (siehe
+    // weeksBefore). Fuer die Ueberlastung reichen die zwei sauberen Wochen
+    // direkt vor der Entlastung; fuer das Plateau-Zeichen braucht es drei -
+    // solange die nicht zusammenkommen, wird geschwiegen statt geraten.
+    expect(detectLoadSignal(einsDanach, Infinity, einsDanachFlags)).toBe(null);
+    expect(detectLoadSignal(dreiDanach, Infinity, dreiDanachFlags)).toBe(null);
+  });
+
+  it("Regression: die Markierung erzeugt keine neue Warnung", () => {
+    // Ein frueherer Anlauf verlaengerte den Vergleichszeitraum nach hinten,
+    // um vier saubere Wochen zusammenzubekommen. Bei steigender Belastung
+    // liegen die aelteren Wochen tiefer - dadurch meldete die App MIT
+    // Markierung eine Ueberlastung, die sie ohne nicht gemeldet hatte.
+    // Getestet ueber alle vier Wochen nach der Entlastung.
+    const nachher = [
+      { werte: einsDanach, flags: einsDanachFlags },
+      { werte: [100, 102, 104, 106, 74, 52, 108, 110], flags: [F, F, F, F, T, T, F, F] },
+      { werte: dreiDanach, flags: dreiDanachFlags },
+      { werte: [104, 106, 74, 52, 108, 110, 112, 114], flags: [F, F, T, T, F, F, F, F] },
+    ];
+    nachher.forEach(({ werte, flags }) => {
+      const ohne = detectLoadSignal(werte)?.type;
+      const mit = detectLoadSignal(werte, Infinity, flags)?.type;
+      const istWarnung = (t?: string) => t === "overload" || t === "overload-watch";
+      expect(istWarnung(ohne)).toBe(true);
+      expect(istWarnung(mit)).toBe(false);
+    });
+  });
+
+  it("laesst eine echte Ueberlastung trotz Entlastungswoche durch", () => {
+    const echterSprung = [98, 100, 102, 104, 106, 74, 52, 150];
+    expect(detectLoadSignal(echterSprung, Infinity, einsDanachFlags)?.type).toBe("overload");
+  });
+
+  it("Regression: ohne Markierung rechnet alles wie vorher", () => {
+    // weeksBefore hat die frueheren slice-Aufrufe in detectLoadSignal und
+    // muscleLoadChange ersetzt. Ohne Markierung muss exakt derselbe
+    // Ausschnitt herauskommen wie zuvor.
+    expect(detectLoadSignal([10, 10, 10, 10, 11])?.type).toBe(undefined);
+    expect(detectLoadSignal([10, 10, 10, 10, 12])?.type).toBe("overload-watch");
+    expect(detectLoadSignal([10, 10, 10, 10, 14])?.type).toBe("overload");
+    expect(detectLoadSignal([10, 10, 10, 10])?.type).toBe("plateau");
+    expect(muscleLoadChange([10, 10, 10, 20], 3)).toBe(100);
+  });
+});
+
+describe("Entlastungswochen: Zaehlerstand", () => {
+  const jetzt = new Date(2026, 8, 16, 12).getTime(); // Mittwoch, Woche ab 14.9.
+
+  it("sagt, wie viele Wochen die letzte her ist", () => {
+    const st = deloadStatus([{ start: "2026-08-03" }], 8, jetzt)!;
+    expect(st.weeksSince).toBe(6);
+    expect(st.intervalWeeks).toBe(8);
+    expect(st.isCurrentWeek).toBe(false);
+  });
+
+  it("erkennt die laufende Woche", () => {
+    const st = deloadStatus([{ start: "2026-09-14" }], null, jetzt)!;
+    expect(st.isCurrentWeek).toBe(true);
+    expect(st.weeksSince).toBe(0);
+    expect(st.intervalWeeks).toBe(null);
+  });
+
+  it("zaehlt eine erst geplante Woche nicht als letzte", () => {
+    const st = deloadStatus([{ start: "2026-08-03" }, { start: "2026-10-05" }], null, jetzt)!;
+    expect(st.lastStart).toBe("2026-08-03");
+    expect(st.nextStart).toBe("2026-10-05");
+    expect(st.weeksUntilNext).toBe(3);
+  });
+
+  it("schweigt ohne jede Markierung", () => {
+    expect(deloadStatus([], 8, jetzt)).toBe(null);
+  });
+});
+
+describe("Entlastungswochen: Wirkung davor gegen danach", () => {
+  const montag = new Date(2026, 8, 7).getTime();
+  const jetzt = montag + 5 * WOCHE;
+
+  // Vier Trainings davor, vier danach, zwei Uebungen - danach liegt das
+  // Gewicht um `nachher` Prozentpunkte hoeher.
+  const bauLogs = (nachherFaktor: number) => {
+    const tage = [
+      montag - 12 * TAG, montag - 9 * TAG, montag - 5 * TAG, montag - 2 * TAG,
+      montag + 8 * TAG, montag + 11 * TAG, montag + 15 * TAG, montag + 18 * TAG,
+    ];
+    return tage.map((ts, i) => {
+      const danach = i >= 4;
+      const f = danach ? nachherFaktor : 1;
+      return training({
+        id: "log" + i,
+        date: new Date(ts).toISOString(),
+        feeling: danach ? 4 : 3,
+        entries: [
+          { id: "e1", exerciseId: "bankdruecken", sets: [satz({ weight: 100 * f, reps: 10 })] },
+          { id: "e2", exerciseId: "kniebeuge", sets: [satz({ weight: 140 * f, reps: 10 })] },
+        ],
+      });
+    });
+  };
+
+  it("misst die Leistung je Satz, getrennt nach Uebung", () => {
+    const r = getDeloadEffect(bauLogs(1.1), "2026-09-07", {}, jetzt)!;
+    expect(Math.round(r.performanceChange)).toBe(10);
+    expect(r.exercises).toBe(2);
+    expect(r.sessionsBefore).toBe(4);
+    expect(r.sessionsAfter).toBe(4);
+    expect(r.feelingBefore).toBe(3);
+    expect(r.feelingAfter).toBe(4);
+  });
+
+  it("wartet, bis die zwei Wochen danach vorbei sind", () => {
+    expect(getDeloadEffect(bauLogs(1.1), "2026-09-07", {}, montag + 2 * WOCHE)).toBe(null);
+  });
+
+  it("schweigt bei zu duenner Datenlage", () => {
+    // Nur ein Training nach der Entlastung - daraus wird keine Aussage.
+    expect(getDeloadEffect(bauLogs(1.1).slice(0, 5), "2026-09-07", {}, jetzt)).toBe(null);
+  });
+
+  it("laesst die Entlastungswoche selbst aus dem Vergleich heraus", () => {
+    // Ein sehr leichtes Training mitten in der Entlastungswoche darf das
+    // Ergebnis nicht nach unten ziehen.
+    const mitEntlastung = [
+      ...bauLogs(1.1),
+      training({
+        id: "deload",
+        date: new Date(montag + 2 * TAG).toISOString(),
+        entries: [
+          { id: "e1", exerciseId: "bankdruecken", sets: [satz({ weight: 40, reps: 5 })] },
+          { id: "e2", exerciseId: "kniebeuge", sets: [satz({ weight: 60, reps: 5 })] },
+        ],
+      }),
+    ];
+    const r = getDeloadEffect(mitEntlastung, "2026-09-07", {}, jetzt)!;
+    expect(Math.round(r.performanceChange)).toBe(10);
+    expect(r.sessionsBefore).toBe(4);
+    expect(r.sessionsAfter).toBe(4);
+  });
+
+  it("zeigt einen Schnitt erst ab drei ausgewerteten Entlastungen", () => {
+    const eine = getDeloadEffects(bauLogs(1.1), [{ start: "2026-09-07" }], {}, jetzt);
+    expect(eine.results).toHaveLength(1);
+    expect(eine.pattern).toBe(null);
+    expect(eine.patternMin).toBe(3);
+  });
+});
+
+describe("Entlastungswochen: Gefuehl und Leistung", () => {
+  it("laesst Trainings aus Entlastungswochen aus dem Abgleich heraus", () => {
+    // Sechs Trainings, verteilt ueber zwei Wochen ab Montag, 7.9.2026.
+    const montag = new Date(2026, 8, 7).getTime();
+    const logs = [0, 2, 4, 7, 9, 11].map((tag, i) =>
+      training({
+        id: "l" + i,
+        date: new Date(montag + tag * TAG).toISOString(),
+        feeling: 3,
+      })
+    );
+    const ohne = getFeelingPerformance(logs, {});
+    const mit = getFeelingPerformance(logs, {}, [{ start: "2026-09-07" }]);
+    expect(ohne.sessionsWithFeeling).toBe(6);
+    // Die drei Trainings der ersten Woche fallen heraus.
+    expect(mit.sessionsWithFeeling).toBe(3);
   });
 });

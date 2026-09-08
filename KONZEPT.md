@@ -43,7 +43,7 @@ Daraus folgen drei Regeln:
 
 | Ziel | Stand | Lücke |
 |---|---|---|
-| Überbelastung | gut | Zusätzlich zum Belastungssignal je Muskelgruppe gibt es die Frühwarnung aus Gefühl **und** steigender Belastung (`getFatigueWarning`), gemessen gegen den eigenen Normalwert statt gegen einen Bevölkerungsschnitt. |
+| Überbelastung | gut | Zusätzlich zum Belastungssignal je Muskelgruppe gibt es die Frühwarnung aus Gefühl **und** steigender Belastung (`getFatigueWarning`), gemessen gegen den eigenen Normalwert statt gegen einen Bevölkerungsschnitt. Geplante Entlastungswochen sind markierbar und fallen aus allen Warnungen heraus. |
 | Unterbelastung | fehlt | `detectLoadSignal` kennt nur `overload`, `overload-watch`, `plateau`. Alles wird nur relativ zum eigenen jüngsten Schnitt gemessen – sinkt der Schnitt langsam mit, fällt schleichender Abbau nie auf. |
 | Progressive Overload | Rohdaten da, Zusammenfassung fehlt | Charts und Plateau-Signal existieren, aber nirgends steht in Klartext „Kraft seit X Wochen flach". Kraft und Volumen werden in einer Kennzahl vermischt, obwohl es zwei verschiedene Wege sind, zu progressieren. |
 | Vergleich früher/heute | gut | Zeiträume, Sparklines, %-Vergleiche, Verlauf. |
@@ -179,6 +179,12 @@ Spalte „Stand": ✅ gebaut, ⬜ noch nicht.
 | | Frühwarnung Überlastung | „Seit 3 Wochen … schlechter als sonst – bei X % höherer Belastung" | ~3 Wochen + 12 Wochen Vergleichszeitraum | ✅ |
 | | Kontext für schwache Wochen | Unterbelastungs-Warnung unterscheidet „wenig Zeit" von „ausgelaugt" | sofort | ⬜ hängt an der Unterbelastung |
 | **Eichsatz-Schätzung** | Kalibrierungskurve | „Du unterschätzt dich im Schnitt um 2 Wiederholungen." | 3 Eichsätze | ✅ |
+| **Entlastungswoche (Markierung)** | Warnsignale | keine Meldung in der Woche selbst, kein verzerrter Vergleich danach | sofort | ✅ |
+| | Diagramm | hohler Punkt in der Belastungs-Kurve, getönte Wochenzeile im Kalender | sofort | ✅ |
+| | Kachel „kg Volumen" | „+184 % ggü. **Entlastungswoche**" statt „ggü. Vorwoche" | sofort | ✅ |
+| | Zählerstand | „Letzte Entlastungswoche: vor 7 von 8 Wochen." | sofort | ✅ |
+| | Wirkung | „Leistung je Satz +3,4 % · Gefühl 3,7 statt 3,2" | 2 Wochen nach der Entlastung | ✅ |
+| **Schätzung nach der Entlastung** | Abgleich Wahrnehmung ↔ Zahlen | „Du hattest ‚besser' geschätzt – gemessen: gleich." | sofort nach der Abgabe | ✅ |
 | **Antwort auf eine Warnung** | persönliche Schwellen | Warnung kommt später oder gar nicht mehr | nach ~3 Antworten | ⬜ |
 
 Ehrlich dazu: Die Kalibrierungs-Auswertungen brauchen Datenpunkte und liefern in den ersten
@@ -217,6 +223,34 @@ Beim Speichern bleiben auch nicht abgehakte Sätze im Log stehen – sie gehört
 Trainings. Für jede Auswertung und jede Anzeige zählt aber ausschließlich, was abgehakt wurde
 (`performedSets` / `performedWorkingSets`). Sonst wäre ein vorbelegter, nie ausgeführter Satz
 geleistete Arbeit – und die Statistik würde Trainings behaupten, die nie stattgefunden haben.
+
+**Entlastungswochen sind Lücken, keine Tiefs – aber nur in den Warnungen.**
+Eine bewusst leichtere Woche liest die App sonst als Einbruch. Gemessen an einem
+steigenden Verlauf mit einer Entlastungswoche bei −55 % Arbeit: in der Woche selbst
+„Plateau", in den vier Wochen danach „Überlastung", ab der fünften wieder Ruhe. Bei
+einer Entlastung alle 6–8 Wochen trüge damit die Mehrheit aller Wochen ein falsches
+Etikett – und eine Warnung, die meistens danebenliegt, wird zu Recht ignoriert.
+Deshalb:
+- **Warnungen** (`detectLoadSignal`, `getFatigueWarning`, `getFeelingPerformance` und die
+  Prozentzahl neben einem Signal) lassen markierte Wochen aus dem Vergleich heraus.
+- **Beschreibende Vergleiche** (Zeitraum-Chips, Sparklines, Charts) zeigen sie unverändert.
+  Die Delle ist echt und soll sichtbar bleiben; sie wird markiert (hohler Punkt), nicht
+  versteckt. Wo eine Zahl dadurch missverständlich wird, wird sie **beschriftet** statt
+  gefiltert: „+184 % ggü. Entlastungswoche" statt „ggü. Vorwoche".
+- **Der Vergleichszeitraum wird nicht nach hinten verlängert.** Ein erster Anlauf suchte so
+  lange weiter zurück, bis wieder vier saubere Wochen zusammenkamen – und erzeugte damit
+  Überlastungs-Meldungen, die es ohne Markierung nicht gab: Wer stetig mehr trainiert,
+  dessen Wochen von vor zwei Monaten liegen tiefer, der Schnitt sinkt, und der normale
+  Wiedereinstieg sieht wieder wie ein Sprung aus. Die zwei Wochen direkt vor der Entlastung
+  sind der richtige Maßstab, auch wenn es weniger sind. Bleiben weniger als zwei saubere
+  Wochen übrig, wird geschwiegen statt geraten.
+- **Markiert wird die Kalenderwoche, gerechnet wird in rollierenden 7-Tage-Fenstern.** Eine
+  markierte Woche fällt deshalb fast immer in zwei Fenster; beide werden übersprungen.
+- **Die App schlägt nie selbst eine Entlastungswoche vor** (Regel 3). Sie zählt mit; der
+  Rhythmus ist die Zahl, die der Mensch selbst eingetragen hat.
+- **Die Wirkung wird je Übung gemessen**, nicht als Wochensumme: Sonst hinge das Ergebnis
+  vor allem daran, wie viel Zeit gerade da war. Wer nach der Entlastung eine Einheit mehr
+  schafft, sähe automatisch besser aus, ohne stärker geworden zu sein.
 
 **Der Rundenmodus ist keine neue Datenstruktur.**
 Im Zirkel *ist* „Satz N" gleichbedeutend mit „Runde N": Satz 1 aller Übungen ist Runde 1. Die

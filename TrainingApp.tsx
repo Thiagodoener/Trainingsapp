@@ -36,6 +36,7 @@ import {
   Minus,
   Home,
   Info,
+  BatteryLow,
 } from "lucide-react";
 import {
   LineChart,
@@ -953,8 +954,16 @@ const FEELING_EXPECT_MIN = 2;      // darunter ist es keine Erwartung, sondern e
 const FEELING_MIN_SESSIONS_TENDENCY = 3;  // ab hier eine Tendenz in Worten
 const FEELING_MIN_SESSIONS_PERCENT = 5;   // ab hier eine Prozentzahl
 
-export function getFeelingPerformance(logs, timeBasedExercises) {
-  const safeLogs = (Array.isArray(logs) ? logs : []).filter(Boolean);
+export function getFeelingPerformance(logs, timeBasedExercises, deloadWeeks = null) {
+  // Trainings aus Entlastungswochen bleiben draußen. Sie sind absichtlich
+  // leichter und würden gleich doppelt stören: Die Einheit selbst läge weit
+  // unter der Erwartung, und als Nachbar-Einheit zöge sie die Erwartung der
+  // normalen Trainings ringsherum nach unten - die sähen dadurch besser aus,
+  // als sie waren.
+  const deloadMarked = deloadStarts(deloadWeeks).length > 0;
+  const safeLogs = (Array.isArray(logs) ? logs : [])
+    .filter(Boolean)
+    .filter((l) => !deloadMarked || !isDeloadDate(new Date(l?.date), deloadWeeks));
   const chronological = [...safeLogs].sort((a, b) => new Date(a.date) - new Date(b.date));
 
   // Womit die Arbeit eines Satzes gemessen wird, hängt an der Übungsart -
@@ -1059,8 +1068,16 @@ const FATIGUE_FEELING_DROP = 0.5;    // um so viel muss das Gefühl darunter lie
 const FATIGUE_LOAD_RISE = 1.1;       // und die Belastung um so viel darüber
 const FATIGUE_LOAD_LOOKBACK = 4;     // Vergleichszeitraum für die Belastung
 
-export function getFatigueWarning(logs, muscleLoadSeries, nowTs = Date.now()) {
-  const safeLogs = (Array.isArray(logs) ? logs : []).filter(Boolean);
+export function getFatigueWarning(logs, muscleLoadSeries, nowTs = Date.now(), deloadWeeks = null) {
+  // Entlastungswochen gehören hier auf beiden Seiten heraus: Ihr Gefühl ist
+  // nicht mit einer normalen Woche vergleichbar, und ihre kleine Arbeitsmenge
+  // im Vergleichszeitraum würde die Warnung zu leicht auslösen (weil der
+  // Schnitt davor sinkt) bzw. im beobachteten Zeitraum eine echte Warnung
+  // verschlucken (weil der aktuelle Schnitt sinkt).
+  const deloadMarked = deloadStarts(deloadWeeks).length > 0;
+  const safeLogs = (Array.isArray(logs) ? logs : [])
+    .filter(Boolean)
+    .filter((l) => !deloadMarked || !isDeloadDate(new Date(l?.date), deloadWeeks));
   const windowMs = FATIGUE_WINDOW_WEEKS * LOAD_WEEK_MS;
   const baselineMs = windowMs + FATIGUE_BASELINE_WEEKS * LOAD_WEEK_MS;
 
@@ -1093,10 +1110,19 @@ export function getFatigueWarning(logs, muscleLoadSeries, nowTs = Date.now()) {
     (Array.isArray(g.values) ? g.values : []).forEach((v, i) => { totals[i] += v || 0; });
   });
 
-  const recentLoad = mean(totals.slice(weeks - FATIGUE_WINDOW_WEEKS));
-  const beforeLoad = mean(
-    totals.slice(weeks - FATIGUE_WINDOW_WEEKS - FATIGUE_LOAD_LOOKBACK, weeks - FATIGUE_WINDOW_WEEKS)
+  const flags = deloadMarked ? deloadWeekFlags(deloadWeeks, weeks, nowTs) : null;
+  const withoutDeload = (from, to) =>
+    totals.slice(from, to).filter((_, i) => !flags || !flags[from + i]);
+  const recentWeeks = withoutDeload(weeks - FATIGUE_WINDOW_WEEKS, weeks);
+  const beforeWeeks = withoutDeload(
+    weeks - FATIGUE_WINDOW_WEEKS - FATIGUE_LOAD_LOOKBACK,
+    weeks - FATIGUE_WINDOW_WEEKS
   );
+  // Ohne saubere Woche auf einer der beiden Seiten gibt es nichts zu
+  // vergleichen - dann lieber gar nichts sagen.
+  if (recentWeeks.length === 0 || beforeWeeks.length === 0) return null;
+  const recentLoad = mean(recentWeeks);
+  const beforeLoad = mean(beforeWeeks);
   if (!(beforeLoad > 0) || !(recentLoad >= beforeLoad * FATIGUE_LOAD_RISE)) return null;
 
   return {
@@ -1574,6 +1600,22 @@ const STAT_EXPLANATIONS = {
       "Änderung = (diese Woche − Schnitt der gewählten Wochen davor) ÷ Schnitt × 100.",
     ],
   },
+  deload: {
+    title: "Entlastungswochen",
+    paragraphs: [
+      "Eine Entlastungswoche ist eine absichtlich leichtere Woche. Damit die App sie nicht für einen Einbruch hält, markierst du sie im Kalender - einen Tag der Woche antippen genügt.",
+      "Was das ändert: In einer markierten Woche zeigt die App keine Warnzeichen, und in den Wochen danach lässt sie die leichte Woche aus dem Vergleich heraus. Sonst würde dein ganz normaler Wiedereinstieg wie ein Sprung nach oben aussehen - der Schnitt, gegen den verglichen wird, wäre ja nach unten gezogen.",
+      "Sichtbar bleibt sie trotzdem: In den Diagrammen und in den Zeitraum-Vergleichen steht die Delle unverändert da. Sie soll nur nicht kommentiert werden.",
+      "Der Zähler darunter sagt, wie lange die letzte her ist. Wann du entlastest, entscheidest du - die App schlägt von sich aus nie eine Entlastungswoche vor.",
+      "Nach jeder Entlastung vergleicht sie die zwei Wochen davor mit den zwei Wochen danach. Damit die eigene Wahrnehmung nicht von der Zahl überschrieben wird, fragt sie vorher nach deiner Schätzung.",
+    ],
+    formula: [
+      "Verglichen wird die Arbeit je Satz, getrennt für jede Übung, und dann über die Übungen gemittelt, die in beiden Zeiträumen vorkommen. Nicht die Gesamtarbeit einer Woche - sonst würde vor allem gemessen, wie viel Zeit gerade da war.",
+      "Die Entlastungswoche selbst zählt in diesem Vergleich nicht mit.",
+      "Mindestens 2 Trainings je Seite und 2 gemeinsame Übungen, sonst wird kein Ergebnis gezeigt.",
+      "Ein Durchschnitt über mehrere Entlastungen erscheint ab der dritten ausgewerteten.",
+    ],
+  },
   feelingPerformance: {
     title: "Gefühl und Leistung",
     paragraphs: [
@@ -1871,13 +1913,19 @@ function logsHistoryWeeks(logs, nowTs = Date.now()) {
 // Rückgabe null bedeutet "nicht berechenbar" (keine Vorgeschichte oder vorher
 // gar nichts trainiert) - das ist etwas anderes als 0 % und muss in der
 // Anzeige auch anders aussehen.
-export function muscleLoadChange(values, compareWeeks, maxLookback = Infinity) {
+// deloadFlags wird nur dort mitgegeben, wo die Prozentzahl NEBEN einem
+// Warnsignal steht - dann muss sie aus denselben Wochen kommen wie das
+// Signal, sonst widersprechen sich Zahl und Zeichen. Die frei gewählten
+// Zeitraum-Vergleiche in der Statistik lassen die Entlastungswochen bewusst
+// drin: Dort ist die Frage "wie viel war es verglichen mit damals?", und die
+// leichte Woche gehört zur Antwort.
+export function muscleLoadChange(values, compareWeeks, maxLookback = Infinity, deloadFlags = null) {
   if (!Array.isArray(values) || values.length < 2) return null;
   const usableWeeks = Math.min(compareWeeks, maxLookback);
   if (usableWeeks <= 0) return null;
+  if (Array.isArray(deloadFlags) && deloadFlags[values.length - 1]) return null;
   const current = values[values.length - 1] || 0;
-  const from = Math.max(0, values.length - 1 - usableWeeks);
-  const reference = values.slice(from, values.length - 1);
+  const reference = weeksBefore(values, values.length - 1, usableWeeks, deloadFlags);
   if (reference.length === 0) return null;
   const avg = reference.reduce((sum, v) => sum + (v || 0), 0) / reference.length;
   if (avg <= 0) return null;
@@ -1896,6 +1944,11 @@ const OVERLOAD_LOOKBACK = 4;    // Vergleichs-Schnitt aus den 4 Wochen davor
 // ~1,5 als Hochrisikozone. Harter Alarm bei +30% statt +50%, um früher zu
 // warnen - dafür der weiche Hinweis bei +15% als Vorstufe, damit nicht jede
 // Woche im oberen Sweet-Spot-Bereich schon als Alarm auftaucht.
+// So viele saubere Wochen muss der Vergleichszeitraum mindestens noch
+// enthalten. Ohne Entlastungswochen sind es immer alle vier; liegt eine darin,
+// bleiben meist zwei - die zwei Wochen direkt davor, und die sind der
+// richtige Maßstab. Bleibt weniger übrig, wird nichts gemeldet.
+const OVERLOAD_MIN_CLEAN = 2;
 const OVERLOAD_WATCH_THRESHOLD = 1.15;  // aktuelle Woche > 15% über dem Schnitt = weicher Hinweis
 const OVERLOAD_ALERT_THRESHOLD = 1.3;   // aktuelle Woche > 30% über dem Schnitt = harter Alarm
 
@@ -1911,16 +1964,17 @@ const OVERLOAD_ALERT_THRESHOLD = 1.3;   // aktuelle Woche > 30% über dem Schnit
 // schlicht noch nicht genug Trainingshistorie gibt. Null heißt "kein
 // auffälliges Signal" - das schließt "diese Woche noch nichts trainiert" und
 // "zu wenig Historie" mit ein.
-export function detectLoadSignal(values, historyWeeks = Infinity) {
+export function detectLoadSignal(values, historyWeeks = Infinity, deloadFlags = null) {
   if (!Array.isArray(values) || values.length === 0) return null;
   const current = values[values.length - 1] || 0;
   if (current <= 0) return null;
+  // Eine absichtlich leichte Woche ist kein Befund. Weder Plateau noch
+  // Überlastung wird hier gemeldet - es gibt nichts zu melden, was nicht so
+  // geplant gewesen wäre.
+  if (Array.isArray(deloadFlags) && deloadFlags[values.length - 1]) return null;
 
-  const overloadSlice = values.slice(
-    Math.max(0, values.length - 1 - OVERLOAD_LOOKBACK),
-    values.length - 1
-  );
-  if (overloadSlice.length === OVERLOAD_LOOKBACK && historyWeeks >= OVERLOAD_LOOKBACK) {
+  const overloadSlice = weeksBefore(values, values.length - 1, OVERLOAD_LOOKBACK, deloadFlags);
+  if (overloadSlice.length >= OVERLOAD_MIN_CLEAN && historyWeeks >= OVERLOAD_LOOKBACK) {
     const withData = overloadSlice.filter((v) => v > 0).length;
     const baseline = overloadSlice.reduce((sum, v) => sum + (v || 0), 0) / overloadSlice.length;
     if (withData >= 2 && baseline > 0) {
@@ -1929,10 +1983,7 @@ export function detectLoadSignal(values, historyWeeks = Infinity) {
     }
   }
 
-  const plateauSlice = values.slice(
-    Math.max(0, values.length - 1 - PLATEAU_WEEKS),
-    values.length - 1
-  );
+  const plateauSlice = weeksBefore(values, values.length - 1, PLATEAU_WEEKS, deloadFlags);
   if (
     plateauSlice.length === PLATEAU_WEEKS &&
     historyWeeks >= PLATEAU_WEEKS &&
@@ -1998,6 +2049,262 @@ function getExerciseLoadSeries(logs, exerciseId, timeBasedExercises, weekCount =
     });
   });
   return [...weeks].reverse();
+}
+
+// ---------------------------------------------------------------------------
+// Entlastungswochen (Deload)
+//
+// Eine bewusst leichtere Woche ist keine schwache Woche. Ohne diese
+// Unterscheidung liest die App sie als Einbruch - nachgemessen an einem
+// steigenden Verlauf mit einer Entlastungswoche bei -55 % Arbeit:
+//
+//   Entlastungswoche selbst   -> "Plateau"
+//   1. bis 4. Woche danach    -> "Überlastung - im Auge behalten"
+//   ab der 5. Woche           -> wieder ruhig
+//
+// Der Grund für die vier Wochen danach ist der Vergleichs-Schnitt in
+// detectLoadSignal: Die leichte Woche zieht ihn nach unten, der ganz normale
+// Wiedereinstieg sieht dadurch aus wie ein Sprung. Bei einer Entlastung alle
+// 6-8 Wochen trüge also die Mehrheit aller Wochen ein falsches Etikett - und
+// eine Warnung, die meistens danebenliegt, wird zu Recht ignoriert.
+//
+// Deshalb gilt eine markierte Woche in allen WARNUNGEN als Lücke, nicht als
+// Tief; dieselbe Behandlung, die KONZEPT.md für ausgefallene Einheiten
+// vorsieht ("Lücken, keine Nullen"). Beschreibende Vergleiche - die
+// Zeitraum-Chips, Sparklines, Charts - zeigen sie dagegen unverändert: Die
+// Delle ist echt und soll sichtbar bleiben, sie soll nur nicht kommentiert
+// werden.
+//
+// Was die App bewusst NICHT tut: von sich aus eine Entlastungswoche
+// vorschlagen. Wann und wie oft entlastet wird, ist eine Trainingsentscheidung
+// (Regel 3). Die App zählt nur mit.
+// ---------------------------------------------------------------------------
+
+// Montag der Woche, in der dieses Datum liegt. Die Woche ist die Einheit, in
+// der eine Entlastung geplant wird - nicht der einzelne Satz und nicht das
+// einzelne Training.
+export function weekStartKey(date) {
+  const d = date instanceof Date ? date : new Date(date);
+  if (!Number.isFinite(d.getTime())) return null;
+  const offset = (d.getDay() + 6) % 7; // Montag = 0, wie im Kalender
+  return toDateKey(new Date(d.getFullYear(), d.getMonth(), d.getDate() - offset));
+}
+
+// Gegenstück zu toDateKey: "2026-09-07" zurück in ein lokales Datum. Bewusst
+// nicht new Date("2026-09-07") - das liest ISO-Daten als UTC und kippt je nach
+// Zeitzone auf den Vortag.
+export function dateFromKey(key) {
+  if (typeof key !== "string") return null;
+  const [y, m, d] = key.split("-").map(Number);
+  if (!Number.isFinite(y) || !Number.isFinite(m) || !Number.isFinite(d)) return null;
+  return new Date(y, m - 1, d);
+}
+
+// Die markierten Wochen als sortierte Liste von Montagen. Nimmt sowohl die
+// gespeicherten Objekte ({ start, guess }) als auch blanke Datums-Schlüssel
+// entgegen, damit Aufrufer nicht jedes Mal umbauen müssen.
+export function deloadStarts(deloadWeeks) {
+  const list = Array.isArray(deloadWeeks) ? deloadWeeks : [];
+  const keys = new Set();
+  list.forEach((w) => {
+    const key = typeof w === "string" ? w : w?.start;
+    if (typeof key === "string" && dateFromKey(key)) keys.add(key);
+  });
+  return [...keys].sort();
+}
+
+// Liegt dieser Tag in einer markierten Woche?
+export function isDeloadDate(date, deloadWeeks) {
+  const key = weekStartKey(date);
+  if (!key) return false;
+  return deloadStarts(deloadWeeks).includes(key);
+}
+
+// Markierungen passend zu einer Wochenreihe aus getMuscleLoadSeries
+// (alt -> neu, Position 0 ist die älteste Woche).
+//
+// Wichtig: Diese Reihen rechnen in rollierenden 7-Tage-Fenstern ab heute,
+// nicht in Kalenderwochen Montag-Sonntag. Eine markierte Woche fällt deshalb
+// fast immer in zwei dieser Fenster. Markiert wird jedes Fenster, das sich
+// mit ihr überschneidet - lieber ein Fenster zu viel überspringen als einen
+// halb verfälschten Vergleich anstellen.
+export function deloadWeekFlags(deloadWeeks, weekCount, nowTs = Date.now()) {
+  const flags = new Array(Math.max(0, weekCount)).fill(false);
+  const starts = deloadStarts(deloadWeeks);
+  if (starts.length === 0 || flags.length === 0) return flags;
+  starts.forEach((key) => {
+    const start = dateFromKey(key)?.getTime();
+    if (!Number.isFinite(start)) return;
+    const end = start + 7 * 86400000;
+    for (let i = 0; i < flags.length; i++) {
+      const bucketEnd = nowTs - (flags.length - 1 - i) * LOAD_WEEK_MS;
+      if (start < bucketEnd && end > bucketEnd - LOAD_WEEK_MS) flags[i] = true;
+    }
+  });
+  return flags;
+}
+
+// Der Vergleichszeitraum: die `count` Wochen vor `endIdx`, ohne die
+// Entlastungswochen darin. Ohne Markierungen (deloadFlags = null) ist das
+// exakt derselbe zusammenhängende Ausschnitt wie früher - für alle, die keine
+// Entlastungswochen eintragen, ändert sich also nichts.
+//
+// Wichtig ist, was hier NICHT passiert: Der Zeitraum wird nicht nach hinten
+// verlängert, um die fehlenden Wochen zu ersetzen. Ein erster Anlauf tat
+// genau das - und erzeugte damit im Test eine Überlastungs-Meldung, die es
+// ohne Markierung nicht gab: Wer stetig mehr trainiert, dessen Wochen von
+// vor zwei Monaten liegen tiefer, der Schnitt sinkt, und der normale
+// Wiedereinstieg sieht wieder wie ein Sprung aus. Die Wochen direkt vor der
+// Entlastung sind der richtige Vergleich, auch wenn es weniger sind.
+function weeksBefore(values, endIdx, count, deloadFlags) {
+  const marked = Array.isArray(deloadFlags);
+  const out = [];
+  for (let i = endIdx - 1; i >= 0 && endIdx - i <= count; i--) {
+    if (marked && deloadFlags[i]) continue;
+    out.push(values[i] || 0);
+  }
+  return out.reverse();
+}
+
+// Wo die letzte Entlastungswoche liegt und wie lange sie her ist. Eine schon
+// eingetragene, aber noch bevorstehende Woche zählt dabei nicht als "letzte" -
+// sie steht getrennt als `nextStart` daneben.
+//
+// Bewusst nur Zahlen, kein Rat: `intervalWeeks` ist der Rhythmus, den der
+// Mensch selbst eingetragen hat. Die App leitet daraus keine Empfehlung ab,
+// sie zeigt den Zählerstand (Regel 3).
+export function deloadStatus(deloadWeeks, intervalWeeks = null, nowTs = Date.now()) {
+  const starts = deloadStarts(deloadWeeks);
+  if (starts.length === 0) return null;
+  const currentKey = weekStartKey(new Date(nowTs));
+  const currentTs = dateFromKey(currentKey)?.getTime();
+  const past = starts.filter((k) => (dateFromKey(k)?.getTime() ?? Infinity) <= currentTs);
+  const future = starts.filter((k) => (dateFromKey(k)?.getTime() ?? -Infinity) > currentTs);
+  const lastStart = past.length ? past[past.length - 1] : null;
+  const nextStart = future.length ? future[0] : null;
+  const weeksBetween = (aKey, bKey) =>
+    Math.round(((dateFromKey(bKey)?.getTime() ?? 0) - (dateFromKey(aKey)?.getTime() ?? 0)) / LOAD_WEEK_MS);
+  return {
+    count: starts.length,
+    lastStart,
+    // 0 heißt: die laufende Woche ist die Entlastungswoche.
+    weeksSince: lastStart ? weeksBetween(lastStart, currentKey) : null,
+    isCurrentWeek: lastStart === currentKey,
+    nextStart,
+    weeksUntilNext: nextStart ? weeksBetween(currentKey, nextStart) : null,
+    intervalWeeks: Number.isFinite(Number(intervalWeeks)) && Number(intervalWeeks) > 0
+      ? Number(intervalWeeks)
+      : null,
+  };
+}
+
+const DELOAD_EFFECT_WEEKS = 2;        // so viele Wochen davor gegen so viele danach
+const DELOAD_EFFECT_MIN_EXERCISES = 2; // darunter ist der Vergleich ein Einzelfall
+const DELOAD_EFFECT_MIN_SESSIONS = 2;  // je Seite, sonst hängt alles an einem Tag
+const DELOAD_PATTERN_MIN = 3;          // ab so vielen Entlastungen ein Durchschnitt
+
+// Was eine einzelne Entlastungswoche gebracht hat: die zwei Wochen davor
+// gegen die zwei Wochen danach.
+//
+// Verglichen wird die Leistung JE ÜBUNG, nicht die Gesamtarbeit einer Woche.
+// Sonst würde vor allem gemessen, wie viel Zeit gerade da war: Wer nach der
+// Entlastung eine Einheit mehr schafft, hätte automatisch ein besseres
+// Ergebnis, ohne stärker geworden zu sein. Gemittelt wird über die Übungen,
+// die auf beiden Seiten vorkommen - eine Übung, die nur einmal auftaucht,
+// hätte keinen Vergleichswert.
+export function getDeloadEffect(logs, deloadStart, timeBasedExercises, nowTs = Date.now()) {
+  const start = dateFromKey(deloadStart)?.getTime();
+  if (!Number.isFinite(start)) return null;
+  const beforeFrom = start - DELOAD_EFFECT_WEEKS * LOAD_WEEK_MS;
+  const afterFrom = start + LOAD_WEEK_MS;               // die Entlastungswoche selbst zählt nicht mit
+  const afterTo = afterFrom + DELOAD_EFFECT_WEEKS * LOAD_WEEK_MS;
+  // Solange die Wochen danach noch laufen, gibt es nichts zu vergleichen.
+  if (nowTs < afterTo) return null;
+
+  const safeLogs = (Array.isArray(logs) ? logs : []).filter(Boolean);
+  const pick = (from, to) =>
+    safeLogs.filter((l) => {
+      const ts = new Date(l?.date).getTime();
+      return Number.isFinite(ts) && ts >= from && ts < to;
+    });
+  const before = pick(beforeFrom, start);
+  const after = pick(afterFrom, afterTo);
+  if (before.length < DELOAD_EFFECT_MIN_SESSIONS || after.length < DELOAD_EFFECT_MIN_SESSIONS) return null;
+
+  const modeCache = {};
+  const modeFor = (exerciseId) => {
+    if (modeCache[exerciseId]) return modeCache[exerciseId];
+    const isTime = isTimeBasedInLogs(safeLogs, exerciseId, timeBasedExercises);
+    const hasWeight = safeLogs.some((l) =>
+      performedWorkingSets(logSetsFor(l, exerciseId)).some((s) => toNum(s.weight) > 0)
+    );
+    modeCache[exerciseId] = isTime ? "time" : hasWeight ? "weight" : "reps";
+    return modeCache[exerciseId];
+  };
+
+  // Arbeit je Satz, je Übung gemittelt - dieselbe Messgröße wie in
+  // getFeelingPerformance, damit beide Karten dasselbe "Leistung" meinen.
+  const perExercise = (group) => {
+    const acc = {};
+    group.forEach((log) => {
+      const ids = [...new Set(logEntries(log).map((e) => e.exerciseId).filter(Boolean))];
+      ids.forEach((id) => {
+        const sets = performedWorkingSets(logSetsFor(log, id));
+        if (sets.length === 0) return;
+        const perSet = sets.reduce((sum, s) => sum + loadSetWork(s, modeFor(id)), 0) / sets.length;
+        if (!(perSet > 0)) return;
+        const row = acc[id] || (acc[id] = { sum: 0, n: 0 });
+        row.sum += perSet;
+        row.n += 1;
+      });
+    });
+    return acc;
+  };
+
+  const beforeBy = perExercise(before);
+  const afterBy = perExercise(after);
+  const ratios = [];
+  Object.keys(beforeBy).forEach((id) => {
+    if (!afterBy[id]) return;
+    const b = beforeBy[id].sum / beforeBy[id].n;
+    const a = afterBy[id].sum / afterBy[id].n;
+    if (b > 0 && a > 0) ratios.push(a / b);
+  });
+  if (ratios.length < DELOAD_EFFECT_MIN_EXERCISES) return null;
+
+  const meanOf = (list) => list.reduce((sum, v) => sum + v, 0) / list.length;
+  const feelingsOf = (group) =>
+    group.map((l) => Number(l.feeling)).filter((v) => Number.isFinite(v));
+  const feelBefore = feelingsOf(before);
+  const feelAfter = feelingsOf(after);
+
+  return {
+    start: deloadStart,
+    exercises: ratios.length,
+    sessionsBefore: before.length,
+    sessionsAfter: after.length,
+    performanceChange: (meanOf(ratios) - 1) * 100,
+    // Das Gefühl bleibt optional: Wer es nicht einträgt, bekommt trotzdem
+    // den Leistungsvergleich.
+    feelingBefore: feelBefore.length ? meanOf(feelBefore) : null,
+    feelingAfter: feelAfter.length ? meanOf(feelAfter) : null,
+  };
+}
+
+// Alle auswertbaren Entlastungswochen, neueste zuerst, plus der Durchschnitt -
+// letzterer erst ab DELOAD_PATTERN_MIN Entlastungen. Bei einer Entlastung alle
+// 6-8 Wochen sind das rund sieben Datenpunkte im Jahr; eine Zahl aus einem
+// einzigen Vorgang wäre eine Behauptung, kein Muster.
+export function getDeloadEffects(logs, deloadWeeks, timeBasedExercises, nowTs = Date.now()) {
+  const results = deloadStarts(deloadWeeks)
+    .map((start) => getDeloadEffect(logs, start, timeBasedExercises, nowTs))
+    .filter(Boolean)
+    .reverse();
+  const pattern =
+    results.length >= DELOAD_PATTERN_MIN
+      ? results.reduce((sum, r) => sum + r.performanceChange, 0) / results.length
+      : null;
+  return { results, pattern, patternMin: DELOAD_PATTERN_MIN };
 }
 
 const EQUIPMENT_OPTIONS = ["Langhantel", "Kurzhanteln", "Kabelzug", "Maschine", "Kettlebell", "Gewichtsscheibe", "Körpergewicht", "Band", "Sonstiges"];
@@ -2094,6 +2401,8 @@ const BACKUP_KEYS = [
   "app-theme",
   "active-workout",
   "collapsed-folders",
+  "deload-weeks",
+  "deload-interval",
 ];
 
 async function buildBackup() {
@@ -2327,6 +2636,12 @@ function TrainingAppInner() {
   const [activeProgramId, setActiveProgramId] = useState(null);
   const [calendarEntries, setCalendarEntries] = useState([]);
   const [calendarCategories, setCalendarCategories] = useState([]);
+  // Entlastungswochen: je Eintrag der Montag der Woche und - sobald abgegeben -
+  // die eigene Schätzung, wie sie gewirkt hat (Regel 1: erst schätzen, dann
+  // Zahlen). deloadInterval ist der selbst eingetragene Rhythmus in Wochen;
+  // null heißt "kein fester Rhythmus", dann steht nur der Zählerstand da.
+  const [deloadWeeks, setDeloadWeeks] = useState([]);
+  const [deloadInterval, setDeloadInterval] = useState(null);
   const [exerciseNotes, setExerciseNotes] = useState({});
   const [exerciseNameOverrides, setExerciseNameOverrides] = useState({});
   const [exerciseSubgroupOverrides, setExerciseSubgroupOverrides] = useState({});
@@ -2385,7 +2700,7 @@ function TrainingAppInner() {
 
   useEffect(() => {
     (async () => {
-      const [p, l, c, f, en, no, tb, gi, active, prog, activeProg, sg, ce, cc, eq, th, gy, activeGy, restEnd, brEx, brLogs] = await Promise.all([
+      const [p, l, c, f, en, no, tb, gi, active, prog, activeProg, sg, ce, cc, eq, th, gy, activeGy, restEnd, brEx, brLogs, dw, di] = await Promise.all([
         loadJSON("training-plans", []),
         loadJSON("workout-logs", []),
         loadJSON("custom-exercises", []),
@@ -2407,6 +2722,8 @@ function TrainingAppInner() {
         loadJSON("rest-timer", 0),
         loadJSON("breathing-exercises", []),
         loadJSON("breathing-logs", []),
+        loadJSON("deload-weeks", []),
+        loadJSON("deload-interval", null),
       ]);
       // Migration: users who already had folders before "programs" existed
       // get one default program that all their existing folders are
@@ -2449,6 +2766,8 @@ function TrainingAppInner() {
       setActiveProgramId(resolvedActiveProgramId);
       setCalendarEntries(ce);
       setCalendarCategories(cc);
+      setDeloadWeeks(Array.isArray(dw) ? dw : []);
+      setDeloadInterval(Number.isFinite(Number(di)) && Number(di) > 0 ? Number(di) : null);
       setGyms(gy);
       setActiveGymId(activeGy && gy.some((g) => g.id === activeGy) ? activeGy : gy[0]?.id || null);
       setExerciseEquipmentOverrides(eq);
@@ -2536,6 +2855,41 @@ function TrainingAppInner() {
   const persistCalendarEntries = async (next) => {
     setCalendarEntries(next);
     await saveJSON("calendar-entries", next);
+  };
+  const persistDeloadWeeks = async (next) => {
+    setDeloadWeeks(next);
+    await saveJSON("deload-weeks", next);
+  };
+  // Eine Woche als Entlastungswoche an- oder abwählen. Der Montag ist der
+  // Schlüssel, egal welchen Tag der Woche man antippt.
+  const toggleDeloadWeek = async (date) => {
+    const key = weekStartKey(date);
+    if (!key) return;
+    const existing = deloadWeeks.find((w) => (typeof w === "string" ? w : w?.start) === key);
+    if (existing) {
+      await persistDeloadWeeks(
+        deloadWeeks.filter((w) => (typeof w === "string" ? w : w?.start) !== key)
+      );
+      showToast("Entlastungswoche entfernt");
+    } else {
+      await persistDeloadWeeks([...deloadWeeks, { id: uid(), start: key, guess: null }]);
+      showToast("Als Entlastungswoche markiert");
+    }
+  };
+  // Die eigene Schätzung zu einer Entlastungswoche, bevor die Zahlen dazu
+  // sichtbar werden.
+  const setDeloadGuess = async (start, guess) => {
+    await persistDeloadWeeks(
+      deloadWeeks.map((w) => {
+        const key = typeof w === "string" ? w : w?.start;
+        if (key !== start) return w;
+        return { id: w?.id || uid(), start: key, guess };
+      })
+    );
+  };
+  const persistDeloadInterval = async (next) => {
+    setDeloadInterval(next);
+    await saveJSON("deload-interval", next);
   };
   const persistGyms = async (next) => {
     setGyms(next);
@@ -5174,6 +5528,69 @@ function TrainingAppInner() {
           grid-template-columns: repeat(7, 1fr);
           gap: 3px;
         }
+        /* Entlastungswoche: eine ruhige Bank hinter der ganzen Zeile.
+           Bewusst neutral gehalten - Rot und Gelb gehoeren den
+           Belastungssignalen, eine geplante Woche ist keine Warnung. */
+        .cal-week-row.is-deload-week {
+          background: var(--fill);
+          border-radius: 8px;
+        }
+        .deload-toggle {
+          display: flex;
+          align-items: center;
+          gap: 7px;
+          margin-top: 10px;
+          padding: 7px 11px;
+          border-radius: 999px;
+          background: var(--fill);
+          color: var(--text-dim);
+          font-size: 12.5px;
+          cursor: pointer;
+          user-select: none;
+        }
+        .deload-toggle.is-active {
+          background: var(--accent);
+          color: #fff;
+        }
+        .deload-toggle span { flex: 1; }
+        .deload-status {
+          font-size: 13px;
+          line-height: 1.5;
+          color: var(--text);
+          margin-top: 10px;
+        }
+        .deload-effect {
+          padding-bottom: 12px;
+          margin-bottom: 12px;
+          border-bottom: 1px solid var(--border);
+        }
+        .deload-effect:last-of-type {
+          padding-bottom: 0;
+          margin-bottom: 0;
+          border-bottom: none;
+        }
+        .deload-effect-title {
+          font-size: 12px;
+          color: var(--text-dim);
+          letter-spacing: 0.2px;
+        }
+        .deload-effect-value {
+          font-size: 13.5px;
+          color: var(--text);
+          margin-top: 4px;
+        }
+        .deload-question {
+          font-size: 13px;
+          line-height: 1.5;
+          color: var(--text);
+          margin: 6px 0 0;
+        }
+        .deload-basis {
+          font-size: 12px;
+          line-height: 1.5;
+          color: var(--text-dim);
+          margin: 5px 0 0;
+        }
         .cal-day {
           background: transparent;
           border: none;
@@ -5643,6 +6060,7 @@ function TrainingAppInner() {
             exerciseSubgroupOverrides={exerciseSubgroupOverrides}
             timeBasedExercises={timeBasedExercises}
             gymIndependentExercises={gymIndependentExercises}
+            deloadWeeks={deloadWeeks}
             onStartWorkout={(plan, entryId) => startScheduledWorkout(plan, entryId)}
             onStartBreathing={(exercise, entryId) => startBreathingSession(exercise, entryId)}
             onOpenProgress={() => setTab("progress")}
@@ -5670,6 +6088,8 @@ function TrainingAppInner() {
             breathingLogs={breathingLogs}
             onScheduleBreathing={scheduleCalendarBreathing}
             onStartScheduledBreathing={startBreathingSession}
+            deloadWeeks={deloadWeeks}
+            onToggleDeloadWeek={toggleDeloadWeek}
           />
         ) : tab === "exercises" ? (
           <ExercisesView
@@ -5837,6 +6257,10 @@ function TrainingAppInner() {
             onToggleGymIndependent={handleToggleGymIndependent}
             breathingExercises={breathingExercises}
             breathingLogs={breathingLogs}
+            deloadWeeks={deloadWeeks}
+            deloadInterval={deloadInterval}
+            onSetDeloadInterval={persistDeloadInterval}
+            onSetDeloadGuess={setDeloadGuess}
           />
         )}
         </div>
@@ -6352,6 +6776,7 @@ function DashboardView({
   exerciseSubgroupOverrides,
   timeBasedExercises,
   gymIndependentExercises,
+  deloadWeeks = [],
   onStartWorkout,
   onStartBreathing,
   onOpenProgress,
@@ -6380,21 +6805,29 @@ function DashboardView({
     [logs, exBy, exerciseSubgroupOverrides, timeBasedExercises, loadHistoryWeeks]
   );
 
+  // Entlastungswochen zählen in den Warnungen als Lücke, nicht als Tief -
+  // siehe den Block bei deloadWeekFlags. Ohne markierte Wochen sind die
+  // Flags durchgehend false und alles rechnet wie zuvor.
+  const deloadFlags = useMemo(
+    () => deloadWeekFlags(deloadWeeks, loadSeries[0]?.values?.length || 0),
+    [deloadWeeks, loadSeries]
+  );
+
   const signals = useMemo(
     () => loadSeries
       .map((g) => ({
         id: g.id,
         label: g.label,
-        signal: detectLoadSignal(g.values, loadHistoryWeeks),
-        change: muscleLoadChange(g.values, 4, loadHistoryWeeks),
+        signal: detectLoadSignal(g.values, loadHistoryWeeks, deloadFlags),
+        change: muscleLoadChange(g.values, 4, loadHistoryWeeks, deloadFlags),
       }))
       .filter((g) => g.signal),
-    [loadSeries, loadHistoryWeeks]
+    [loadSeries, loadHistoryWeeks, deloadFlags]
   );
 
   const fatigueWarning = useMemo(
-    () => getFatigueWarning(logs, loadSeries),
-    [logs, loadSeries]
+    () => getFatigueWarning(logs, loadSeries, Date.now(), deloadWeeks),
+    [logs, loadSeries, deloadWeeks]
   );
 
   const lastLog = useMemo(() => {
@@ -6443,6 +6876,10 @@ function DashboardView({
     const volume = volumeOf(thisWeek);
     const prevVolume = volumeOf(lastWeek);
     const volumeChange = prevVolume > 0 ? Math.round(((volume - prevVolume) / prevVolume) * 100) : null;
+    // War die Vorwoche eine Entlastungswoche, wird die Zahl nicht versteckt,
+    // sondern beschriftet: "+184 % ggü. Vorwoche" ist zwar richtig, sagt aber
+    // ohne diesen Zusatz das Gegenteil von dem, was passiert ist.
+    const prevWasDeload = lastWeek.some((l) => isDeloadDate(new Date(l?.date), deloadWeeks));
 
     const daysSince = lastLog
       ? Math.max(0, Math.floor((now - new Date(lastLog.date).getTime()) / 86400000))
@@ -6470,8 +6907,8 @@ function DashboardView({
       }
     });
 
-    return { daysSince, count: thisWeek.length, volume, volumeChange, neglected };
-  }, [logs, exBy, lastLog]);
+    return { daysSince, count: thisWeek.length, volume, volumeChange, prevWasDeload, neglected };
+  }, [logs, exBy, lastLog, deloadWeeks]);
 
   const planById = useMemo(() => {
     const map = {};
@@ -6573,7 +7010,10 @@ function DashboardView({
             <span className="stat-label">
               kg Volumen
               {tiles.volumeChange != null && (
-                <> · {tiles.volumeChange > 0 ? "+" : ""}{tiles.volumeChange} % ggü. Vorwoche</>
+                <>
+                  {" "}· {tiles.volumeChange > 0 ? "+" : ""}{tiles.volumeChange} % ggü.{" "}
+                  {tiles.prevWasDeload ? "Entlastungswoche" : "Vorwoche"}
+                </>
               )}
             </span>
           </div>
@@ -6671,6 +7111,8 @@ function CalendarView({
   breathingLogs = [],
   onScheduleBreathing,
   onStartScheduledBreathing,
+  deloadWeeks = [],
+  onToggleDeloadWeek,
 }) {
   const today = new Date();
   const [viewYear, setViewYear] = useState(today.getFullYear());
@@ -6768,6 +7210,7 @@ function CalendarView({
     (l) => !planned.some((e) => e.logId === l.id)
   );
   const selectedEntries = planned;
+  const selectedIsDeload = isDeloadDate(dateFromKey(selectedDate), deloadWeeks);
 
   const handleAddAction = () => {
     const trimmed = newActionText.trim();
@@ -6896,8 +7339,12 @@ function CalendarView({
       <div className="cal-grid">
         {monthMatrix.map((week, wi) => {
           const isCurrentWeek = week.some((d) => toDateKey(d) === todayKey);
+          const isDeloadWeek = isDeloadDate(week[0], deloadWeeks);
           return (
-            <div className={`cal-week-row ${isCurrentWeek ? "is-current-week" : ""}`} key={wi}>
+            <div
+              className={`cal-week-row ${isCurrentWeek ? "is-current-week" : ""} ${isDeloadWeek ? "is-deload-week" : ""}`}
+              key={wi}
+            >
               {week.map((d) => {
                 const key = toDateKey(d);
                 const inMonth = d.getMonth() === viewMonth;
@@ -6992,6 +7439,22 @@ function CalendarView({
           <button className="btn-icon" onClick={() => setAddOpen((s) => !s)} title="Eintrag hinzufügen">
             <Plus size={16} />
           </button>
+        </div>
+
+        {/* Die Entlastungswoche gehört zum Tag darüber, weil man sie hier
+            plant: Woche antippen, fertig. Sie lässt sich vorher setzen (man
+            plant sie ja) und nachträglich (falls man es vergisst). Was sie
+            bewirkt, steht in der Statistik - siehe KONZEPT.md. */}
+        <div
+          className={`deload-toggle ${selectedIsDeload ? "is-active" : ""}`}
+          onClick={() => onToggleDeloadWeek?.(dateFromKey(selectedDate))}
+          title="Diese Kalenderwoche als Entlastungswoche markieren"
+        >
+          <BatteryLow size={14} />
+          <span>
+            {selectedIsDeload ? "Entlastungswoche" : "Als Entlastungswoche markieren"}
+          </span>
+          {selectedIsDeload && <Check size={14} />}
         </div>
 
         {selectedEntries.length === 0 && selectedLogs.length === 0 && !addOpen && (
@@ -13474,6 +13937,10 @@ function ProgressView({
   onFocusHandled,
   breathingExercises = [],
   breathingLogs = [],
+  deloadWeeks = [],
+  deloadInterval = null,
+  onSetDeloadInterval,
+  onSetDeloadGuess,
 }) {
   const [progressTab, setProgressTab] = useState(focusLogId ? "history" : "stats");
   useEffect(() => {
@@ -13533,10 +14000,24 @@ function ProgressView({
 
   const stats = useMemo(() => calculateTrainingStats(logs, exBy, timeBasedExercises), [logs, exBy, timeBasedExercises]);
   const feelingPerformance = useMemo(
-    () => getFeelingPerformance(logs, timeBasedExercises),
-    [logs, timeBasedExercises]
+    () => getFeelingPerformance(logs, timeBasedExercises, deloadWeeks),
+    [logs, timeBasedExercises, deloadWeeks]
   );
   const calibration = useMemo(() => getCalibration(logs), [logs]);
+  const deloadInfo = useMemo(
+    () => deloadStatus(deloadWeeks, deloadInterval),
+    [deloadWeeks, deloadInterval]
+  );
+  const deloadEffects = useMemo(
+    () => getDeloadEffects(logs, deloadWeeks, timeBasedExercises),
+    [logs, deloadWeeks, timeBasedExercises]
+  );
+  const deloadGuessOf = (start) => {
+    const found = (Array.isArray(deloadWeeks) ? deloadWeeks : []).find(
+      (w) => (typeof w === "string" ? w : w?.start) === start
+    );
+    return typeof found === "string" ? null : found?.guess || null;
+  };
 
   // Folders can be marked "ohne Statistik" (e.g. EMOM/Conditioning) so their
   // sets don't dilute "Sätze pro Muskelgruppe" - that card is deliberately a
@@ -13625,6 +14106,12 @@ function ProgressView({
     () => getMuscleLoadSeries(logs, exBy, exerciseSubgroupOverrides, timeBasedExercises, muscleSeriesWeekCount(loadHistoryWeeks)),
     [logs, exBy, exerciseSubgroupOverrides, timeBasedExercises, loadHistoryWeeks]
   );
+  // Entlastungswochen als Lücke behandeln - aber nur in den Warnzeichen,
+  // nicht in den frei gewählten Zeitraum-Vergleichen (siehe muscleLoadChange).
+  const loadDeloadFlags = useMemo(
+    () => deloadWeekFlags(deloadWeeks, muscleLoadSeries[0]?.values?.length || 0),
+    [deloadWeeks, muscleLoadSeries]
+  );
   const [loadCompareWeeks, setLoadCompareWeeks] = useState(1);
   const [expandedLoadGroups, setExpandedLoadGroups] = useState({});
   const toggleLoadGroupExpanded = (id) =>
@@ -13636,12 +14123,20 @@ function ProgressView({
     if (!loadChartGroup) return [];
     const zoomed = compareWindowSeries(loadChartGroup.values, loadCompareWeeks);
     const weekCount = zoomed.length;
+    // Der Ausschnitt beginnt weiter hinten in der vollen Reihe - ohne diesen
+    // Versatz läge die Markierung bei jedem anderen Zeitraum auf der
+    // falschen Woche.
+    const offset = loadChartGroup.values.length - weekCount;
     return zoomed.map((v, i) => {
       const weeksAgo = weekCount - 1 - i;
       const ts = Date.now() - weeksAgo * LOAD_WEEK_MS;
-      return { date: fmtDate(new Date(ts).toISOString()), load: v };
+      return {
+        date: fmtDate(new Date(ts).toISOString()),
+        load: v,
+        deload: !!loadDeloadFlags[offset + i],
+      };
     });
-  }, [loadChartGroup, loadCompareWeeks]);
+  }, [loadChartGroup, loadCompareWeeks, loadDeloadFlags]);
 
   // Plateau-/Überlastungs-Signal für die aktuell aufgeklappte Einzelübung
   // (siehe detectLoadSignal). Eigene, übungsspezifische Historienlänge statt
@@ -13663,8 +14158,12 @@ function ProgressView({
     return Math.max(0, Math.floor((Date.now() - oldest) / LOAD_WEEK_MS));
   }, [selected, logs]);
   const selectedExerciseSignal = useMemo(
-    () => detectLoadSignal(selectedExerciseSeries, selectedExerciseHistoryWeeks),
-    [selectedExerciseSeries, selectedExerciseHistoryWeeks]
+    () => detectLoadSignal(
+      selectedExerciseSeries,
+      selectedExerciseHistoryWeeks,
+      deloadWeekFlags(deloadWeeks, selectedExerciseSeries.length)
+    ),
+    [selectedExerciseSeries, selectedExerciseHistoryWeeks, deloadWeeks]
   );
 
   // Both of these (like the empty-state bail below) must come after every
@@ -13861,7 +14360,7 @@ function ProgressView({
                     <span className="muscle-week-label">{g.label}</span>
                     <Sparkline values={compareWindowSeries(g.values, loadCompareWeeks)} />
                     <LoadChangeBadge change={change} />
-                    <LoadSignalBadge signal={detectLoadSignal(g.values, loadHistoryWeeks)} />
+                    <LoadSignalBadge signal={detectLoadSignal(g.values, loadHistoryWeeks, loadDeloadFlags)} />
                     <span
                       className="muscle-week-chevron"
                       onClick={(e) => { e.stopPropagation(); toggleLoadGroupExpanded(g.id); }}
@@ -13880,7 +14379,7 @@ function ProgressView({
                           <span className="muscle-week-label">{sg.label}</span>
                           <Sparkline values={compareWindowSeries(sg.values, loadCompareWeeks)} />
                           <LoadChangeBadge change={muscleLoadChange(sg.values, loadCompareWeeks, loadHistoryWeeks)} />
-                          <LoadSignalBadge signal={detectLoadSignal(sg.values, loadHistoryWeeks)} />
+                          <LoadSignalBadge signal={detectLoadSignal(sg.values, loadHistoryWeeks, loadDeloadFlags)} />
                         </div>
                       ))}
                     </div>
@@ -13888,6 +14387,136 @@ function ProgressView({
                 </div>
               );
             })}
+          </div>
+        )}
+      </div>
+
+      {/* Entlastungswochen. Die Karte ist bewusst eine Zähl- und
+          Vergleichskarte, keine Empfehlung: Der Rhythmus ist die Zahl, die
+          der Mensch selbst eingetragen hat, und die Auswertung steht erst
+          nach der eigenen Schätzung da (KONZEPT.md, Regeln 1 und 3). */}
+      <div className="card">
+        <ExplainableTitle onExplain={() => setExplain(STAT_EXPLANATIONS.deload)}>
+          Entlastungswochen
+        </ExplainableTitle>
+
+        {!deloadInfo ? (
+          <div className="empty-state" style={{ padding: "12px 0 4px" }}>
+            Noch keine Entlastungswoche markiert. Im Kalender einen Tag der
+            Woche antippen und „Als Entlastungswoche markieren" wählen.
+          </div>
+        ) : (
+          <div className="deload-status">
+            {deloadInfo.isCurrentWeek
+              ? "Diese Woche ist eine Entlastungswoche."
+              : deloadInfo.weeksSince == null
+              ? "Noch keine Entlastungswoche absolviert."
+              : deloadInfo.weeksSince === 0
+              ? "Letzte Entlastungswoche: diese Woche."
+              : `Letzte Entlastungswoche: vor ${deloadInfo.weeksSince} ${
+                  deloadInfo.weeksSince === 1 ? "Woche" : "Wochen"
+                }${deloadInfo.intervalWeeks ? ` von ${deloadInfo.intervalWeeks}` : ""}.`}
+            {deloadInfo.nextStart && (
+              <>
+                {" "}
+                Nächste geplant ab {fmtDate(dateFromKey(deloadInfo.nextStart))}
+                {deloadInfo.weeksUntilNext > 0
+                  ? ` (in ${deloadInfo.weeksUntilNext} ${deloadInfo.weeksUntilNext === 1 ? "Woche" : "Wochen"})`
+                  : ""}
+                .
+              </>
+            )}
+          </div>
+        )}
+
+        <label className="field-label" style={{ marginTop: 12, display: "block" }}>
+          Dein Rhythmus
+        </label>
+        <div className="chip-row chip-row-wrap" style={{ marginTop: 8, marginBottom: 0 }}>
+          {[[6, "alle 6 Wochen"], [7, "alle 7 Wochen"], [8, "alle 8 Wochen"], [null, "kein fester"]].map(
+            ([value, label]) => (
+              <span
+                key={label}
+                className={`chip chip-sm ${deloadInterval === value ? "active" : ""}`}
+                onClick={() => onSetDeloadInterval?.(value)}
+              >
+                {label}
+              </span>
+            )
+          )}
+        </div>
+
+        {deloadEffects.results.length === 0 ? (
+          deloadInfo && (
+            <p className="deload-basis" style={{ marginTop: 12 }}>
+              Der Vergleich „zwei Wochen davor gegen zwei Wochen danach"
+              erscheint hier, sobald die zwei Wochen nach einer
+              Entlastungswoche vorbei sind und in beiden Zeiträumen genug
+              trainiert wurde.
+            </p>
+          )
+        ) : (
+          <div style={{ marginTop: 14, paddingTop: 12, borderTop: "1px solid var(--border)" }}>
+            {deloadEffects.results.map((r) => {
+              const guess = deloadGuessOf(r.start);
+              // Totzone, damit ein Prozent Rauschen nicht als "besser" oder
+              // "schlechter" verkauft wird.
+              const gemessen =
+                r.performanceChange > 2 ? "besser" : r.performanceChange < -2 ? "schlechter" : "gleich";
+              return (
+                <div className="deload-effect" key={r.start}>
+                  <div className="deload-effect-title">
+                    Entlastungswoche ab {fmtDate(dateFromKey(r.start))}
+                  </div>
+                  {!guess ? (
+                    <>
+                      <p className="deload-question">
+                        Wie liefen die zwei Wochen danach im Vergleich zu den zwei
+                        Wochen davor? Erst schätzen, dann zeigt die App ihre Zahlen.
+                      </p>
+                      <div className="chip-row chip-row-wrap" style={{ marginTop: 8, marginBottom: 0 }}>
+                        {["besser", "gleich", "schlechter"].map((option) => (
+                          <span
+                            key={option}
+                            className="chip chip-sm"
+                            onClick={() => onSetDeloadGuess?.(r.start, option)}
+                          >
+                            {option.charAt(0).toUpperCase() + option.slice(1)}
+                          </span>
+                        ))}
+                      </div>
+                    </>
+                  ) : (
+                    <>
+                      <div className="deload-effect-value">
+                        Leistung je Satz {r.performanceChange >= 0 ? "+" : "−"}
+                        {fmtDecimal(Math.abs(Math.round(r.performanceChange * 10) / 10))} %
+                        {r.feelingBefore != null && r.feelingAfter != null && (
+                          <>
+                            {" · Gefühl "}
+                            {fmtDecimal(Math.round(r.feelingAfter * 10) / 10)} statt{" "}
+                            {fmtDecimal(Math.round(r.feelingBefore * 10) / 10)}
+                          </>
+                        )}
+                      </div>
+                      <div className="deload-basis">
+                        Aus {r.sessionsBefore} Trainings davor und {r.sessionsAfter} danach,
+                        {" "}{r.exercises} {r.exercises === 1 ? "Übung" : "Übungen"} verglichen.
+                        {" "}Du hattest „{guess}" geschätzt –{" "}
+                        {guess === gemessen ? "das passt." : `gemessen: ${gemessen}.`}
+                      </div>
+                    </>
+                  )}
+                </div>
+              );
+            })}
+            <p className="deload-basis" style={{ marginTop: 10 }}>
+              {deloadEffects.pattern != null
+                ? `Über ${deloadEffects.results.length} ausgewertete Entlastungen im Schnitt ${
+                    deloadEffects.pattern >= 0 ? "+" : "−"
+                  }${fmtDecimal(Math.abs(Math.round(deloadEffects.pattern * 10) / 10))} %.`
+                : `Ein Schnitt über mehrere Entlastungen erscheint ab ${deloadEffects.patternMin} ausgewerteten – bisher ${deloadEffects.results.length}.`}
+            </p>
           </div>
         )}
       </div>
@@ -14213,19 +14842,48 @@ function ProgressView({
                     borderRadius: 10,
                     fontSize: 12,
                   }}
-                  formatter={(v) => [`${(Math.round(v * 100) / 100).toLocaleString("de-DE")}`, "Relative Belastung"]}
+                  formatter={(v, _name, item) => [
+                    `${(Math.round(v * 100) / 100).toLocaleString("de-DE")}${
+                      item?.payload?.deload ? " · Entlastungswoche" : ""
+                    }`,
+                    "Relative Belastung",
+                  ]}
                 />
                 <Line
                   type="monotone"
                   dataKey="load"
                   stroke={chartColors.series.accent}
                   strokeWidth={2.5}
-                  dot={{ r: 3, fill: chartColors.series.accent, strokeWidth: 0 }}
+                  // Entlastungswochen bekommen einen hohlen Punkt: Die Delle
+                  // bleibt sichtbar, sie ist nur als geplant gekennzeichnet.
+                  dot={(dotProps) => {
+                    const { cx, cy, index, payload } = dotProps;
+                    if (!Number.isFinite(cx) || !Number.isFinite(cy)) return null;
+                    return payload?.deload ? (
+                      <circle
+                        key={index}
+                        cx={cx}
+                        cy={cy}
+                        r={4}
+                        fill={chartColors.tooltipBg}
+                        stroke={chartColors.series.accent}
+                        strokeWidth={2}
+                      />
+                    ) : (
+                      <circle key={index} cx={cx} cy={cy} r={3} fill={chartColors.series.accent} />
+                    );
+                  }}
                   activeDot={{ r: 5 }}
                 />
               </LineChart>
             </ResponsiveContainer>
           </div>
+          {loadChartGroupData.some((d) => d.deload) && (
+            <p className="deload-basis" style={{ marginTop: 6 }}>
+              Hohle Punkte sind Entlastungswochen – absichtlich leichter, deshalb
+              ohne Warnzeichen.
+            </p>
+          )}
         </Modal>
       )}
     </div>

@@ -799,10 +799,16 @@ const TYPICAL_RIR_MIN_SESSIONS = 3;
 //    höhere Werte, ohne dass sich etwas geändert hätte.
 // 2. Ohne Angabe bleibt der Faktor exakt 1. Eine Woche ohne RIR-Eingaben
 //    sieht damit aus wie vorher - fehlende Daten verschieben nichts.
-// 3. Der Faktor wirkt auf die ganze Übung einer Einheit, nicht auf einzelne
-//    Sätze. Die Angabe beschreibt den letzten Satz; sie auf jeden Satz
-//    einzeln anzuwenden wäre dieselbe Fehlzuordnung, die bei den Rekorden
-//    schon einmal drinsteckte.
+// 3. Gewichtet wird ausschließlich die Arbeit des LETZTEN abgehakten
+//    Arbeitssatzes - nur für ihn liegt die Angabe vor. Ein erster Versuch
+//    multiplizierte die Summe der ganzen Übung mit dem Faktor, mit der
+//    Begründung, das sei etwas anderes als eine Gewichtung je Satz. Das war
+//    schlicht falsch: f × (a+b+c) ist dasselbe wie f·a + f·b + f·c. Damit
+//    wären auch die früheren Sätze mitgewichtet worden, für die es keine
+//    Angabe gibt - dieselbe Fehlzuordnung, die bei den Rekorden schon einmal
+//    drinsteckte. Der Preis dieser Ehrlichkeit: Bei drei Sätzen bleibt rund
+//    ein Drittel der Wirkung übrig, und je mehr Sätze, desto weniger. Das ist
+//    die Folge davon, dass genau ein Satz je Übung erfasst wird.
 //
 // Die Schrittweite kommt aus der Faustregel, dass eine Wiederholung grob
 // 2,5-3 % des 1RM entspricht: Eine Stufe näher am Limit ist ungefähr so viel
@@ -1502,12 +1508,12 @@ const STAT_EXPLANATIONS = {
       "Kilogramm allein taugen dafür nicht: Wer von der Langhantel auf Kurzhanteln wechselt, bewegt bei gleicher Anstrengung viel weniger Kilogramm - die Kurve würde einen Rückschritt zeigen, den es nie gab. Reine Satzzahlen taugen auch nicht: Wer bei gleicher Satzzahl schwerer wird, sähe davon nichts.",
       "Deshalb wird jeder Satz an deinem eigenen besten Satz in genau dieser Übung gemessen: \"Wie viel von meinem Bestwert war das?\" Ein Satz auf Bestniveau zählt 1,0. Ein Kurzhantel-Satz mit 22 kg ist damit genauso viel wert wie ein Langhantel-Satz mit 60 kg, wenn beide gleich nah am jeweiligen persönlichen Bestwert liegen.",
       "Ein neuer Rekord verfälscht die Vergangenheit dabei nicht - er wird auf alle Wochen gleich angewendet und kürzt sich beim Prozentvergleich wieder heraus.",
-      "Zusätzlich zählt, wie hart du eine Übung an dem Tag beendet hast: Dieselbe Tonnage ist nicht dieselbe Belastung, wenn sie einmal am Limit und einmal mit vier Wiederholungen in Reserve zustande kam. Verglichen wird dabei mit deiner eigenen üblichen Reserve für genau diese Übung - hast du keine angegeben, ändert sich nichts.",
+      "Zusätzlich zählt, wie hart du den letzten Satz einer Übung beendet hast: Derselbe Satz ist nicht dieselbe Belastung, wenn er einmal am Limit und einmal mit vier Wiederholungen in Reserve endete. Gewichtet wird nur dieser eine Satz, denn nur für ihn gibt es die Angabe - die früheren Sätze bleiben unangetastet. Verglichen wird mit deiner eigenen üblichen Reserve für genau diese Übung; ohne Angabe ändert sich nichts.",
       "Die Warnzeichen rechts kommen aus derselben Reihe: ein Hinweis, wenn die aktuelle Woche mehr als 15 % über dem Schnitt der 4 Wochen davor liegt, ein deutlicher Alarm ab 30 %, und ein Plateau-Zeichen, wenn seit 3 Wochen kein neuer Höchstwert mehr dazugekommen ist. Das sind Fragen, keine Urteile - wie es sich anfühlt, weißt nur du.",
     ],
     formula: [
       "Wert eines Satzes = (kg × Wdh.) ÷ bester Satz dieser Übung. Bei Übungen ohne Gewicht zählen die Wiederholungen, bei Zeit-Übungen die Sekunden.",
-      "Reserve-Gewichtung = je Stufe RIR unter deinem Üblichen 3 % mehr, je Stufe darüber 3 % weniger, höchstens 12 % in beide Richtungen. Ohne RIR-Angabe: keine Änderung.",
+      "Reserve-Gewichtung = nur auf den letzten abgehakten Arbeitssatz: je Stufe RIR unter deinem Üblichen 3 % mehr, je Stufe darüber 3 % weniger, höchstens 12 % in beide Richtungen. Ohne RIR-Angabe: keine Änderung.",
       "Wochenwert = Summe aller Satzwerte der Muskelgruppe in einem 7-Tage-Fenster. Dropsätze zählen hier voll mit.",
       "Änderung = (diese Woche − Schnitt der gewählten Wochen davor) ÷ Schnitt × 100.",
     ],
@@ -1639,15 +1645,17 @@ function getMuscleLoadSeries(
       const reference = best[e.exerciseId] || 0;
       if (reference <= 0) return; // ohne Bestwert kein Maßstab
       const mode = modeOf(e.exerciseId);
+      // Nur der letzte abgehakte Arbeitssatz trägt die Reserve-Gewichtung -
+      // für die übrigen liegt keine Angabe vor (siehe rirLoadFactor).
+      const performed = performedWorkingSets(entrySets(e));
+      const lastPerformed = performed[performed.length - 1] || null;
+      const rirFactor = rirLoadFactor(e.rir, typicalRirs[e.exerciseId]);
       let score = 0;
-      entrySets(e).forEach((s) => {
-        if (!s.done || s.warmup) return;
-        score += loadSetWork(s, mode) / reference;
+      performed.forEach((s) => {
+        const work = loadSetWork(s, mode) / reference;
+        score += s === lastPerformed ? work * rirFactor : work;
       });
       if (score === 0) return;
-      // Wie hart die Übung an diesem Tag beendet wurde, verglichen mit dem
-      // eigenen Üblichen. Ohne Angabe ist der Faktor 1 und ändert nichts.
-      score *= rirLoadFactor(e.rir, typicalRirs[e.exerciseId]);
       if (!groupWeeks[ex.group]) groupWeeks[ex.group] = emptyWeeks();
       groupWeeks[ex.group][idx] += score;
       // Gleiche Regel wie bei den Sätzen: ohne zugewiesene Untergruppe läuft
@@ -1910,12 +1918,13 @@ function getExerciseLoadSeries(logs, exerciseId, timeBasedExercises, weekCount =
     if (idx >= weekCount) return;
     logEntries(l).forEach((e) => {
       if (e.exerciseId !== exerciseId) return;
-      let score = 0;
-      entrySets(e).forEach((s) => {
-        if (!s.done || s.warmup) return;
-        score += loadSetWork(s, mode) / best;
+      const performed = performedWorkingSets(entrySets(e));
+      const lastPerformed = performed[performed.length - 1] || null;
+      const rirFactor = rirLoadFactor(e.rir, typicalHere);
+      performed.forEach((s) => {
+        const work = loadSetWork(s, mode) / best;
+        weeks[idx] += s === lastPerformed ? work * rirFactor : work;
       });
-      weeks[idx] += score * rirLoadFactor(e.rir, typicalHere);
     });
   });
   return [...weeks].reverse();

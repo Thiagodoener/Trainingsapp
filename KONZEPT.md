@@ -308,6 +308,21 @@ Chart-Liste weiter unten auf der Seite. Sichtbar wurde davon nichts: Das Fenster
 die Seite blieb auf Scroll-Position 0 stehen, und es sah aus, als sei der Klick ins Leere
 gegangen. Jetzt öffnet der Knopf das Übungs-Fenster, und zwar auf dem Reiter „Verlauf".
 
+**Bänder bekommen einen kg-Wert, statt gar keinen.**
+Bandübungen liefen bis Sept. 2026 ganz ohne Gewichtsfeld („ein Band hat kein sinnvolles
+Gewicht"). Genau dadurch war ein Bandwechsel für die Statistik unsichtbar: Ein stärkeres Band
+bei gleichen Wiederholungen sah aus wie Stillstand, ein schwächeres mit mehr Wiederholungen wie
+Fortschritt. Jetzt legt man seine Bänder einmal an – Name plus ungefährer kg-Wert – und wählt
+im Training das Band statt eine Zahl zu tippen.
+- Der kg-Wert ist bewusst grob. Er muss nicht stimmen, er muss die Bänder nur **untereinander**
+  richtig ordnen; ab da rechnet die App wie bei jeder Hantel.
+- Gespeichert werden Kennung, **Name und kg-Wert am Satz**. Der Name steht später in
+  „Letztes Mal" („Rot ×15"), und weil er mitgeschrieben statt nachgeschlagen wird, ändert ein
+  Umbenennen oder Löschen des Bandes alte Trainings nicht rückwirkend.
+- **Keine 1RM-Schätzung bei Bändern.** Der Widerstand steigt mit der Dehnung; ein „einmaliges
+  Maximum" ist dabei keine sinnvolle Größe, anders als bei einer Hantel, die auf dem ganzen Weg
+  gleich schwer bleibt.
+
 **Der Rundenmodus ist keine neue Datenstruktur.**
 Im Zirkel *ist* „Satz N" gleichbedeutend mit „Runde N": Satz 1 aller Übungen ist Runde 1. Die
 Rundenzahl ist deshalb einfach die Satzzahl aller Übungen. Im Plan wird die Runde einmal

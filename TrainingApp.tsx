@@ -37,6 +37,7 @@ import {
   Home,
   Info,
   BatteryLow,
+  Settings,
 } from "lucide-react";
 import {
   LineChart,
@@ -837,7 +838,7 @@ export function getExerciseHistory(logs, exerciseId, excludeSessionId, isTimeBas
       }
       const vol = toNum(set.weight) * reps;
       if (vol > bestSetVolume) { bestSetVolume = vol; bestSetVolumeRir = rirOf(set); }
-      const oneRM = estimate1RM(set.weight, set.reps);
+      const oneRM = set1RM(set);
       if (oneRM > best1RM) { best1RM = oneRM; best1RMRir = rirOf(set); }
     }
 
@@ -1358,7 +1359,7 @@ export function describeSetPRs(set, best, isTimeBased = false, hasWeight = true,
       currentRir: setRir,
     });
   }
-  const oneRM = estimate1RM(weight, reps);
+  const oneRM = set1RM(set);
   if (oneRM > 0 && oneRM > toNum(best.best1RM)) {
     found.push({
       title: "Höchste geschätzte 1RM",
@@ -1447,6 +1448,15 @@ function isNewPR(set, best, isTimeBased = false) {
 // erfundene: 0 heisst "dazu sagt die App nichts".
 const ONE_RM_MAX_REPS = 12;
 
+// 1RM eines einzelnen Satzes. Bei einem Band gibt es keine: Der Widerstand
+// steigt mit der Dehnung, ein "einmaliges Maximum" ist dabei keine sinnvolle
+// Groesse - anders als bei einer Hantel, die auf dem ganzen Weg gleich schwer
+// bleibt. Ein Bandsatz liefert deshalb 0, also "dazu sagt die App nichts".
+export function set1RM(set) {
+  if (!set || set.bandId) return 0;
+  return estimate1RM(set.weight, set.reps);
+}
+
 export function estimate1RM(weight, reps) {
   const w = Number(weight) || 0;
   const r = Number(reps) || 0;
@@ -1474,7 +1484,7 @@ function getExerciseBestStats(logs, exerciseId) {
       const weight = Number(set.weight) || 0;
       const reps = Number(set.reps) || 0;
       if (weight <= 0 || reps <= 0) return;
-      best1RM = Math.max(best1RM, estimate1RM(weight, reps));
+      best1RM = Math.max(best1RM, set1RM(set));
       bestSetVolume = Math.max(bestSetVolume, weight * reps);
     });
   });
@@ -1503,7 +1513,7 @@ function getBest1RMOverall(logs, exBy, timeBasedExercises) {
         if (!set.done || set.warmup) return;
         const weight = toNum(set.weight);
         const reps = toNum(set.reps);
-        const oneRM = estimate1RM(weight, reps);
+        const oneRM = set1RM(set);
         if (oneRM > best1RM) {
           best1RM = oneRM;
           best1RMSource = {
@@ -2539,6 +2549,7 @@ const BACKUP_KEYS = [
   "deload-weeks",
   "deload-interval",
   "deload-suggestion-hidden",
+  "resistance-bands",
 ];
 
 async function buildBackup() {
@@ -2783,6 +2794,11 @@ function TrainingAppInner() {
   // eingetragen ist, verschiebt sich die Faelligkeit - und der Hinweis kommt
   // beim naechsten Mal von selbst wieder.
   const [deloadSuggestionHiddenAt, setDeloadSuggestionHiddenAt] = useState(null);
+  // Widerstandsbänder: Name plus ungefährer kg-Wert. Ohne diese Liste war ein
+  // Bandwechsel für die App unsichtbar - Bandübungen wurden ganz ohne Gewicht
+  // geführt, ein stärkeres Band bei gleichen Wiederholungen sah aus wie
+  // Stillstand, ein schwächeres mit mehr Wiederholungen wie Fortschritt.
+  const [bands, setBands] = useState([]);
   // Zählerstand zur Entlastung. Wird an drei Stellen gebraucht - Hinweis auf
   // der Startseite, Vorschlag im Kalender, Karte im Fortschritt -, deshalb
   // einmal hier oben gerechnet.
@@ -2850,7 +2866,7 @@ function TrainingAppInner() {
 
   useEffect(() => {
     (async () => {
-      const [p, l, c, f, en, no, tb, gi, active, prog, activeProg, sg, ce, cc, eq, th, gy, activeGy, restEnd, brEx, brLogs, dw, di, dsh] = await Promise.all([
+      const [p, l, c, f, en, no, tb, gi, active, prog, activeProg, sg, ce, cc, eq, th, gy, activeGy, restEnd, brEx, brLogs, dw, di, dsh, bnd] = await Promise.all([
         loadJSON("training-plans", []),
         loadJSON("workout-logs", []),
         loadJSON("custom-exercises", []),
@@ -2875,6 +2891,7 @@ function TrainingAppInner() {
         loadJSON("deload-weeks", []),
         loadJSON("deload-interval", null),
         loadJSON("deload-suggestion-hidden", null),
+        loadJSON("resistance-bands", []),
       ]);
       // Migration: users who already had folders before "programs" existed
       // get one default program that all their existing folders are
@@ -2920,6 +2937,7 @@ function TrainingAppInner() {
       setDeloadWeeks(Array.isArray(dw) ? dw : []);
       setDeloadInterval(Number.isFinite(Number(di)) && Number(di) > 0 ? Number(di) : null);
       setDeloadSuggestionHiddenAt(typeof dsh === "string" ? dsh : null);
+      setBands(Array.isArray(bnd) ? bnd : []);
       setGyms(gy);
       setActiveGymId(activeGy && gy.some((g) => g.id === activeGy) ? activeGy : gy[0]?.id || null);
       setExerciseEquipmentOverrides(eq);
@@ -3063,6 +3081,10 @@ function TrainingAppInner() {
     if (!key) return;
     setDeloadSuggestionHiddenAt(key);
     await saveJSON("deload-suggestion-hidden", key);
+  };
+  const persistBands = async (next) => {
+    setBands(next);
+    await saveJSON("resistance-bands", next);
   };
   const persistDeloadInterval = async (next) => {
     setDeloadInterval(next);
@@ -3570,6 +3592,9 @@ function TrainingAppInner() {
       if (backupFileRef.current) backupFileRef.current.value = "";
     }
   };
+  const [bandManagerOpen, setBandManagerOpen] = useState(false);
+  const [bandDraft, setBandDraft] = useState({ name: "", kg: "" });
+  const [renamingBandId, setRenamingBandId] = useState(null);
   const [gymDraftName, setGymDraftName] = useState("");
   const [renamingGymId, setRenamingGymId] = useState(null);
   const [newGymName, setNewGymName] = useState("");
@@ -4783,6 +4808,36 @@ function TrainingAppInner() {
         .set-row.is-warmup .set-kind {
           opacity: 0.6;
         }
+        /* Zahnrad links oben auf der Startseite. Sitzt als schmale Zeile
+           ueber dem Inhalt, damit darunter nichts verrutscht. */
+        /* Steht in der kg-Spalte der Satzzeile und sieht aus wie das
+           Eingabefeld daneben, ist aber ein Knopf. */
+        .band-pick {
+          width: 100%;
+          font-family: inherit;
+          font-size: 13px;
+          padding: 9px 6px;
+          border-radius: 9px;
+          border: 1px solid var(--border);
+          background: var(--surface-alt);
+          color: var(--text);
+          text-align: center;
+          white-space: nowrap;
+          overflow: hidden;
+          text-overflow: ellipsis;
+          cursor: pointer;
+        }
+        .dash-settings {
+          position: relative;
+          display: flex;
+          margin-bottom: 4px;
+        }
+        .dash-settings-trigger.is-open { background: var(--fill); }
+        .dash-settings-menu {
+          top: calc(100% + 4px);
+          left: 0;
+          right: auto;
+        }
         .program-switcher {
           position: relative;
           margin-bottom: 10px;
@@ -5985,6 +6040,19 @@ function TrainingAppInner() {
           justify-content: center;
           padding: 18px 0;
         }
+        /* Offene Phase: die ganze Flaeche ist der Knopf. */
+        .breathing-stage.is-tappable {
+          cursor: pointer;
+          -webkit-tap-highlight-color: transparent;
+          user-select: none;
+        }
+        .breathing-stage.is-tappable:active { opacity: 0.75; }
+        .breathing-tap-hint {
+          text-align: center;
+          font-size: 12px;
+          color: var(--text-faint);
+          margin-top: 6px;
+        }
         .breathing-circle-wrap {
           position: relative;
           width: min(62vw, 240px);
@@ -6074,6 +6142,7 @@ function TrainingAppInner() {
               session={session}
               plans={allPlans}
               logs={logs}
+              bands={bands}
               exBy={allExBy}
               exercises={allExercises}
               exerciseNotes={exerciseNotes}
@@ -6304,6 +6373,12 @@ function TrainingAppInner() {
             gymIndependentExercises={gymIndependentExercises}
             deloadWeeks={deloadWeeks}
             deloadStatusInfo={deloadInfo}
+            theme={theme}
+            onToggleTheme={toggleTheme}
+            onManageGyms={() => setGymManagerOpen(true)}
+            onManageBands={() => setBandManagerOpen(true)}
+            onManageBreathing={() => { setBreathingEditing(null); setBreathingManagerOpen(true); }}
+            onOpenBackup={() => setBackupOpen(true)}
             onStartWorkout={(plan, entryId) => startScheduledWorkout(plan, entryId)}
             onStartBreathing={(exercise, entryId) => startBreathingSession(exercise, entryId)}
             onOpenProgress={() => setTab("progress")}
@@ -6399,16 +6474,11 @@ function TrainingAppInner() {
             />
           ) : (
             <PlansView
-            logs={logs}
-            onManageGyms={() => setGymManagerOpen(true)}
-            onManageBreathing={() => { setBreathingEditing(null); setBreathingManagerOpen(true); }}
-            onReorderFolders={persistFolders}
-            onOpenBackup={() => setBackupOpen(true)}
+              logs={logs}
+              onReorderFolders={persistFolders}
               plans={allPlans}
               exBy={allExBy}
               folders={folders}
-              theme={theme}
-              onToggleTheme={toggleTheme}
               programs={programs}
               activeProgramId={activeProgramId}
               onSelectProgram={persistActiveProgramId}
@@ -6739,6 +6809,128 @@ function TrainingAppInner() {
         />
       )}
 
+      {bandManagerOpen && (
+        <Modal
+          title="Bänder verwalten"
+          onClose={() => { setBandManagerOpen(false); setBandDraft({ name: "", kg: "" }); setRenamingBandId(null); }}
+        >
+          <p style={{ fontSize: 12.5, color: "var(--text-dim)", margin: "0 0 12px" }}>
+            Trag deine Bänder einmal ein – Name und ungefähr, wie viel Kilogramm
+            sie sich anfühlen. Im Training wählst du dann nur noch das Band aus.
+            Der kg-Wert muss nicht genau sein; er sorgt dafür, dass ein
+            stärkeres Band in der Statistik auch als mehr zählt.
+          </p>
+          {bands.length === 0 && <div className="empty-state">Noch keine Bänder angelegt.</div>}
+          <div className="modal-list">
+            {bands.map((b) => (
+              <div key={b.id}>
+                {renamingBandId === b.id ? (
+                  <div style={{ display: "flex", gap: 6, alignItems: "flex-end" }}>
+                    <div style={{ flex: 1 }}>
+                      <input
+                        type="text"
+                        value={bandDraft.name}
+                        onChange={(e) => setBandDraft((d) => ({ ...d, name: e.target.value }))}
+                      />
+                    </div>
+                    <div style={{ width: 74 }}>
+                      <input
+                        type="text"
+                        inputMode="decimal"
+                        value={bandDraft.kg}
+                        onChange={(e) => setBandDraft((d) => ({ ...d, kg: e.target.value }))}
+                      />
+                    </div>
+                    <button
+                      className="btn btn-primary btn-sm"
+                      disabled={!bandDraft.name.trim() || !(toNum(bandDraft.kg) > 0)}
+                      onClick={async () => {
+                        await persistBands(
+                          bands.map((x) =>
+                            x.id === b.id
+                              ? { ...x, name: bandDraft.name.trim(), kg: toNum(bandDraft.kg) }
+                              : x
+                          )
+                        );
+                        setRenamingBandId(null);
+                        setBandDraft({ name: "", kg: "" });
+                      }}
+                    >
+                      <Check size={14} />
+                    </button>
+                  </div>
+                ) : (
+                  <div className="modal-option">
+                    <span>{b.name}</span>
+                    <span style={{ display: "flex", gap: 4, alignItems: "center" }}>
+                      <span className="tag">{fmtDecimal(b.kg)} kg</span>
+                      <button
+                        className="btn-icon"
+                        title="Bearbeiten"
+                        onClick={() => {
+                          setRenamingBandId(b.id);
+                          setBandDraft({ name: b.name, kg: String(b.kg) });
+                        }}
+                      >
+                        <Pencil size={14} />
+                      </button>
+                      <button
+                        className="btn-icon"
+                        title="Löschen"
+                        onClick={() =>
+                          askConfirm(
+                            `Band „${b.name}" löschen? Bereits gespeicherte Sätze behalten ihren Wert.`,
+                            async () => { await persistBands(bands.filter((x) => x.id !== b.id)); }
+                          )
+                        }
+                      >
+                        <Trash2 size={14} />
+                      </button>
+                    </span>
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+          <div style={{ marginTop: 12, paddingTop: 12, borderTop: "1px solid var(--border)" }}>
+            <label className="field-label">Neues Band</label>
+            <div style={{ display: "flex", gap: 6, alignItems: "flex-end", marginTop: 6 }}>
+              <div style={{ flex: 1 }}>
+                <input
+                  type="text"
+                  placeholder="z. B. Rot (mittel)"
+                  value={renamingBandId ? "" : bandDraft.name}
+                  onChange={(e) => { setRenamingBandId(null); setBandDraft((d) => ({ ...d, name: e.target.value })); }}
+                />
+              </div>
+              <div style={{ width: 74 }}>
+                <input
+                  type="text"
+                  inputMode="decimal"
+                  placeholder="kg"
+                  value={renamingBandId ? "" : bandDraft.kg}
+                  onChange={(e) => { setRenamingBandId(null); setBandDraft((d) => ({ ...d, kg: e.target.value })); }}
+                />
+              </div>
+            </div>
+            <button
+              className="btn btn-primary btn-block btn-sm"
+              style={{ marginTop: 10 }}
+              disabled={!bandDraft.name.trim() || !(toNum(bandDraft.kg) > 0) || !!renamingBandId}
+              onClick={async () => {
+                await persistBands([
+                  ...bands,
+                  { id: uid(), name: bandDraft.name.trim(), kg: toNum(bandDraft.kg) },
+                ]);
+                setBandDraft({ name: "", kg: "" });
+              }}
+            >
+              <Plus size={14} /> Band hinzufügen
+            </button>
+          </div>
+        </Modal>
+      )}
+
       {gymManagerOpen && (
         <Modal
           title="Gyms verwalten"
@@ -7025,12 +7217,28 @@ function DashboardView({
   gymIndependentExercises,
   deloadWeeks = [],
   deloadStatusInfo = null,
+  theme,
+  onToggleTheme = () => {},
+  onManageGyms = () => {},
+  onManageBands = () => {},
+  onManageBreathing = () => {},
+  onOpenBackup = () => {},
   onStartWorkout,
   onStartBreathing,
   onOpenProgress,
   onOpenLog,
 }) {
   const todayKey = toDateKey(new Date());
+  // Das Zahnrad links oben. Gyms, Atemübungen, Sicherung und der
+  // Hell/Dunkel-Umschalter lagen früher im Programm-Menü im Reiter "Pläne" -
+  // sie gehören aber nicht zu einem Trainingsprogramm, sondern zur ganzen App.
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  useEffect(() => {
+    if (!settingsOpen) return;
+    const close = (e) => { if (!e.target.closest?.(".dash-settings")) setSettingsOpen(false); };
+    document.addEventListener("click", close);
+    return () => document.removeEventListener("click", close);
+  }, [settingsOpen]);
 
   // Nur was heute noch offen ist - schon Erledigtes steht im Kalender und
   // im Verlauf, hier wäre es nur Ballast.
@@ -7190,6 +7398,52 @@ function DashboardView({
 
   return (
     <div>
+      <div className="dash-settings">
+        <button
+          className={`btn-icon dash-settings-trigger ${settingsOpen ? "is-open" : ""}`}
+          onClick={(e) => { e.stopPropagation(); setSettingsOpen((o) => !o); }}
+          title="Einstellungen"
+        >
+          <Settings size={17} />
+        </button>
+        {settingsOpen && (
+          <div className="program-menu dash-settings-menu">
+            <button
+              className="program-menu-item"
+              onClick={() => { setSettingsOpen(false); onManageGyms(); }}
+            >
+              <Dumbbell size={14} /> Gyms verwalten
+            </button>
+            <button
+              className="program-menu-item"
+              onClick={() => { setSettingsOpen(false); onManageBands(); }}
+            >
+              <Repeat size={14} /> Bänder verwalten
+            </button>
+            <button
+              className="program-menu-item"
+              onClick={() => { setSettingsOpen(false); onManageBreathing(); }}
+            >
+              <Wind size={14} /> Atemübungen
+            </button>
+            <button
+              className="program-menu-item"
+              onClick={() => { setSettingsOpen(false); onOpenBackup(); }}
+            >
+              <Save size={14} /> Daten sichern
+            </button>
+            <div className="program-menu-divider" />
+            <button
+              className="program-menu-item"
+              onClick={() => { setSettingsOpen(false); onToggleTheme(); }}
+            >
+              {theme === "dark" ? <Sun size={14} /> : <Moon size={14} />}
+              {theme === "dark" ? "Heller Modus" : "Dunkler Modus"}
+            </button>
+          </div>
+        )}
+      </div>
+
       {todayOpen.length > 0 && (
         <>
           <span className="stat-section-title">Heute</span>
@@ -10636,8 +10890,7 @@ function PlansView({
   plans,
   exBy,
   folders,
-  theme,
-  onToggleTheme,
+
   programs,
   activeProgramId,
   onSelectProgram,
@@ -10652,9 +10905,6 @@ function PlansView({
   onDeleteFolder,
   onToggleFolderStatsExcluded = () => {},
   onMovePlan,
-  onManageGyms = () => {},
-  onManageBreathing = () => {},
-  onOpenBackup = () => {},
   onReorderFolders = () => {},
   logs = [],
 }) {
@@ -10838,24 +11088,11 @@ function PlansView({
             >
               <Play size={14} /> Training ohne Plan starten
             </button>
-            <button
-              className="program-menu-item"
-              onClick={() => { setProgramMenuOpen(false); onManageGyms(); }}
-            >
-              <Dumbbell size={14} /> Gyms verwalten
-            </button>
-            <button
-              className="program-menu-item"
-              onClick={() => { setProgramMenuOpen(false); onManageBreathing(); }}
-            >
-              <Wind size={14} /> Atemübungen
-            </button>
-            <button
-              className="program-menu-item"
-              onClick={() => { setProgramMenuOpen(false); onOpenBackup(); }}
-            >
-              <Save size={14} /> Daten sichern
-            </button>
+            {/* Gyms, Atemübungen, Sicherung und der Hell/Dunkel-Umschalter
+                standen früher hier mit drin. Sie gehören nicht zu einem
+                Programm, sondern zur ganzen App - und stehen deshalb jetzt im
+                Zahnrad links oben auf der Startseite. Hier bleibt, was mit
+                Plänen und Programmen zu tun hat, plus das freie Training. */}
             <div className="program-menu-divider" />
             <button
               className="program-menu-item"
@@ -10891,17 +11128,6 @@ function PlansView({
                 </button>
               </>
             )}
-            <div className="program-menu-divider" />
-            <button
-              className="program-menu-item"
-              onClick={() => {
-                onToggleTheme();
-                setProgramMenuOpen(false);
-              }}
-            >
-              {theme === "dark" ? <Sun size={14} /> : <Moon size={14} />}
-              {theme === "dark" ? "Heller Modus" : "Dunkler Modus"}
-            </button>
           </div>
         )}
       </div>
@@ -11192,6 +11418,7 @@ function LogView({
   session,
   plans,
   logs,
+  bands = [],
   exBy,
   exercises,
   exerciseNotes,
@@ -11239,6 +11466,8 @@ function LogView({
   const [openRestPicker, setOpenRestPicker] = useState({});
   // Offenes Satzart-Menue: { entryId, idx } oder null.
   const [openSetKind, setOpenSetKind] = useState(null);
+  // Für welchen Satz gerade ein Band gewählt wird ({ entryId, idx }).
+  const [bandPickFor, setBandPickFor] = useState(null);
   const [setKindMenuUp, setSetKindMenuUp] = useState(false);
   const setKindMenuRef = useMenuFlip(openSetKind, setSetKindMenuUp);
   const [elapsedSec, setElapsedSec] = useState(0);
@@ -11821,6 +12050,38 @@ function LogView({
       ),
     });
   };
+  // Mehrere Felder eines Satzes auf einmal - die Band-Auswahl setzt Kennung,
+  // Name und Gewicht zusammen, und drei einzelne Aufrufe wuerden auf dem
+  // jeweils veralteten Stand aufsetzen.
+  // Ein Band ab diesem Satz setzen: der angetippte Satz immer, die folgenden
+  // nur, solange dort noch kein Band steht und sie nicht abgehakt sind.
+  const applyBandFrom = (entryId, idx, band) => {
+    onUpdateSession({
+      ...session,
+      entries: session.entries.map((e) =>
+        e.id === entryId
+          ? {
+              ...e,
+              sets: e.sets.map((s, i) => {
+                if (i < idx) return s;
+                if (i > idx && (s.bandId || s.done)) return s;
+                return { ...s, bandId: band.id, bandName: band.name, weight: band.kg };
+              }),
+            }
+          : e
+      ),
+    });
+  };
+  const updateSetFields = (entryId, idx, patch) => {
+    onUpdateSession({
+      ...session,
+      entries: session.entries.map((e) =>
+        e.id === entryId
+          ? { ...e, sets: e.sets.map((s, i) => (i === idx ? { ...s, ...patch } : s)) }
+          : e
+      ),
+    });
+  };
   // Used by the automatic run: marks a set as done without kicking off the
   // normal rest timer, because the automatic run manages the rest itself.
   const toggleSetDoneSilently = (entryId, idx) => {
@@ -12251,10 +12512,16 @@ function LogView({
         // Nummern haengen an der ganzen Satzliste (Dropsaetze bekommen eine
         // Unternummer), nicht an der Position der einzelnen Zeile.
         const setLabels = setNumberLabels(entry.sets);
-        // Band work has no meaningful weight, so the field would only ever
-        // hold a 0 and take space away from the reps.
-        const usesWeight =
-          !ex || getExerciseEquipment(ex, exerciseEquipmentOverrides) !== "Band";
+        // Bandübungen haben statt eines kg-Feldes eine Band-Auswahl in
+        // derselben Spalte. Früher blieb die Spalte hier ganz leer ("ein Band
+        // hat kein sinnvolles Gewicht") - genau dadurch war ein Bandwechsel
+        // für die Statistik unsichtbar: Ein stärkeres Band bei gleichen
+        // Wiederholungen sah aus wie Stillstand. Über die Bandliste bekommt
+        // jedes Band einen ungefähren kg-Wert, und ab da rechnet die App wie
+        // bei jeder Hantel.
+        const isBandExercise =
+          !!ex && getExerciseEquipment(ex, exerciseEquipmentOverrides) === "Band";
+        const usesWeight = !ex || !isBandExercise || bands.length > 0;
         // During an automatic run the set is measured in seconds, so the row
         // must show a time field - unless this exercise was kept on reps.
         const isTimeBased =
@@ -12599,7 +12866,9 @@ function LogView({
                     {isTimeBased ? "Sek." : "Wdh."}
                   </label>
                   {usesWeight && (
-                    <label className="field-label" style={{ margin: 0 }}>kg</label>
+                    <label className="field-label" style={{ margin: 0 }}>
+                      {isBandExercise ? "Band" : "kg"}
+                    </label>
                   )}
                   <span />
                 </div>
@@ -12670,13 +12939,23 @@ function LogView({
                         </div>
                       )}
                       <div style={{ position: "relative", display: usesWeight ? undefined : "none" }}>
-                        <input
-                          type="text"
-                          inputMode="decimal"
-                          value={s.weight}
-                          onChange={(e) => updateSet(entry.id, idx, "weight", e.target.value)}
-                          onBlur={() => sanitizeSetField(entry.id, idx, "weight")}
-                        />
+                        {isBandExercise ? (
+                          <button
+                            className="band-pick"
+                            onClick={() => setBandPickFor({ entryId: entry.id, idx })}
+                            title="Band wählen"
+                          >
+                            {s.bandName || "Band"}
+                          </button>
+                        ) : (
+                          <input
+                            type="text"
+                            inputMode="decimal"
+                            value={s.weight}
+                            onChange={(e) => updateSet(entry.id, idx, "weight", e.target.value)}
+                            onBlur={() => sanitizeSetField(entry.id, idx, "weight")}
+                          />
+                        )}
                         {pr && (
                           <span
                             className="pr-badge pr-badge-clickable"
@@ -12851,6 +13130,55 @@ function LogView({
             Die Schätzung wird jetzt festgehalten und nach dem Satz mit dem tatsächlichen
             Ergebnis verglichen.
           </div>
+        </Modal>
+      )}
+
+      {/* Band-Auswahl für einen Satz. Gespeichert werden Kennung, Name UND
+          kg-Wert: Der Name steht später in "Letztes Mal", der kg-Wert geht in
+          Volumen, Belastung und Rekorde ein. Der Name wird mitgeschrieben und
+          nicht nachgeschlagen, damit ein Umbenennen oder Löschen des Bandes
+          alte Trainings nicht rückwirkend verändert. */}
+      {bandPickFor && (
+        <Modal title="Band wählen" onClose={() => setBandPickFor(null)}>
+          {bands.length === 0 ? (
+            <div className="empty-state" style={{ padding: "10px 0" }}>
+              Noch keine Bänder angelegt. Du findest die Liste auf der Startseite
+              unter dem Zahnrad links oben.
+            </div>
+          ) : (
+            <div className="modal-list">
+              {bands.map((b) => (
+                <div
+                  className="modal-option"
+                  key={b.id}
+                  onClick={() => {
+                    // Wer ein Band waehlt, nimmt fast immer dasselbe fuer die
+                    // restlichen Saetze der Uebung. Gefuellt werden deshalb
+                    // auch die folgenden Saetze - aber nur die, bei denen noch
+                    // kein Band steht und die noch nicht abgehakt sind.
+                    applyBandFrom(bandPickFor.entryId, bandPickFor.idx, b);
+                    setBandPickFor(null);
+                  }}
+                >
+                  <span>{b.name}</span>
+                  <span className="tag">{fmtDecimal(b.kg)} kg</span>
+                </div>
+              ))}
+              <div
+                className="modal-option"
+                onClick={() => {
+                  updateSetFields(bandPickFor.entryId, bandPickFor.idx, {
+                    bandId: null,
+                    bandName: null,
+                    weight: 0,
+                  });
+                  setBandPickFor(null);
+                }}
+              >
+                <span style={{ color: "var(--text-dim)" }}>Kein Band</span>
+              </div>
+            </div>
+          )}
         </Modal>
       )}
 
@@ -13201,6 +13529,9 @@ function shortSet(s) {
   if (dur > 0) return `${dur}s`;
   const weight = toNum(s.weight);
   const reps = toNum(s.reps);
+  // Bei einem Band sagt der Name mehr als die Kilogramm: "Rot ×15" ist die
+  // Angabe, mit der man am Gerät wieder etwas anfangen kann.
+  if (s.bandName) return `${s.bandName}×${reps}`;
   return weight > 0 ? `${fmtDecimal(weight)}kg×${reps}` : `${reps} Wdh.`;
 }
 
@@ -13268,7 +13599,7 @@ function ExerciseCharts({ logs, exerciseId, isTimeBased, theme, gyms = [], gymIn
         ? null
         : workingSets.reduce(
             (best, s) =>
-              !best || estimate1RM(s.weight, s.reps) > estimate1RM(best.weight, best.reps) ? s : best,
+              !best || set1RM(s) > set1RM(best) ? s : best,
             null
           );
       // Best estimated one-rep max of the session: the strongest single set
@@ -13276,7 +13607,7 @@ function ExerciseCharts({ logs, exerciseId, isTimeBased, theme, gyms = [], gymIn
       // rep scheme changes between workouts.
       const best1RM = selectedIsTimeBased
         ? 0
-        : Math.max(0, ...workingSets.map((s) => estimate1RM(s.weight, s.reps)));
+        : Math.max(0, ...workingSets.map((s) => set1RM(s)));
       // Whole-session volume (all sets added up) and the best single set by
       // reps or seconds - the numbers the charts below are built from.
       const totalVolume = selectedIsTimeBased
@@ -13966,7 +14297,17 @@ function BreathingSessionView({ session, onFinish, onCancel }) {
         </button>
       </div>
 
-      <div className="breathing-stage">
+      {/* Bei einer offenen Phase (z. B. Luft anhalten) genügt ein Tipp
+          irgendwo in die Mitte, um weiterzuschalten - man liegt dabei oft
+          mit geschlossenen Augen und trifft keinen Knopf. Getaktete Phasen
+          bleiben unberührt: Sie laufen von selbst ab, und ein versehentlicher
+          Tipp würde die Übung verkürzen. */}
+      <div
+        className={`breathing-stage ${isOpen ? "is-tappable" : ""}`}
+        onClick={isOpen ? () => advanceRef.current?.() : undefined}
+        role={isOpen ? "button" : undefined}
+        title={isOpen ? "Antippen: nächste Phase" : undefined}
+      >
         {isCircle ? (
           <div className="breathing-circle-wrap">
             <span
@@ -13994,6 +14335,7 @@ function BreathingSessionView({ session, onFinish, onCancel }) {
 
       <div className="breathing-phase">{phase.label || BREATHING_DIRECTIONS.find((d) => d.id === phase.direction)?.label}</div>
       <div className="breathing-time">{timeLabel}</div>
+      {isOpen && <div className="breathing-tap-hint">Zum Weiterschalten in die Mitte tippen</div>}
 
       <div className="breathing-controls">
         {isOpen ? (

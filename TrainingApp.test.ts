@@ -36,6 +36,7 @@ import {
   EXERCISES,
   getExerciseMeta,
   exerciseGroupShares,
+  set1RM,
 } from "./TrainingApp";
 
 // Diese Tests sichern die Rechenfunktionen ab - also das, was die App
@@ -1034,5 +1035,40 @@ describe("1RM-Schaetzung nur im belastbaren Bereich", () => {
     expect(estimate1RM(100, 12)).toBeGreaterThan(0);
     expect(estimate1RM(100, 1)).toBe(100);
     expect(estimate1RM(100, 8)).toBeCloseTo((100 * (1 + 8 / 30) + 100 * (36 / 29)) / 2, 6);
+  });
+});
+
+
+describe("Widerstandsbaender", () => {
+  const bandSatz = (bandName: string, kg: number, reps: number) => ({
+    done: true, warmup: false, dropset: false,
+    bandId: "b-" + bandName, bandName, weight: kg, reps,
+  });
+  const exBy: any = { "band-pull-apart": { id: "band-pull-apart", name: "Band Pull-Apart", group: "schultern" } };
+  const log = (tageZurueck: number, sets: any[]) => ({
+    id: "l" + tageZurueck,
+    date: new Date(Date.now() - tageZurueck * TAG).toISOString(),
+    entries: [{ id: "e", exerciseId: "band-pull-apart", sets }],
+  });
+
+  it("macht einen Bandwechsel in der Belastung sichtbar", () => {
+    // Gleiche Wiederholungen, staerkeres Band. Vorher war das fuer die App
+    // nicht unterscheidbar - Banduebungen liefen ganz ohne Gewicht, ein
+    // staerkeres Band bei gleichen Wdh. sah aus wie Stillstand.
+    const logs = [
+      log(10, [bandSatz("Rot", 8, 15), bandSatz("Rot", 8, 15)]),
+      log(3, [bandSatz("Schwarz", 18, 15), bandSatz("Schwarz", 18, 15)]),
+    ];
+    const reihe = getMuscleLoadSeries(logs, exBy, {}, {}, 3).find((g: any) => g.id === "schultern")!;
+    const [, davor, danach] = reihe.values;
+    expect(danach).toBeGreaterThan(davor);
+  });
+
+  it("zeigt fuer ein Band keine 1RM-Schaetzung", () => {
+    // Der Widerstand steigt mit der Dehnung - ein "einmaliges Maximum" ist
+    // dabei keine sinnvolle Groesse.
+    expect(set1RM(bandSatz("Schwarz", 18, 8))).toBe(0);
+    // Ohne Band wird wie bisher geschaetzt.
+    expect(set1RM({ weight: 100, reps: 8 })).toBeGreaterThan(0);
   });
 });

@@ -285,6 +285,29 @@ Deshalb:
   vor allem daran, wie viel Zeit gerade da war. Wer nach der Entlastung eine Einheit mehr
   schafft, sähe automatisch besser aus, ohne stärker geworden zu sein.
 
+**Die Zeitraum-Chips bedeuten überall dasselbe: Sie schneiden das Diagramm zu.**
+Bei den Übungs-Charts taten sie das bis Sept. 2026 nicht – dort standen sie nur in der
+Prozent-Ansicht und änderten ausschließlich die Vergleichsbasis, während die Datumsleiste
+unverändert blieb. „4 Wochen" liest sich aber wie „zeig mir 4 Wochen", und genau daneben tut
+derselbe Chip bei den Muskelgruppen genau das. Jetzt gilt überall: dieselben Zeiträume
+(`MUSCLE_COMPARE_OPTIONS`), immer sichtbar, N+1 Wochen im Bild (sonst bliebe bei „Vorwoche" ein
+einzelner Punkt übrig). Gerechnet wird weiterhin auf der **vollen** Reihe und erst danach
+zugeschnitten – der Vergleichspartner eines Punktes liegt naturgemäß vor dem sichtbaren
+Zeitraum.
+
+Was die Chips *rechnen*, bleibt dabei unterschiedlich, und das ist Absicht: Bei den
+Muskelgruppen ist es „diese Woche gegen den **Schnitt** der N Wochen davor", bei den
+Übungs-Charts „jeder Punkt gegen den **Wert** von vor N Wochen". Zwei verschiedene Fragen an
+zwei verschiedene Datenformen. „Gesamt" heißt deshalb auch zweierlei: bei den Muskelgruppen der
+Schnitt über die ganze Historie, bei den Übungs-Charts der Vergleich mit dem **ersten erfassten
+Wert** („+34 % seit Beginn") – ohne diesen Fall wäre der Chip dort tot.
+
+**Ein Knopf muss dorthin führen, wo er hinzuführen verspricht.**
+„Verlauf dieser Übung ansehen" im 1RM-Fenster setzte bis Sept. 2026 nur die Auswahl für die
+Chart-Liste weiter unten auf der Seite. Sichtbar wurde davon nichts: Das Fenster schloss sich,
+die Seite blieb auf Scroll-Position 0 stehen, und es sah aus, als sei der Klick ins Leere
+gegangen. Jetzt öffnet der Knopf das Übungs-Fenster, und zwar auf dem Reiter „Verlauf".
+
 **Der Rundenmodus ist keine neue Datenstruktur.**
 Im Zirkel *ist* „Satz N" gleichbedeutend mit „Runde N": Satz 1 aller Übungen ist Runde 1. Die
 Rundenzahl ist deshalb einfach die Satzzahl aller Übungen. Im Plan wird die Runde einmal

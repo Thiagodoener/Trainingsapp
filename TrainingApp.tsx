@@ -9029,9 +9029,10 @@ function ExerciseDetailSheet({
   onToggleGymIndependent,
   onClose,
   gyms = [],
+  initialTab = "stats",
 }) {
   // Drei Reiter statt einer langen Liste: Zahlen zuerst, Einstellungen zuletzt.
-  const [detailTab, setDetailTab] = useState("stats");
+  const [detailTab, setDetailTab] = useState(initialTab);
   const [editingName, setEditingName] = useState(false);
   const [nameDraft, setNameDraft] = useState(exercise.name);
   const [renameError, setRenameError] = useState("");
@@ -13085,6 +13086,28 @@ const PERCENT_TOLERANCE_SHARE = 0.15;
 const PERCENT_TOLERANCE_MIN_DAYS = 3;
 
 export function buildPercentSeries(data, keys, compareWeeks, toleranceDays = PERCENT_TOLERANCE_MIN_DAYS) {
+  // "Gesamt" hat hier keinen Zeitpunkt in der Vergangenheit, den man ansteuern
+  // koennte - also wird gegen den ERSTEN erfassten Wert verglichen: "wie weit
+  // bin ich seit dem Anfang gekommen". Ohne diesen Fall waere der Chip in den
+  // Uebungs-Charts tot, waehrend er bei den Muskelgruppen daneben funktioniert.
+  if (!Number.isFinite(compareWeeks)) {
+    const ersteWerte = {};
+    return data.map((pt) => {
+      const out = { date: pt.date, ts: pt.ts };
+      keys.forEach((key) => {
+        const val = pt[key];
+        if (!(val > 0)) { out[key] = null; return; }
+        if (ersteWerte[key] == null) {
+          ersteWerte[key] = val;
+          // Der Startpunkt selbst ist per Definition 0 % Veraenderung.
+          out[key] = 0;
+          return;
+        }
+        out[key] = ((val - ersteWerte[key]) / ersteWerte[key]) * 100;
+      });
+      return out;
+    });
+  }
   const targetOffsetMs = compareWeeks * LOAD_WEEK_MS;
   const toleranceMs = Math.max(
     toleranceDays * 86400000,
@@ -13297,18 +13320,40 @@ function ExerciseCharts({ logs, exerciseId, isTimeBased, theme, gyms = [], gymIn
 // bisher) und "Verlauf in %" - dieselbe Karte, nur mit einer anderen
 // Datenreihe (siehe buildPercentSeries), damit man nicht zwischen zwei
 // getrennten Karten hin- und herspringen muss.
+// Zeitraum-Leiste, siehe unten: Sie steht jetzt ueber BEIDEN Ansichten und
+// schneidet das Diagramm zu. Vorher gab es sie nur in der Prozent-Ansicht und
+// sie aenderte ausschliesslich die Vergleichsbasis - die Datumsleiste blieb
+// stehen, egal was man antippte. "4 Wochen" liest sich aber wie "zeig mir
+// 4 Wochen", und bei den Muskelgruppen-Karten tut derselbe Chip genau das.
 function ExerciseStatCard({ title, dataKey, color, chartData, splitByGym, gymKeys, gymLabel, chartColors }) {
   const [mode, setMode] = useState("absolute");
-  const [compareWeeks, setCompareWeeks] = useState(1);
+  // "Gesamt" als Startwert: Beim Oeffnen einer Uebung will man ihren ganzen
+  // Verlauf sehen, nicht die letzten sieben Tage. In der Prozent-Ansicht
+  // heisst derselbe Chip "seit deinem ersten Training dieser Uebung".
+  const [compareWeeks, setCompareWeeks] = useState(Infinity);
   const percentKeys = useMemo(
     () => (splitByGym ? gymKeys.map((g) => `${dataKey}_${g}`) : [dataKey]),
     [splitByGym, gymKeys, dataKey]
   );
+  // Gerechnet wird immer auf der VOLLEN Reihe, erst danach wird zugeschnitten:
+  // Der Vergleichspartner eines Punktes liegt naturgemaess vor dem sichtbaren
+  // Zeitraum. Wuerde man zuerst schneiden, waere die Prozent-Ansicht am linken
+  // Rand immer leer.
   const percentData = useMemo(
     () => buildPercentSeries(chartData, percentKeys, compareWeeks),
     [chartData, percentKeys, compareWeeks]
   );
-  const hasPercentValues = percentData.some((pt) => percentKeys.some((k) => pt[k] != null));
+  // Sichtbarer Ausschnitt: dieselbe Rechnung wie compareWindowSeries bei den
+  // Muskelgruppen - N+1 Wochen, damit bei "Vorwoche" nicht ein einzelner
+  // Punkt uebrigbleibt und die Linie verschwindet.
+  const imZeitraum = useMemo(() => {
+    if (!Number.isFinite(compareWeeks)) return () => true;
+    const von = Date.now() - (compareWeeks + 1) * LOAD_WEEK_MS;
+    return (pt) => pt.ts >= von;
+  }, [compareWeeks]);
+  const sichtbarAbsolut = useMemo(() => chartData.filter(imZeitraum), [chartData, imZeitraum]);
+  const sichtbarProzent = useMemo(() => percentData.filter(imZeitraum), [percentData, imZeitraum]);
+  const hasPercentValues = sichtbarProzent.some((pt) => percentKeys.some((k) => pt[k] != null));
   // Trainings, für die es keinen Vergleichspartner gibt, haben keinen Wert -
   // dort bricht die Linie. Das ist richtig so (eine durchgezogene Linie würde
   // eine Zahl behaupten, die nie berechnet wurde), aber ohne Erklärung sieht
@@ -13317,12 +13362,12 @@ function ExerciseStatCard({ title, dataKey, color, chartData, splitByGym, gymKey
   // keine Lücke des Prozent-Vergleichs.
   const percentGaps = useMemo(
     () =>
-      percentData.filter((pt, i) =>
-        percentKeys.some((k) => pt[k] == null && chartData[i]?.[k] > 0)
+      percentData.filter(
+        (pt, i) => imZeitraum(pt) && percentKeys.some((k) => pt[k] == null && chartData[i]?.[k] > 0)
       ).length,
-    [percentData, percentKeys, chartData]
+    [percentData, percentKeys, chartData, imZeitraum]
   );
-  const activeData = mode === "percent" ? percentData : chartData;
+  const activeData = mode === "percent" ? sichtbarProzent : sichtbarAbsolut;
 
   const renderLines = () =>
     splitByGym
@@ -13353,7 +13398,7 @@ function ExerciseStatCard({ title, dataKey, color, chartData, splitByGym, gymKey
         />
       );
   const gymLegend = splitByGym ? <Legend wrapperStyle={{ fontSize: 11 }} /> : null;
-  const compareLabel = WEEK_COMPARE_OPTIONS.find(([w]) => w === compareWeeks)?.[1] || `${compareWeeks} Wochen`;
+  const compareLabel = MUSCLE_COMPARE_OPTIONS.find(([w]) => w === compareWeeks)?.[1] || `${compareWeeks} Wochen`;
 
   return (
     <div className="card chart-card">
@@ -13374,23 +13419,29 @@ function ExerciseStatCard({ title, dataKey, color, chartData, splitByGym, gymKey
           </span>
         </div>
       </div>
-      {mode === "percent" && (
-        <div className="chip-row" style={{ marginTop: 10, marginBottom: 0 }}>
-          {WEEK_COMPARE_OPTIONS.map(([weeks, label]) => (
-            <span
-              key={weeks}
-              className={`chip chip-sm ${compareWeeks === weeks ? "active" : ""}`}
-              onClick={() => setCompareWeeks(weeks)}
-            >
-              {label}
-            </span>
-          ))}
-        </div>
-      )}
-      {mode === "percent" && !hasPercentValues ? (
+      {/* Dieselben Zeiträume wie bei "Sätze pro Muskelgruppe" und "Belastung
+          pro Muskelgruppe" - und in beiden Ansichten sichtbar, weil sie jetzt
+          auch beide zuschneiden. */}
+      <div className="chip-row" style={{ marginTop: 10, marginBottom: 0 }}>
+        {MUSCLE_COMPARE_OPTIONS.map(([weeks, label]) => (
+          <span
+            key={weeks}
+            className={`chip chip-sm ${compareWeeks === weeks ? "active" : ""}`}
+            onClick={() => setCompareWeeks(weeks)}
+          >
+            {label}
+          </span>
+        ))}
+      </div>
+      {activeData.length === 0 ? (
         <div className="empty-state" style={{ padding: "14px 0" }}>
-          Noch kein Vergleichswert für „{compareLabel}" – dafür fehlt ein Training von vor
-          diesem Zeitraum.
+          In diesem Zeitraum wurde diese Übung nicht trainiert.
+        </div>
+      ) : mode === "percent" && !hasPercentValues ? (
+        <div className="empty-state" style={{ padding: "14px 0" }}>
+          {!Number.isFinite(compareWeeks)
+            ? "Noch kein Vergleichswert – dafür braucht es mindestens zwei Trainings dieser Übung."
+            : `Noch kein Vergleichswert für „${compareLabel}" – dafür fehlt ein Training von vor diesem Zeitraum.`}
         </div>
       ) : (
         <div style={{ height: 190, marginTop: 14 }}>
@@ -13442,6 +13493,13 @@ function ExerciseStatCard({ title, dataKey, color, chartData, splitByGym, gymKey
               {gymLegend}
             </LineChart>
           </ResponsiveContainer>
+        </div>
+      )}
+      {/* Ein einzelner Punkt ohne Linie sieht aus wie ein Fehler. Er ist
+          keiner - in diesem Zeitraum gab es eben nur ein Training. */}
+      {activeData.length === 1 && (
+        <div className="chart-hint">
+          Nur ein Training in diesem Zeitraum – für eine Linie braucht es mindestens zwei.
         </div>
       )}
       {mode === "percent" && hasPercentValues && percentGaps > 0 && (
@@ -14386,6 +14444,9 @@ function ProgressView({
   const [explain, setExplain] = useState(null);
   // Herkunft des besten geschätzten 1RM, sobald die Kachel angetippt wurde.
   const [best1RMInfo, setBest1RMInfo] = useState(null);
+  // Mit welchem Reiter das Übungs-Fenster aufgeht. Wird beim Öffnen gesetzt,
+  // damit „Verlauf dieser Übung ansehen" auch dort landet.
+  const [exerciseSheetTab, setExerciseSheetTab] = useState("stats");
   // Collapsed by default - opening a group is a deliberate look at detail,
   // not something that should greet you on every visit to the tab.
   const [expandedGroups, setExpandedGroups] = useState({});
@@ -14968,7 +15029,7 @@ function ProgressView({
             <div className="stat-search-head-title">
               <span
                 className="ex-name ex-name-clickable"
-                onClick={() => setSelectedExerciseId(selected)}
+                onClick={() => { setExerciseSheetTab("stats"); setSelectedExerciseId(selected); }}
               >
                 {exBy[selected]?.name}
               </span>
@@ -15007,6 +15068,7 @@ function ProgressView({
           onRenameExercise={onRenameExercise}
           onToggleTimeBased={onToggleTimeBased}
           onToggleGymIndependent={onToggleGymIndependent}
+          initialTab={exerciseSheetTab}
           onClose={() => setSelectedExerciseId(null)}
         />
       )}
@@ -15033,11 +15095,17 @@ function ProgressView({
               ein Satz mit 3 Wiederholungen ist belastbarer als einer mit 15.
             </div>
           </div>
+          {/* Vorher setzte dieser Knopf nur die Auswahl für die Chart-Liste
+              weiter unten auf der Seite - sichtbar wurde davon nichts, das
+              Fenster schloss sich und man stand wieder oben. Jetzt geht das
+              Übungs-Fenster auf, und zwar gleich auf dem Reiter, der hier
+              versprochen wird. */}
           <button
             className="btn btn-ghost btn-block btn-sm"
             style={{ marginTop: 12 }}
             onClick={() => {
-              setSelected(best1RMInfo.exerciseId);
+              setExerciseSheetTab("history");
+              setSelectedExerciseId(best1RMInfo.exerciseId);
               setBest1RMInfo(null);
             }}
           >

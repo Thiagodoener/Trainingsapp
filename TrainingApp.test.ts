@@ -798,6 +798,34 @@ describe("Entlastungswochen: Gefuehl und Leistung", () => {
 });
 
 
+describe("Prozent-Verlauf mit 'Gesamt'", () => {
+  const punkt = (tageZurueck: number, wert: number) => ({
+    date: "x", ts: Date.now() - tageZurueck * TAG, wert,
+  });
+
+  it("vergleicht jeden Punkt mit dem ersten erfassten Wert", () => {
+    const reihe = [punkt(60, 100), punkt(30, 110), punkt(1, 125)];
+    const p = buildPercentSeries(reihe, ["wert"], Infinity);
+    expect(p.map((x) => Math.round(x.wert as number))).toEqual([0, 10, 25]);
+  });
+
+  it("nimmt den ersten BRAUCHBAREN Wert als Startpunkt", () => {
+    // Ein Training ohne Wert (0) darf nicht als Nullpunkt gelten - sonst
+    // waere jede Steigerung danach unendlich Prozent.
+    const reihe = [punkt(60, 0), punkt(30, 100), punkt(1, 120)];
+    const p = buildPercentSeries(reihe, ["wert"], Infinity);
+    expect(p[0].wert).toBe(null);
+    expect(p.slice(1).map((x) => Math.round(x.wert as number))).toEqual([0, 20]);
+  });
+
+  it("laesst den Punkt-zu-Punkt-Vergleich unveraendert", () => {
+    const reihe = [punkt(21, 100), punkt(14, 110), punkt(7, 120), punkt(0, 130)];
+    const p = buildPercentSeries(reihe, ["wert"], 1);
+    // Jeder Punkt gegen den eine Woche davor, nicht gegen den ersten.
+    expect(Math.round(p[3].wert as number)).toBe(Math.round((130 / 120 - 1) * 100));
+  });
+});
+
 describe("Plateau: vier Wochen statt jede Woche gegen den Hoechstwert", () => {
   // Vorher: aktuelle Woche gegen das Maximum der drei Wochen davor, 5 %
   // Toleranz. Das verlangte in JEDER Woche mehr als 5 % Zuwachs - bei

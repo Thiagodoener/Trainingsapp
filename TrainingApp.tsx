@@ -784,6 +784,73 @@ const TYPICAL_RIR_WINDOW = 10;
 const TYPICAL_RIR_MIN_SESSIONS = 3;
 
 // ---------------------------------------------------------------------------
+// RIR in der Belastungsrechnung
+//
+// Das Problem steht in KONZEPT.md unter "Offene Punkte": Gewicht × Wdh.
+// vermischt Volumen und Intensität. Zwei Einheiten mit derselben Tonnage sind
+// nicht dieselbe Belastung, wenn eine davon am Limit endete und die andere
+// mit vier Wiederholungen in Reserve. Dort steht auch, dass RIR das an der
+// Wurzel löst, statt es besser zu raten - genau das passiert hier.
+//
+// Drei Entscheidungen, die den Eingriff sicher machen:
+//
+// 1. Gemessen wird gegen den EIGENEN Normalwert dieser Übung, nicht gegen
+//    eine feste Grenze. Wer alles am Limit trainiert, bekommt sonst pauschal
+//    höhere Werte, ohne dass sich etwas geändert hätte.
+// 2. Ohne Angabe bleibt der Faktor exakt 1. Eine Woche ohne RIR-Eingaben
+//    sieht damit aus wie vorher - fehlende Daten verschieben nichts.
+// 3. Der Faktor wirkt auf die ganze Übung einer Einheit, nicht auf einzelne
+//    Sätze. Die Angabe beschreibt den letzten Satz; sie auf jeden Satz
+//    einzeln anzuwenden wäre dieselbe Fehlzuordnung, die bei den Rekorden
+//    schon einmal drinsteckte.
+//
+// Die Schrittweite kommt aus der Faustregel, dass eine Wiederholung grob
+// 2,5-3 % des 1RM entspricht: Eine Stufe näher am Limit ist ungefähr so viel
+// wert wie 3 % mehr Gewicht. Bewusst klein gehalten - die Kennzahl soll sich
+// verfeinern, nicht umgeschrieben werden.
+// ---------------------------------------------------------------------------
+const RIR_LOAD_PER_STEP = 0.03;
+const RIR_LOAD_CAP = 0.12;
+
+function rirLoadFactor(rir, typical) {
+  if (rir == null || typical == null) return 1;
+  const now = Number(rir);
+  const usual = Number(typical);
+  if (!Number.isFinite(now) || !Number.isFinite(usual)) return 1;
+  // Näher am Limit als sonst = weniger Reserve = positiver Ausschlag.
+  const steps = usual - now;
+  return 1 + Math.max(-RIR_LOAD_CAP, Math.min(RIR_LOAD_CAP, steps * RIR_LOAD_PER_STEP));
+}
+
+// Sammelt je Übung den üblichen RIR-Wert. Anders als bei "war der Tag so hart
+// wie sonst" zählt hier die GESAMTE Historie, nicht nur die letzten zehn
+// Einheiten: Der Wert ist eine Umrechnungseinheit, die auf alle Wochen gleich
+// angewendet wird. Käme er nur aus den jüngsten Einheiten und hätte sich der
+// Trainingsstil verschoben, läge die halbe Historie auf einer Seite und die
+// Kurve bekäme einen Trend, den es nie gab.
+function typicalRirByExercise(logs) {
+  const collected = {};
+  const chronological = [...(Array.isArray(logs) ? logs : [])]
+    .filter(Boolean)
+    .sort((a, b) => new Date(b.date) - new Date(a.date));
+  chronological.forEach((l) => {
+    const seen = new Set();
+    logEntries(l).forEach((e) => {
+      if (!e || seen.has(e.exerciseId)) return;
+      const rir = Number(e.rir);
+      if (!Number.isFinite(rir)) return;
+      seen.add(e.exerciseId);
+      (collected[e.exerciseId] || (collected[e.exerciseId] = [])).push(rir);
+    });
+  });
+  const out = {};
+  Object.entries(collected).forEach(([id, values]) => {
+    out[id] = typicalRir(values, Infinity);
+  });
+  return out;
+}
+
+// ---------------------------------------------------------------------------
 // Gefühl gegen Leistung (KONZEPT.md, Stufe 3)
 //
 // Die Frage: Sagt dein Gefühl nach dem Training etwas über deine tatsächliche
@@ -1028,10 +1095,10 @@ function recordReserveNote(currentRir, previousRir) {
   return "Gleiche Reserve wie beim alten Rekord.";
 }
 
-function typicalRir(values) {
+function typicalRir(values, window = TYPICAL_RIR_WINDOW) {
   const list = (Array.isArray(values) ? values : [])
     .filter((v) => Number.isFinite(Number(v)))
-    .slice(0, TYPICAL_RIR_WINDOW)
+    .slice(0, Number.isFinite(window) ? window : undefined)
     .map(Number)
     .sort((a, b) => a - b);
   if (list.length < TYPICAL_RIR_MIN_SESSIONS) return null;
@@ -1435,10 +1502,12 @@ const STAT_EXPLANATIONS = {
       "Kilogramm allein taugen dafür nicht: Wer von der Langhantel auf Kurzhanteln wechselt, bewegt bei gleicher Anstrengung viel weniger Kilogramm - die Kurve würde einen Rückschritt zeigen, den es nie gab. Reine Satzzahlen taugen auch nicht: Wer bei gleicher Satzzahl schwerer wird, sähe davon nichts.",
       "Deshalb wird jeder Satz an deinem eigenen besten Satz in genau dieser Übung gemessen: \"Wie viel von meinem Bestwert war das?\" Ein Satz auf Bestniveau zählt 1,0. Ein Kurzhantel-Satz mit 22 kg ist damit genauso viel wert wie ein Langhantel-Satz mit 60 kg, wenn beide gleich nah am jeweiligen persönlichen Bestwert liegen.",
       "Ein neuer Rekord verfälscht die Vergangenheit dabei nicht - er wird auf alle Wochen gleich angewendet und kürzt sich beim Prozentvergleich wieder heraus.",
+      "Zusätzlich zählt, wie hart du eine Übung an dem Tag beendet hast: Dieselbe Tonnage ist nicht dieselbe Belastung, wenn sie einmal am Limit und einmal mit vier Wiederholungen in Reserve zustande kam. Verglichen wird dabei mit deiner eigenen üblichen Reserve für genau diese Übung - hast du keine angegeben, ändert sich nichts.",
       "Die Warnzeichen rechts kommen aus derselben Reihe: ein Hinweis, wenn die aktuelle Woche mehr als 15 % über dem Schnitt der 4 Wochen davor liegt, ein deutlicher Alarm ab 30 %, und ein Plateau-Zeichen, wenn seit 3 Wochen kein neuer Höchstwert mehr dazugekommen ist. Das sind Fragen, keine Urteile - wie es sich anfühlt, weißt nur du.",
     ],
     formula: [
       "Wert eines Satzes = (kg × Wdh.) ÷ bester Satz dieser Übung. Bei Übungen ohne Gewicht zählen die Wiederholungen, bei Zeit-Übungen die Sekunden.",
+      "Reserve-Gewichtung = je Stufe RIR unter deinem Üblichen 3 % mehr, je Stufe darüber 3 % weniger, höchstens 12 % in beide Richtungen. Ohne RIR-Angabe: keine Änderung.",
       "Wochenwert = Summe aller Satzwerte der Muskelgruppe in einem 7-Tage-Fenster. Dropsätze zählen hier voll mit.",
       "Änderung = (diese Woche − Schnitt der gewählten Wochen davor) ÷ Schnitt × 100.",
     ],
@@ -1548,6 +1617,10 @@ function getMuscleLoadSeries(
     });
   });
 
+  // Schritt 2b: Der übliche RIR-Wert je Übung - der Nullpunkt, gegen den die
+  // Reserve einer einzelnen Einheit gehalten wird (siehe rirLoadFactor).
+  const typicalRirs = typicalRirByExercise(safeLogs);
+
   // Schritt 3: Jeden Satz seinem 7-Tage-Fenster und seinen Muskelgruppen
   // zuordnen.
   const groupWeeks = {};
@@ -1572,6 +1645,9 @@ function getMuscleLoadSeries(
         score += loadSetWork(s, mode) / reference;
       });
       if (score === 0) return;
+      // Wie hart die Übung an diesem Tag beendet wurde, verglichen mit dem
+      // eigenen Üblichen. Ohne Angabe ist der Faktor 1 und ändert nichts.
+      score *= rirLoadFactor(e.rir, typicalRirs[e.exerciseId]);
       if (!groupWeeks[ex.group]) groupWeeks[ex.group] = emptyWeeks();
       groupWeeks[ex.group][idx] += score;
       // Gleiche Regel wie bei den Sätzen: ohne zugewiesene Untergruppe läuft
@@ -1823,6 +1899,10 @@ function getExerciseLoadSeries(logs, exerciseId, timeBasedExercises, weekCount =
 
   const weeks = new Array(weekCount).fill(0);
   if (best <= 0) return weeks;
+  // Dieselbe Reserve-Gewichtung wie in getMuscleLoadSeries - sonst zeigten
+  // die Einzelübung und die Muskelgruppe, zu der sie gehört, unterschiedliche
+  // Verläufe für dieselben Sätze.
+  const typicalHere = typicalRirByExercise(safeLogs)[exerciseId];
   safeLogs.forEach((l) => {
     const ts = new Date(l?.date).getTime();
     if (!Number.isFinite(ts)) return;
@@ -1830,10 +1910,12 @@ function getExerciseLoadSeries(logs, exerciseId, timeBasedExercises, weekCount =
     if (idx >= weekCount) return;
     logEntries(l).forEach((e) => {
       if (e.exerciseId !== exerciseId) return;
+      let score = 0;
       entrySets(e).forEach((s) => {
         if (!s.done || s.warmup) return;
-        weeks[idx] += loadSetWork(s, mode) / best;
+        score += loadSetWork(s, mode) / best;
       });
+      weeks[idx] += score * rirLoadFactor(e.rir, typicalHere);
     });
   });
   return [...weeks].reverse();

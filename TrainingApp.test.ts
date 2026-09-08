@@ -35,6 +35,7 @@ import {
   setNumberLabels,
   EXERCISES,
   getExerciseMeta,
+  exerciseGroupShares,
 } from "./TrainingApp";
 
 // Diese Tests sichern die Rechenfunktionen ab - also das, was die App
@@ -991,5 +992,47 @@ describe("Regression: Koerpergewichts-Uebungen haben eine Historie", () => {
     const titel = describeSetPRs(satz({ weight: 0, reps: 14 }), h, false, false).map((r) => r.title);
     expect(titel).not.toContain("Höchstes Gewicht");
     expect(titel).not.toContain("Höchste geschätzte 1RM");
+  });
+});
+
+
+describe("Nebenmuskeln zaehlen mit halben Saetzen", () => {
+  it("gibt der Hauptgruppe 1 und jeder Nebengruppe 0,5", () => {
+    const bank = EXERCISES.find((e: any) => e.id === "bankdruecken");
+    expect(exerciseGroupShares(bank)).toEqual([
+      ["brust", 1], ["schultern", 0.5], ["arme", 0.5],
+    ]);
+  });
+
+  it("laesst Isolationsuebungen bei einer Gruppe", () => {
+    const curl = EXERCISES.find((e: any) => e.id === "bizepscurl");
+    expect(exerciseGroupShares(curl)).toEqual([["arme", 1]]);
+  });
+
+  it("zaehlt keine Gruppe doppelt", () => {
+    const shares = exerciseGroupShares({ group: "brust", secondary: ["brust", "arme", "arme"] });
+    expect(shares).toEqual([["brust", 1], ["arme", 0.5]]);
+  });
+
+  it("nennt fuer jede mitgelieferte Uebung nur gueltige Nebengruppen", () => {
+    const gueltig = new Set(["brust", "ruecken", "beine", "schultern", "arme", "rumpf", "nacken"]);
+    const kaputt = EXERCISES.filter((e: any) =>
+      (e.secondary || []).some((g: string) => !gueltig.has(g) || g === e.group)
+    );
+    expect(kaputt.map((e: any) => e.name)).toEqual([]);
+  });
+});
+
+describe("1RM-Schaetzung nur im belastbaren Bereich", () => {
+  it("schweigt oberhalb von 12 Wiederholungen", () => {
+    // 100 kg x 20 Wdh. ergaben frueher 189 kg - realistisch waeren rund 135.
+    expect(estimate1RM(100, 20)).toBe(0);
+    expect(estimate1RM(100, 13)).toBe(0);
+  });
+
+  it("rechnet bis 12 Wiederholungen wie bisher", () => {
+    expect(estimate1RM(100, 12)).toBeGreaterThan(0);
+    expect(estimate1RM(100, 1)).toBe(100);
+    expect(estimate1RM(100, 8)).toBeCloseTo((100 * (1 + 8 / 30) + 100 * (36 / 29)) / 2, 6);
   });
 });

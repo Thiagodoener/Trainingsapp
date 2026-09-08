@@ -328,9 +328,15 @@ const SET_KINDS = [
   ["normal", "Normaler Satz"],
   ["warmup", "Aufwärmsatz"],
   ["dropset", "Dropsatz"],
+  ["calibration", "Eichsatz"],
 ];
-const setKind = (set) => (set?.warmup ? "warmup" : set?.dropset ? "dropset" : "normal");
-const setKindFlags = (kind) => ({ warmup: kind === "warmup", dropset: kind === "dropset" });
+const setKind = (set) =>
+  set?.warmup ? "warmup" : set?.dropset ? "dropset" : set?.calibration ? "calibration" : "normal";
+const setKindFlags = (kind) => ({
+  warmup: kind === "warmup",
+  dropset: kind === "dropset",
+  calibration: kind === "calibration",
+});
 
 // Wiederholungen in Reserve (RIR) am letzten Satz einer Uebung - siehe
 // KONZEPT.md. Bewusst RIR statt RPE: beides misst dasselbe (die moderne
@@ -372,6 +378,56 @@ function canBeDropset(sets, idx) {
     if (!sets[i]?.warmup) return true;
   }
   return false;
+}
+
+// Ein Eichsatz geht bis zum echten Muskelversagen. Danach ist kein sinnvoller
+// Satz mehr moeglich - stuende er mitten in der Uebung, waere jeder folgende
+// Satz von der Erschoepfung verfaelscht. Angeboten wird er deshalb nur ganz
+// am Ende. Ein bereits gesetzter Eichsatz bleibt bestehen, auch wenn spaeter
+// noch ein Satz angehaengt wird: geschaetzt und bis zum Versagen trainiert
+// wurde ja trotzdem.
+function canBeCalibration(sets, idx) {
+  return idx === (Array.isArray(sets) ? sets.length : 0) - 1;
+}
+
+// Eichsatz-Auswertung: Wie gut trifft die Schaetzung vor dem Satz das, was
+// dann wirklich geht? Der einzige Ort in der App, an dem eine Selbstein-
+// schaetzung gegen eine ueberpruefte Zahl gehalten wird - bei jedem normalen
+// Satz bleibt RIR eine Vermutung, die niemand nachprueft.
+//
+// Bewusst ueber alle Uebungen zusammen statt je Uebung: Eichsaetze sind
+// selten (sie kosten Ueberwindung), und die Frage "wie gut kenne ich meine
+// eigene Grenze" ist eine Eigenschaft der Person, nicht der Uebung. Je Uebung
+// gerechnet kaeme auf Jahre hinaus nirgends eine tragfaehige Zahl zusammen.
+const CALIBRATION_MIN_SETS = 3;
+
+function getCalibration(logs) {
+  const rows = [];
+  (Array.isArray(logs) ? logs : []).forEach((l) => {
+    const ts = new Date(l?.date).getTime();
+    logEntries(l).forEach((e) => {
+      entrySets(e).forEach((s) => {
+        if (!s || !s.done || !s.calibration) return;
+        const estimated = toNum(s.estimatedFailureReps);
+        const actual = toNum(s.reps);
+        // Ohne beide Zahlen gibt es nichts zu vergleichen - ein Eichsatz, bei
+        // dem die Schaetzung fehlt, ist einfach ein harter Satz.
+        if (!(estimated > 0) || !(actual > 0)) return;
+        rows.push({
+          date: l.date,
+          ts: Number.isFinite(ts) ? ts : 0,
+          exerciseId: e.exerciseId,
+          estimated,
+          actual,
+          diff: actual - estimated,
+        });
+      });
+    });
+  });
+  rows.sort((a, b) => b.ts - a.ts);
+  const count = rows.length;
+  const avgDiff = count > 0 ? rows.reduce((sum, r) => sum + r.diff, 0) / count : null;
+  return { rows, count, avgDiff, ready: count >= CALIBRATION_MIN_SETS };
 }
 
 // Sichtbare Nummer je Satz: Aufwaermsaetze zeigen "W", Dropsaetze haengen als
@@ -1531,6 +1587,20 @@ const STAT_EXPLANATIONS = {
       "Erwartung = Schnitt derselben Übung über die bis zu 2 Einheiten davor und 2 danach. Beide Seiten, weil ein Schnitt nur aus der Vergangenheit einem steigenden Niveau hinterherhinkt und dadurch jeden Tag zu gut aussehen ließe.",
       "Abweichung = (Leistung − Erwartung) ÷ Erwartung × 100, danach gemittelt über alle Übungen mit derselben Gefühlsangabe.",
       "Ab 3 Trainings je Stufe erscheint eine Tendenz, ab 5 eine Prozentzahl.",
+    ],
+  },
+  calibration: {
+    title: "Eichsätze",
+    paragraphs: [
+      "Ein Eichsatz ist ein letzter Satz bis zum echten Muskelversagen – und davor die Schätzung, wie viele Wiederholungen du schaffen wirst. Danach steht beides nebeneinander: „8 geschätzt, 11 geschafft\".",
+      "Das ist die einzige Stelle in der App, an der eine Selbsteinschätzung gegen eine überprüfte Zahl gehalten wird. Bei jedem normalen Satz bleibt die RIR-Angabe eine Vermutung, die niemand nachprüft – hier gehst du wirklich bis zur Grenze und siehst, wo sie lag.",
+      "Was du davon hast: Zeigt sich über mehrere Eichsätze, dass du dich um zwei Wiederholungen unterschätzt, dann heißt dein Gefühl von „2 in Reserve\" in Wirklichkeit eher „gleich ist Schluss\". Dieses Wissen nimmst du in jedes Training mit.",
+      "Die App rechnet damit bewusst nichts automatisch um: Weder deine bisherigen RIR-Angaben noch die Belastung werden nachträglich korrigiert. Wie nah man bei einem All-out-Satz an die eigene Grenze schätzt, ist verwandt mit dem RIR-Schätzen im Alltag, aber nicht dasselbe – eine automatische Umrechnung wäre geraten.",
+      "Gerechnet wird über alle Übungen zusammen. Eichsätze kosten Überwindung und sind selten; je Übung getrennt käme auf Jahre hinaus keine tragfähige Zahl zustande. Wie gut man die eigene Grenze kennt, ist ohnehin eher eine Eigenschaft der Person als der Übung.",
+    ],
+    formula: [
+      "Abweichung eines Eichsatzes = tatsächliche Wiederholungen − vorher geschätzte Wiederholungen. Positiv heißt: mehr geschafft als gedacht, also unterschätzt.",
+      `Angezeigt wird der Durchschnitt aller Eichsätze, sobald mindestens ${CALIBRATION_MIN_SETS} vorliegen.`,
     ],
   },
 };
@@ -4077,6 +4147,56 @@ function TrainingAppInner() {
         }
         .set-kind-option.is-warmup .set-kind-dot { background: var(--brass); }
         .set-kind-option.is-dropset .set-kind-dot { background: var(--accent); }
+        /* Der Eichsatz bekommt die Signalfarbe: Er ist der eine Satz, der
+           bewusst bis ans Ende geht - das darf man ihm ansehen. */
+        .set-kind-option.is-calibration .set-kind-dot { background: var(--danger); }
+        .set-kind.is-calibration {
+          color: var(--danger);
+          font-weight: 600;
+        }
+
+        /* Schätzung gegen Ergebnis, direkt nach dem Eichsatz. */
+        .calibration-result {
+          margin-top: 6px;
+          font-size: 13px;
+          line-height: 1.45;
+          color: var(--text);
+        }
+        .calibration-result-diff { color: var(--text-dim); }
+
+        .calibration-headline {
+          font-size: 15px;
+          line-height: 1.45;
+          color: var(--text);
+        }
+        .calibration-basis {
+          margin-top: 3px;
+          font-size: 12px;
+          color: var(--text-faint);
+        }
+        /* Die einzelnen Eichsätze als Beleg unter dem Schnitt. Name und Werte
+           nebeneinander, Datum darunter - auf Telefonbreite passt sonst
+           nichts davon in eine Zeile. */
+        .calibration-row {
+          display: grid;
+          grid-template-columns: 1fr auto;
+          gap: 2px 10px;
+          padding: 8px 0;
+          border-bottom: 1px solid var(--border);
+          font-size: 13px;
+        }
+        .calibration-row:last-child { border-bottom: none; }
+        .calibration-row-name { color: var(--text); }
+        .calibration-row-values {
+          color: var(--text-dim);
+          font-variant-numeric: tabular-nums;
+          text-align: right;
+        }
+        .calibration-row-date {
+          grid-column: 1 / -1;
+          font-size: 11.5px;
+          color: var(--text-faint);
+        }
         .entry-card {
           transition: box-shadow 160ms ease;
         }
@@ -11030,7 +11150,7 @@ function LogView({
       ),
     });
   };
-  const changeSetKind = (entryId, idx, kind) => {
+  const changeSetKind = (entryId, idx, kind, extra = null) => {
     setOpenSetKind(null);
     setSetKindMenuUp(false);
     onUpdateSession({
@@ -11039,11 +11159,45 @@ function LogView({
         e.id === entryId
           ? {
               ...e,
-              sets: e.sets.map((s, i) => (i === idx ? { ...s, ...setKindFlags(kind) } : s)),
+              sets: e.sets.map((s, i) =>
+                i === idx
+                  ? {
+                      ...s,
+                      ...setKindFlags(kind),
+                      // Die Schätzung gehört zum Eichsatz. Bleibt sie beim
+                      // Umschalten liegen, taucht sie später unversehens
+                      // wieder auf, sobald der Satz erneut einer wird.
+                      ...(kind === "calibration" ? {} : { estimatedFailureReps: null }),
+                      ...(extra || {}),
+                    }
+                  : s
+              ),
             }
           : e
       ),
     });
+  };
+
+  // Ein Eichsatz braucht die Schätzung VOR dem Satz - hinterher wäre sie
+  // keine Schätzung mehr, sondern eine Erinnerung an das Ergebnis. Deshalb
+  // wird beim Umschalten erst gefragt und die Satzart erst danach gesetzt.
+  const [calibrationPrompt, setCalibrationPrompt] = useState(null);
+  const [calibrationGuess, setCalibrationGuess] = useState("");
+  const askCalibration = (entryId, idx) => {
+    setOpenSetKind(null);
+    setSetKindMenuUp(false);
+    setCalibrationGuess("");
+    setCalibrationPrompt({ entryId, idx });
+  };
+  const confirmCalibration = () => {
+    if (!calibrationPrompt) return;
+    const guess = Math.round(toNum(calibrationGuess));
+    if (!(guess > 0)) return;
+    changeSetKind(calibrationPrompt.entryId, calibrationPrompt.idx, "calibration", {
+      estimatedFailureReps: guess,
+    });
+    setCalibrationPrompt(null);
+    setCalibrationGuess("");
   };
 
   const mm = String(Math.floor(restLeft / 60)).padStart(2, "0");
@@ -11720,12 +11874,17 @@ function LogView({
                         {SET_KINDS.filter(
                           ([id]) =>
                             id !== kind &&
-                            (id !== "dropset" || canBeDropset(entry.sets, idx))
+                            (id !== "dropset" || canBeDropset(entry.sets, idx)) &&
+                            (id !== "calibration" || canBeCalibration(entry.sets, idx))
                         ).map(([id, label]) => (
                           <button
                             key={id}
                             className={`set-kind-option is-${id}`}
-                            onClick={() => changeSetKind(entry.id, idx, id)}
+                            onClick={() =>
+                              id === "calibration"
+                                ? askCalibration(entry.id, idx)
+                                : changeSetKind(entry.id, idx, id)
+                            }
                           >
                             <span className="set-kind-dot" />
                             {label}
@@ -11775,6 +11934,26 @@ function LogView({
               <div className="rir-compare">{rirComparison(entry.rir, history.typicalRir)}</div>
             )}
 
+            {/* Eichsatz: Schätzung gegen Ergebnis, sofort nach dem Satz. Der
+                einzige Moment in der App, in dem eine Selbsteinschätzung
+                überprüft wird - deshalb steht das Ergebnis direkt da und
+                nicht erst in einer Statistik Wochen später. */}
+            {entrySets(entry).map((s, i) =>
+              s?.calibration && s.done && toNum(s.estimatedFailureReps) > 0 && toNum(s.reps) > 0 ? (
+                <div className="calibration-result" key={i}>
+                  {toNum(s.estimatedFailureReps)} geschätzt, {toNum(s.reps)} geschafft
+                  {toNum(s.reps) !== toNum(s.estimatedFailureReps) && (
+                    <span className="calibration-result-diff">
+                      {" · "}
+                      {toNum(s.reps) > toNum(s.estimatedFailureReps)
+                        ? `${toNum(s.reps) - toNum(s.estimatedFailureReps)} mehr als gedacht`
+                        : `${toNum(s.estimatedFailureReps) - toNum(s.reps)} weniger als gedacht`}
+                    </span>
+                  )}
+                </div>
+              ) : null
+            )}
+
             <button
               className="btn btn-ghost btn-block btn-sm"
               onClick={() => addSet(entry.id)}
@@ -11807,6 +11986,40 @@ function LogView({
           <Plus size={16} /> Übung hinzufügen
         </button>
       </div>
+
+      {calibrationPrompt && (
+        <Modal
+          title="Eichsatz"
+          onClose={() => { setCalibrationPrompt(null); setCalibrationGuess(""); }}
+          width={360}
+        >
+          <div style={{ fontSize: 13.5, lineHeight: 1.55, color: "var(--text-dim)" }}>
+            Diesen Satz bis zum echten Muskelversagen führen – also bis keine saubere
+            Wiederholung mehr geht. Vorher: Was schätzt du, wie viele schaffst du?
+          </div>
+          <input
+            type="text"
+            inputMode="numeric"
+            placeholder="Wiederholungen"
+            value={calibrationGuess}
+            onChange={(e) => setCalibrationGuess(e.target.value)}
+            style={{ width: "100%", marginTop: 12 }}
+            autoFocus
+          />
+          <button
+            className="btn btn-primary btn-block btn-sm"
+            style={{ marginTop: 12 }}
+            disabled={!(toNum(calibrationGuess) > 0)}
+            onClick={confirmCalibration}
+          >
+            <Check size={14} /> Schätzung merken
+          </button>
+          <div style={{ marginTop: 10, fontSize: 12, color: "var(--text-faint)", lineHeight: 1.45 }}>
+            Die Schätzung wird jetzt festgehalten und nach dem Satz mit dem tatsächlichen
+            Ergebnis verglichen.
+          </div>
+        </Modal>
+      )}
 
       {prInfo && (
         <Modal
@@ -13323,6 +13536,7 @@ function ProgressView({
     () => getFeelingPerformance(logs, timeBasedExercises),
     [logs, timeBasedExercises]
   );
+  const calibration = useMemo(() => getCalibration(logs), [logs]);
 
   // Folders can be marked "ohne Statistik" (e.g. EMOM/Conditioning) so their
   // sets don't dilute "Sätze pro Muskelgruppe" - that card is deliberately a
@@ -13716,6 +13930,47 @@ function ProgressView({
                 </span>
               </div>
             ))}
+          </div>
+        )}
+      </div>
+
+      <div className="card">
+        <ExplainableTitle onExplain={() => setExplain(STAT_EXPLANATIONS.calibration)}>
+          Eichsätze
+        </ExplainableTitle>
+        {calibration.ready ? (
+          <div style={{ marginTop: 10 }}>
+            <div className="calibration-headline">
+              {Math.abs(calibration.avgDiff) < 0.5
+                ? "Deine Schätzung trifft im Schnitt zu."
+                : calibration.avgDiff > 0
+                ? `Du unterschätzt dich im Schnitt um ${fmtDecimal(Math.abs(calibration.avgDiff))} Wiederholungen.`
+                : `Du überschätzt dich im Schnitt um ${fmtDecimal(Math.abs(calibration.avgDiff))} Wiederholungen.`}
+            </div>
+            <div className="calibration-basis">
+              aus {calibration.count} {calibration.count === 1 ? "Eichsatz" : "Eichsätzen"}
+            </div>
+            {/* Die einzelnen Sätze darunter: Ohne sie ist der Schnitt eine
+                Zahl ohne Beleg, und gerade hier will man die Fälle sehen. */}
+            <div style={{ marginTop: 12 }}>
+              {calibration.rows.slice(0, 5).map((r, i) => (
+                <div className="calibration-row" key={i}>
+                  <span className="calibration-row-name">
+                    {exBy[r.exerciseId]?.name || "Übung"}
+                  </span>
+                  <span className="calibration-row-values">
+                    {r.estimated} geschätzt, {r.actual} geschafft
+                  </span>
+                  <span className="calibration-row-date">{fmtDate(r.date)}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        ) : (
+          <div className="chart-hint" style={{ marginTop: 10 }}>
+            {calibration.count === 0
+              ? `Ein Eichsatz ist ein letzter Satz bis zum echten Muskelversagen, mit einer Schätzung davor. Im Training über das Menü am letzten Satz auswählen. Ab ${CALIBRATION_MIN_SETS} Eichsätzen steht hier, wie gut du dich einschätzt.`
+              : `Bisher ${calibration.count} ${calibration.count === 1 ? "Eichsatz" : "Eichsätze"} – ab ${CALIBRATION_MIN_SETS} steht hier, wie gut du dich einschätzt.`}
           </div>
         )}
       </div>

@@ -1484,61 +1484,44 @@ function getExerciseBestStats(logs, exerciseId) {
   return { best1RM, bestSetVolume };
 }
 
-function calculateTrainingStats(logs, exBy, timeBasedExercises) {
-  let totalVolume = 0;
-  let totalSets = 0;
-  let totalReps = 0;
-  let totalDuration = 0;
+// Das beste geschaetzte 1RM ueber alle Trainings - und der Satz, aus dem es
+// stammt. Ohne die Herkunft ist "213 kg" eine Zahl, zu der man nicht einmal
+// die Uebung nennen kann, und genau die Frage stellt man sich als Erstes.
+//
+// Frueher hiess die Funktion calculateTrainingStats und rechnete nebenbei
+// Gesamtvolumen, Satz- und Wiederholungssummen, Trainingszeit, Volumen je
+// Muskelgruppe und einen Lebenszeit-Rekordzaehler aus. Angezeigt wurde davon
+// nichts (der Rekordzaehler ist bewusst entfallen, siehe "Rekorde (7 Tage)")
+// - es war ein vollstaendiger Durchlauf durch alle Saetze aller Trainings bei
+// jedem Aufbau der Statistik-Seite, fuer Werte, die niemand zu sehen bekam.
+function getBest1RMOverall(logs, exBy, timeBasedExercises) {
   let best1RM = 0;
-  // Woher der Höchstwert stammt. Ohne das ist "213 kg" eine Zahl, zu der man
-  // nicht einmal die Übung nennen kann - und genau die Frage stellt man sich
-  // als Erstes.
   let best1RMSource = null;
-  const muscleVolume = {};
-  // Ein Lebenszeit-Rekordzaehler stand hier frueher mit. Er ist raus: Er
-  // mischte alle Gyms, obwohl die App sonst strikt trennt (60 kg an der
-  // Beinpresse in einem Gym sind nicht 60 kg im anderen), und er konnte nur
-  // wachsen - ueber die aktuelle Lage sagte er nichts. An seiner Stelle steht
-  // jetzt "Rekorde (7 Tage)", gezaehlt mit derselben Logik wie die Abzeichen
-  // im Training (countLogPRs).
-  const chronological = [...logs].sort((a, b) => new Date(a.date) - new Date(b.date));
-
-  chronological.forEach((log) => {
-    (Array.isArray(log?.entries) ? log.entries : []).forEach((entry) => {
-      if (!entry) return;
+  (Array.isArray(logs) ? logs : []).forEach((log) => {
+    logEntries(log).forEach((entry) => {
       const ex = exBy[entry.exerciseId];
       if (!ex) return;
-      const timeBased = isTimeBasedInLogs(logs, entry.exerciseId, timeBasedExercises);
-      (Array.isArray(entry.sets) ? entry.sets : []).forEach((set) => {
-        if (!set || !set.done || set.warmup) return;
-        totalSets += 1;
-        const reps = Number(set.reps) || 0;
-        const weight = Number(set.weight) || 0;
-        const duration = Number(set.duration) || 0;
-        totalReps += reps;
-        totalDuration += timeBased ? duration : 0;
-        if (!timeBased) {
-          const volume = weight * reps;
-          totalVolume += volume;
-          const oneRM = estimate1RM(weight, reps);
-          if (oneRM > best1RM) {
-            best1RM = oneRM;
-            best1RMSource = {
-              exerciseId: entry.exerciseId,
-              exerciseName: ex.name,
-              date: log.date,
-              logId: log.id,
-              weight,
-              reps,
-            };
-          }
-          muscleVolume[ex.group] = (muscleVolume[ex.group] || 0) + volume;
+      if (isTimeBasedInLogs(logs, entry.exerciseId, timeBasedExercises)) return;
+      entrySets(entry).forEach((set) => {
+        if (!set.done || set.warmup) return;
+        const weight = toNum(set.weight);
+        const reps = toNum(set.reps);
+        const oneRM = estimate1RM(weight, reps);
+        if (oneRM > best1RM) {
+          best1RM = oneRM;
+          best1RMSource = {
+            exerciseId: entry.exerciseId,
+            exerciseName: ex.name,
+            date: log.date,
+            logId: log.id,
+            weight,
+            reps,
+          };
         }
       });
     });
   });
-
-  return { totalVolume, totalSets, totalReps, totalDuration, best1RM, best1RMSource, muscleVolume };
+  return { best1RM, best1RMSource };
 }
 
 function getTimePR(logs, exerciseId) {
@@ -8799,7 +8782,7 @@ function NewExerciseForm({ exercises, onAddCustom, onSetExerciseSubgroups, onDon
         </div>
       )}
       <div style={{ marginTop: 10 }}>
-        <label className="field-label">Equipment</label>
+        <label className="field-label">Gerät</label>
         <div className="chip-row" style={{ marginTop: 6 }}>
           {EQUIPMENT_OPTIONS.map((opt) => (
             <span
@@ -9404,7 +9387,7 @@ function ExerciseDetailSheet({
       </div>
 
       {editingEquipment && (
-        <Modal title="Equipment wählen" onClose={() => setEditingEquipment(false)}>
+        <Modal title="Gerät wählen" onClose={() => setEditingEquipment(false)}>
           <div className="modal-list">
             {EQUIPMENT_OPTIONS.map((opt) => (
               <button
@@ -10037,7 +10020,7 @@ function PlanBuilder({
                 className="btn btn-sm btn-ghost"
                 onClick={() => addExercise(e.id)}
               >
-                <Plus size={14} /> Add
+                <Plus size={14} /> Hinzufügen
               </button>
             </div>
           );
@@ -12094,7 +12077,7 @@ function LogView({
             <button className="rest-btn" onClick={() => addRestTime(-15)}>-15s</button>
             <button className="rest-btn" onClick={() => addRestTime(15)}>+15s</button>
             <button className="rest-btn" onClick={stopRest}>
-              <SkipForward size={13} /> Skip
+              <SkipForward size={13} /> Überspringen
             </button>
           </div>
         </div>
@@ -13036,7 +13019,7 @@ function LogView({
                         className="btn btn-sm btn-ghost"
                         onClick={() => addExerciseToSession(e.id)}
                       >
-                        <Plus size={14} /> Add
+                        <Plus size={14} /> Hinzufügen
                       </button>
                     </div>
                   );
@@ -14459,7 +14442,7 @@ function ProgressView({
     </div>
   );
 
-  const stats = useMemo(() => calculateTrainingStats(logs, exBy, timeBasedExercises), [logs, exBy, timeBasedExercises]);
+  const stats = useMemo(() => getBest1RMOverall(logs, exBy, timeBasedExercises), [logs, exBy, timeBasedExercises]);
   const feelingPerformance = useMemo(
     () => getFeelingPerformance(logs, timeBasedExercises, deloadWeeks),
     [logs, timeBasedExercises, deloadWeeks]

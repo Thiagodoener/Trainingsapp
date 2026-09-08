@@ -39,6 +39,11 @@ import {
   set1RM,
   getRecentPRs,
   getExerciseBestStats,
+  muscleLoadBasis,
+  logsBefore,
+  getExercisePRHistory,
+  getLogsPRIndex,
+  entryPRs,
 } from "./TrainingApp";
 
 // Diese Tests sichern die Rechenfunktionen ab - also das, was die App
@@ -1125,5 +1130,209 @@ describe("Bestwerte einer Uebung kennen ihre Herkunft", () => {
     expect(b.best1RMSource).toMatchObject({ weight: 120, reps: 5 });
     // Das beste Satzvolumen ist hier der andere Satz: 100x8 = 800 > 120x5 = 600.
     expect(b.bestSetVolumeSource).toMatchObject({ weight: 100, reps: 8 });
+  });
+});
+
+
+describe("Prozent-Achse im Belastungs-Diagramm", () => {
+  // Die rechte Achse stellt jeden Punkt gegen DENSELBEN Schnitt - naemlich
+  // den, gegen den auch die Zahl neben der Muskelgruppe rechnet. Sonst
+  // stuenden in Liste und Diagramm zwei verschiedene Zahlen fuer dieselbe
+  // Aussage.
+  const prozent = (values: number[], wochen: number, historie = Infinity) => {
+    const basis = muscleLoadBasis(values, wochen, historie);
+    return basis == null ? null : values.map((v) => (v / basis - 1) * 100);
+  };
+
+  it("trifft im letzten Punkt exakt die Zahl aus der Uebersicht", () => {
+    const werte = [2, 4, 3, 5, 6];
+    const reihe = prozent(werte, 4)!;
+    expect(reihe[reihe.length - 1]).toBeCloseTo(muscleLoadChange(werte, 4)!, 10);
+  });
+
+  it("trifft sie auch bei einem anderen Zeitraum", () => {
+    const werte = [1, 9, 2, 8, 3, 7, 4];
+    [1, 2, 4].forEach((wochen) => {
+      const reihe = prozent(werte, wochen)!;
+      expect(reihe[reihe.length - 1]).toBeCloseTo(muscleLoadChange(werte, wochen)!, 10);
+    });
+  });
+
+  it("rechnet ohne Vergleichswochen gar nichts", () => {
+    // Nur Nullen davor: Es gibt keinen Schnitt, gegen den man messen koennte.
+    expect(muscleLoadBasis([0, 0, 5], 2)).toBeNull();
+    expect(muscleLoadBasis([5], 1)).toBeNull();
+  });
+
+  it("nimmt den Schnitt der Vergleichswochen, nicht den des ganzen Fensters", () => {
+    // Vier Wochen a 10, dann eine mit 20: Schnitt der vier ist 10, also +100%.
+    expect(muscleLoadBasis([10, 10, 10, 10, 20], 4)).toBe(10);
+    expect(muscleLoadChange([10, 10, 10, 10, 20], 4)).toBeCloseTo(100, 10);
+  });
+});
+
+describe("Pokale: Rekorde im Nachhinein", () => {
+  const exBy: any = { bankdruecken: { id: "bankdruecken", name: "Bankdrücken", group: "brust" } };
+  const log = (tage: number, sets: any[], id = "l" + tage) =>
+    training({
+      id,
+      date: new Date(Date.now() - tage * TAG).toISOString(),
+      entries: [{ id: "e", exerciseId: "bankdruecken", sets }],
+    });
+
+  it("Regression: ein Rekord bleibt einer, auch wenn er spaeter ueberboten wird", () => {
+    // getExerciseHistory nimmt von sich aus ALLE anderen Trainings - auch
+    // spaetere. Ohne logsBefore waere der 110er vom Mai nachtraeglich kein
+    // Rekord mehr, sobald im Juli 120 stehen. Er war im Mai aber einer.
+    const logs = [
+      log(30, [satz({ weight: 100, reps: 8 })]),
+      log(20, [satz({ weight: 110, reps: 8 })]),
+      log(2, [satz({ weight: 120, reps: 8 })]),
+    ];
+    const verlauf = getExercisePRHistory(logs, "bankdruecken");
+    expect(verlauf["l20"]?.some((pr: any) => pr.title === "Höchstes Gewicht")).toBe(true);
+    expect(verlauf["l2"]?.some((pr: any) => pr.title === "Höchstes Gewicht")).toBe(true);
+    // Das allererste Training hat nichts zu schlagen.
+    expect(verlauf["l30"]).toBeUndefined();
+  });
+
+  it("logsBefore laesst nur zurueck, was vorher war", () => {
+    const logs = [log(30, [satz()]), log(20, [satz()]), log(2, [satz()])];
+    const vorher = logsBefore(logs, logs[1]);
+    expect(vorher.map((l: any) => l.id)).toEqual(["l30"]);
+  });
+
+  it("haengt jeden Rekord an die Kennzahl, zu der er gehoert", () => {
+    const logs = [
+      log(30, [satz({ weight: 100, reps: 8 })]),
+      log(2, [satz({ weight: 110, reps: 8 })]),
+    ];
+    const verlauf = getExercisePRHistory(logs, "bankdruecken");
+    const keys = verlauf["l2"].map((pr: any) => pr.key);
+    expect(keys).toContain("maxWeight");
+    expect(keys).toContain("maxSetVolume");
+    // Ein Wiederholungs-Rekord ist das nicht: 8 Wdh. waren es vorher auch.
+    expect(keys).not.toContain("maxReps");
+  });
+
+  it("liefert fuer den Verlauf eine Uebersicht pro Training und Uebung", () => {
+    const logs = [
+      log(30, [satz({ weight: 100, reps: 8 })]),
+      log(2, [satz({ weight: 110, reps: 8 })]),
+    ];
+    const index = getLogsPRIndex(logs, {}, {});
+    expect(Object.keys(index)).toEqual(["l2"]);
+    expect(index["l2"]["e"].length).toBeGreaterThan(0);
+  });
+
+  it("die Liste der letzten Tage bleibt bei den Satz-Rekorden", () => {
+    // Gesamtvolumen-Rekorde tauchen in den Diagrammen auf, nicht in der
+    // Liste: Einen Satz mehr zu machen reicht dafuer schon.
+    const logs = [
+      log(30, [satz({ weight: 100, reps: 8 })]),
+      log(2, [satz({ weight: 100, reps: 8 }), satz({ weight: 100, reps: 8 })]),
+    ];
+    const prs = getRecentPRs(logs, exBy, {}, {}, 7);
+    expect(prs).toEqual([]);
+    const verlauf = getExercisePRHistory(logs, "bankdruecken");
+    expect(verlauf["l2"].some((pr: any) => pr.key === "totalVolume")).toBe(true);
+  });
+});
+
+
+describe("Pokale: schneller Weg und langsamer Weg sagen dasselbe", () => {
+  // getLogsPRIndex rechnet die Historie EINMAL vorwaerts mit, statt sie fuer
+  // jedes Training neu aufzubauen. Das ist derselbe Rechenweg in einer
+  // anderen Reihenfolge - dieser Test haelt beide aneinander, damit sie
+  // nicht auseinanderlaufen koennen.
+  const zufall = (seed: number) => {
+    let x = seed;
+    return () => {
+      x = (x * 1103515245 + 12345) % 2147483648;
+      return x / 2147483648;
+    };
+  };
+
+  const bauLogs = (seed: number) => {
+    const r = zufall(seed);
+    const gyms = ["g1", "g2", null];
+    const logs: any[] = [];
+    for (let i = 0; i < 25; i++) {
+      const entries: any[] = [];
+      const anzahl = 1 + Math.floor(r() * 3);
+      for (let e = 0; e < anzahl; e++) {
+        const sets: any[] = [];
+        for (let sIdx = 0; sIdx < 1 + Math.floor(r() * 3); sIdx++) {
+          sets.push(satz({
+            weight: Math.round(40 + r() * 60),
+            reps: 1 + Math.floor(r() * 12),
+          }));
+        }
+        entries.push({
+          id: "e" + e,
+          exerciseId: "ex" + Math.floor(r() * 3),
+          rir: Math.floor(r() * 4),
+          sets,
+        });
+      }
+      logs.push({
+        id: "l" + i,
+        date: new Date(Date.now() - (30 - i) * TAG).toISOString(),
+        gymId: gyms[Math.floor(r() * gyms.length)],
+        entries,
+      });
+    }
+    return logs;
+  };
+
+  const langsam = (logs: any[]) => {
+    const index: any = {};
+    logs.forEach((log) => {
+      log.entries.forEach((entry: any) => {
+        const gymId = entry.exerciseId === "__frei" ? null : log.gymId;
+        const treffer: any = entryPRs(logs, log, entry, false, gymId);
+        if (!treffer) return;
+        const alle = [...treffer.prs, ...treffer.gesamt];
+        if (alle.length === 0) return;
+        if (!index[log.id]) index[log.id] = {};
+        index[log.id][entry.id || entry.exerciseId] = alle;
+      });
+    });
+    return index;
+  };
+
+  it("stimmt ueber mehrere zufaellige Trainingshistorien ueberein", () => {
+    for (const seed of [1, 7, 42, 1234, 98765]) {
+      const logs = bauLogs(seed);
+      expect(getLogsPRIndex(logs, {}, {})).toEqual(langsam(logs));
+    }
+  });
+});
+
+
+describe("Wiederholungs-Rekord wird von alt nach neu gerechnet", () => {
+  it("Regression: ein alter Satz mit vielen Wdh. bleibt der Massstab", () => {
+    // Reihenfolge: erst 12 Wdh. bei 60 kg, dann 6 Wdh. bei 100 kg.
+    // Der Wiederholungs-Rekord steht damit bei 12 Wdh./60 kg.
+    // Rueckwaerts gerechnet (so lief es frueher) waere zuerst der 100er-Satz
+    // dran gewesen - der 12er haette wegen "mindestens dasselbe Gewicht"
+    // nicht mehr gezaehlt, und 7 Wdh. bei 100 kg waeren faelschlich als
+    // "meiste Wiederholungen" durchgegangen.
+    const logs = [
+      training({ id: "a", date: new Date(Date.now() - 20 * TAG).toISOString(),
+        entries: [{ id: "e", exerciseId: "bankdruecken", sets: [satz({ weight: 60, reps: 12 })] }] }),
+      training({ id: "b", date: new Date(Date.now() - 10 * TAG).toISOString(),
+        entries: [{ id: "e", exerciseId: "bankdruecken", sets: [satz({ weight: 100, reps: 6 })] }] }),
+    ];
+    const history: any = getExerciseHistory(logs, "bankdruecken", "c");
+    expect(history.bestSetReps).toBe(12);
+    expect(history.bestSetRepsWeight).toBe(60);
+    // 7 Wdh. bei 100 kg sind damit kein Wiederholungs-Rekord.
+    const prs = describeSetPRs(satz({ weight: 100, reps: 7 }), history);
+    expect(prs.some((p: any) => p.key === "maxReps")).toBe(false);
+    // 13 Wdh. bei 60 kg dagegen schon.
+    expect(
+      describeSetPRs(satz({ weight: 60, reps: 13 }), history).some((p: any) => p.key === "maxReps")
+    ).toBe(true);
   });
 });

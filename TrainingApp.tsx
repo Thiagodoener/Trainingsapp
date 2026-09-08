@@ -48,6 +48,7 @@ import {
   Tooltip,
   Legend,
   ReferenceLine,
+  ReferenceArea,
   ResponsiveContainer,
 } from "recharts";
 
@@ -716,6 +717,165 @@ function effectiveGymId(exerciseId, gymId, gymIndependentExercises) {
   return isGymIndependent(exerciseId, gymIndependentExercises) ? null : gymId;
 }
 
+// Der Zustand, den getExerciseHistory zusammentraegt: alle Bestwerte dieser
+// Uebung plus das letzte Mal. Als eigenes Objekt herausgezogen, damit
+// dieselbe Rechnung auch Training fuer Training vorwaerts laufen kann - das
+// braucht der Verlauf fuer die Pokale. Wuerde er stattdessen fuer JEDES
+// Training die ganze Historie davor neu durchgehen, waere das bei ein paar
+// hundert Trainings eine knappe Sekunde Wartezeit, jedes Mal.
+function emptyExerciseHistory() {
+  return {
+    lastSets: null,
+    lastDate: null,
+    lastRir: null,
+    lastNote: null,
+    bestWeight: 0,
+    bestRepsAtBestWeight: 0,
+    bestDuration: 0,
+    // Records the trophy is based on. Per set: 1RM, set volume, reps, seconds.
+    // Per exercise (all sets of one workout added up): volume, reps, seconds.
+    best1RM: 0,
+    bestSetVolume: 0,
+    bestSetReps: 0,
+    // Bei welchem Gewicht der Wiederholungs-Rekord aufgestellt wurde. Ohne das
+    // gilt ein leichter Ausbelastungssatz (20 Wdh. mit 40 kg) als Rekord fuer
+    // eine Uebung, die sonst mit 8 Wdh. bei 100 kg laeuft - und macht den
+    // Rekord bei echtem Arbeitsgewicht dauerhaft unschlagbar.
+    bestSetRepsWeight: 0,
+    bestTotalVolume: 0,
+    bestTotalReps: 0,
+    bestTotalDuration: 0,
+    comparableSessions: 0,
+    // Zu jedem Bestwert das RIR der Einheit, in der er aufgestellt wurde. Ein
+    // Rekord sagt für sich genommen nur "mehr als vorher"; erst zusammen mit
+    // der Reserve wird daraus eine Aussage: derselbe Wert mit 2 in Reserve ist
+    // etwas anderes als derselbe Wert am Limit.
+    bestWeightRir: null,
+    best1RMRir: null,
+    bestSetVolumeRir: null,
+    bestSetRepsRir: null,
+    bestDurationRir: null,
+    bestTotalVolumeRir: null,
+    bestTotalRepsRir: null,
+    bestTotalDurationRir: null,
+    // Alle RIR-Angaben dieser Übung - Grundlage für "wie hart beendest du
+    // diese Übung sonst?".
+    rirHistory: [],
+  };
+}
+
+// Ein einzelnes Training in den Zustand einrechnen.
+// newestFirst sagt, in welcher Richtung gelaufen wird: rueckwaerts (so wie
+// getExerciseHistory es tut) ist das ERSTE Training mit Saetzen das juengste,
+// vorwaerts das LETZTE. Nur davon haengt ab, welches Training "das letzte
+// Mal" ist - alle Bestwerte sind von der Richtung unabhaengig.
+function addSessionToExerciseHistory(h, log, exerciseId, isTimeBased, newestFirst = true) {
+  // Logs written by older versions (or a half-finished save) can be
+  // missing `entries` or `sets` entirely, so every access is guarded
+  // rather than assuming a fully-formed object.
+  const matching = logEntriesFor(log, exerciseId);
+  if (matching.length === 0) return;
+  if (!newestFirst || h.lastNote === null) {
+    const noted = matching.find((e) => typeof e.notes === "string" && e.notes.trim());
+    if (noted) h.lastNote = noted.notes.trim();
+  }
+
+  // Saetze aller Plaetze dieser Uebung in diesem Training, in der
+  // Reihenfolge, in der sie im Training standen.
+  const sets = matching.flatMap((e) => (Array.isArray(e.sets) ? e.sets : []));
+  // Ein Satz zaehlt, wenn ueberhaupt Arbeit drinsteht. Frueher wurde bei
+  // Uebungen ohne Zeit AUSSCHLIESSLICH auf Gewicht geprueft - damit fielen
+  // alle Koerpergewichts-Uebungen komplett heraus: Klimmzug, Dips,
+  // Liegestuetz und alles andere mit 0 kg hatte gar keine Historie. Kein
+  // "Letztes Mal", keine Rekorde, keine Reserve-Einordnung, obwohl die
+  // Saetze sauber protokolliert waren.
+  const doneSets = sets.filter(
+    (set) =>
+      set &&
+      set.done &&
+      !set.warmup &&
+      (isTimeBased
+        ? Number(set.duration) > 0
+        : Number(set.weight) > 0 || Number(set.reps) > 0)
+  );
+  if (doneSets.length === 0) return;
+
+  // Bei mehreren Plaetzen zaehlt die erste vorhandene Angabe.
+  const rirEntry = matching.find((e) => Number.isFinite(Number(e.rir)));
+  const sessionRir = rirEntry ? Number(rirEntry.rir) : null;
+  if (sessionRir != null) h.rirHistory.push(sessionRir);
+
+  if (!newestFirst || !h.lastSets) {
+    h.lastSets = doneSets;
+    h.lastDate = log.date;
+    h.lastRir = sessionRir;
+  }
+
+  h.comparableSessions += 1;
+  // Per-exercise totals of this session. Bewusst kein Math.max mehr: nur
+  // wer merkt, WANN ein Bestwert überboten wurde, kann auch festhalten,
+  // mit welcher Reserve das geschah.
+  const totalReps = doneSets.reduce((a, x) => a + toNum(x.reps), 0);
+  if (totalReps > h.bestTotalReps) { h.bestTotalReps = totalReps; h.bestTotalRepsRir = sessionRir; }
+  const totalDuration = doneSets.reduce((a, x) => a + toNum(x.duration), 0);
+  if (totalDuration > h.bestTotalDuration) { h.bestTotalDuration = totalDuration; h.bestTotalDurationRir = sessionRir; }
+  const totalVolume = doneSets.reduce((a, x) => a + toNum(x.weight) * toNum(x.reps), 0);
+  if (totalVolume > h.bestTotalVolume) { h.bestTotalVolume = totalVolume; h.bestTotalVolumeRir = sessionRir; }
+
+  // Die RIR-Angabe beschreibt den LETZTEN Satz der Übung - so wird sie im
+  // Training auch abgefragt. Für einen Rekord, der in einem früheren Satz
+  // fiel, ist sie nicht die Reserve, mit der er erreicht wurde: Wer
+  // 100×8 / 100×6 / 90×5 macht, stellt den Gewichtsrekord im ERSTEN Satz
+  // auf, während die Angabe den dritten beschreibt. Solche Rekorde bekommen
+  // deshalb keine Reserve zugeordnet - lieber keine Angabe als eine falsche.
+  const lastDoneSet = doneSets[doneSets.length - 1];
+  const rirOf = (set) => (set === lastDoneSet ? sessionRir : null);
+
+  for (const set of doneSets) {
+    const reps = toNum(set.reps);
+    const weightHere = toNum(set.weight);
+    if (reps > h.bestSetReps && weightHere >= h.bestSetRepsWeight) {
+      h.bestSetReps = reps;
+      h.bestSetRepsWeight = weightHere;
+      h.bestSetRepsRir = rirOf(set);
+    }
+    const vol = toNum(set.weight) * reps;
+    if (vol > h.bestSetVolume) { h.bestSetVolume = vol; h.bestSetVolumeRir = rirOf(set); }
+    const oneRM = set1RM(set);
+    if (oneRM > h.best1RM) { h.best1RM = oneRM; h.best1RMRir = rirOf(set); }
+  }
+
+  if (isTimeBased) {
+    for (const set of doneSets) {
+      const dur = Number(set.duration) || 0;
+      if (dur > h.bestDuration) { h.bestDuration = dur; h.bestDurationRir = rirOf(set); }
+    }
+  } else {
+    // Numbers are compared explicitly: values that slipped through as
+    // strings would otherwise compare lexically ("60" > "7" is false).
+    for (const set of doneSets) {
+      const weight = Number(set.weight) || 0;
+      const reps = Number(set.reps) || 0;
+      if (weight > h.bestWeight) {
+        h.bestWeight = weight;
+        h.bestRepsAtBestWeight = reps;
+        h.bestWeightRir = rirOf(set);
+      } else if (weight === h.bestWeight && reps > h.bestRepsAtBestWeight) {
+        h.bestRepsAtBestWeight = reps;
+        h.bestWeightRir = rirOf(set);
+      }
+    }
+  }
+}
+
+// Aus dem Zustand die fertige Historie machen. typicalRir schaut nur auf die
+// juengsten Angaben, deshalb muss die Liste hier neueste-zuerst stehen - bei
+// der Vorwaerts-Richtung also umgedreht werden.
+function finishExerciseHistory(h, newestFirst = true) {
+  const rirHistory = newestFirst ? h.rirHistory : [...h.rirHistory].reverse();
+  return { ...h, rirHistory, typicalRir: typicalRir(rirHistory) };
+}
+
 export function getExerciseHistory(logs, exerciseId, excludeSessionId, isTimeBased = false, gymId = null) {
   const all = logs
     .filter((l) => l.id !== excludeSessionId)
@@ -729,152 +889,19 @@ export function getExerciseHistory(logs, exerciseId, excludeSessionId, isTimeBas
   const sameGym = gymId ? all.filter((l) => l.gymId === gymId) : all;
   const past = gymId && sameGym.length > 0 ? sameGym : all;
 
-  let lastSets = null;
-  let lastDate = null;
-  let lastRir = null;
-  let bestWeight = 0;
-  let bestRepsAtBestWeight = 0;
-  let lastNote = null;
-  let bestDuration = 0;
-  // Records the trophy is based on. Per set: 1RM, set volume, reps, seconds.
-  // Per exercise (all sets of one workout added up): volume, reps, seconds.
-  let best1RM = 0;
-  let bestSetVolume = 0;
-  let bestSetReps = 0;
-  // Bei welchem Gewicht der Wiederholungs-Rekord aufgestellt wurde. Ohne das
-  // gilt ein leichter Ausbelastungssatz (20 Wdh. mit 40 kg) als Rekord fuer
-  // eine Uebung, die sonst mit 8 Wdh. bei 100 kg laeuft - und macht den
-  // Rekord bei echtem Arbeitsgewicht dauerhaft unschlagbar.
-  let bestSetRepsWeight = 0;
-  let bestTotalVolume = 0;
-  let bestTotalReps = 0;
-  let bestTotalDuration = 0;
-  let comparableSessions = 0;
-  // Zu jedem Bestwert das RIR der Einheit, in der er aufgestellt wurde. Ein
-  // Rekord sagt für sich genommen nur "mehr als vorher"; erst zusammen mit
-  // der Reserve wird daraus eine Aussage: derselbe Wert mit 2 in Reserve ist
-  // etwas anderes als derselbe Wert am Limit.
-  let bestWeightRir = null;
-  let best1RMRir = null;
-  let bestSetVolumeRir = null;
-  let bestSetRepsRir = null;
-  let bestDurationRir = null;
-  let bestTotalVolumeRir = null;
-  let bestTotalRepsRir = null;
-  let bestTotalDurationRir = null;
-  // Alle RIR-Angaben dieser Übung, neueste zuerst - Grundlage für "wie hart
-  // beendest du diese Übung sonst?".
-  const rirHistory = [];
-
-  for (const log of past) {
-    // Logs written by older versions (or a half-finished save) can be
-    // missing `entries` or `sets` entirely, so every access is guarded
-    // rather than assuming a fully-formed object.
-    const matching = logEntriesFor(log, exerciseId);
-    if (matching.length === 0) continue;
-    if (lastNote === null) {
-      const noted = matching.find((e) => typeof e.notes === "string" && e.notes.trim());
-      if (noted) lastNote = noted.notes.trim();
-    }
-
-    // Saetze aller Plaetze dieser Uebung in diesem Training, in der
-    // Reihenfolge, in der sie im Training standen.
-    const sets = matching.flatMap((e) => (Array.isArray(e.sets) ? e.sets : []));
-    // Ein Satz zaehlt, wenn ueberhaupt Arbeit drinsteht. Frueher wurde bei
-    // Uebungen ohne Zeit AUSSCHLIESSLICH auf Gewicht geprueft - damit fielen
-    // alle Koerpergewichts-Uebungen komplett heraus: Klimmzug, Dips,
-    // Liegestuetz und alles andere mit 0 kg hatte gar keine Historie. Kein
-    // "Letztes Mal", keine Rekorde, keine Reserve-Einordnung, obwohl die
-    // Saetze sauber protokolliert waren.
-    const doneSets = sets.filter(
-      (set) =>
-        set &&
-        set.done &&
-        !set.warmup &&
-        (isTimeBased
-          ? Number(set.duration) > 0
-          : Number(set.weight) > 0 || Number(set.reps) > 0)
-    );
-    if (doneSets.length === 0) continue;
-
-    // Bei mehreren Plaetzen zaehlt die erste vorhandene Angabe.
-    const rirEntry = matching.find((e) => Number.isFinite(Number(e.rir)));
-    const sessionRir = rirEntry ? Number(rirEntry.rir) : null;
-    if (sessionRir != null) rirHistory.push(sessionRir);
-
-    if (!lastSets) {
-      lastSets = doneSets;
-      lastDate = log.date;
-      lastRir = sessionRir;
-    }
-
-    comparableSessions += 1;
-    // Per-exercise totals of this session. Bewusst kein Math.max mehr: nur
-    // wer merkt, WANN ein Bestwert überboten wurde, kann auch festhalten,
-    // mit welcher Reserve das geschah.
-    const totalReps = doneSets.reduce((a, x) => a + toNum(x.reps), 0);
-    if (totalReps > bestTotalReps) { bestTotalReps = totalReps; bestTotalRepsRir = sessionRir; }
-    const totalDuration = doneSets.reduce((a, x) => a + toNum(x.duration), 0);
-    if (totalDuration > bestTotalDuration) { bestTotalDuration = totalDuration; bestTotalDurationRir = sessionRir; }
-    const totalVolume = doneSets.reduce((a, x) => a + toNum(x.weight) * toNum(x.reps), 0);
-    if (totalVolume > bestTotalVolume) { bestTotalVolume = totalVolume; bestTotalVolumeRir = sessionRir; }
-
-    // Die RIR-Angabe beschreibt den LETZTEN Satz der Übung - so wird sie im
-    // Training auch abgefragt. Für einen Rekord, der in einem früheren Satz
-    // fiel, ist sie nicht die Reserve, mit der er erreicht wurde: Wer
-    // 100×8 / 100×6 / 90×5 macht, stellt den Gewichtsrekord im ERSTEN Satz
-    // auf, während die Angabe den dritten beschreibt. Solche Rekorde bekommen
-    // deshalb keine Reserve zugeordnet - lieber keine Angabe als eine falsche.
-    const lastDoneSet = doneSets[doneSets.length - 1];
-    const rirOf = (set) => (set === lastDoneSet ? sessionRir : null);
-
-    for (const set of doneSets) {
-      const reps = toNum(set.reps);
-      const weightHere = toNum(set.weight);
-      if (reps > bestSetReps && weightHere >= bestSetRepsWeight) {
-        bestSetReps = reps;
-        bestSetRepsWeight = weightHere;
-        bestSetRepsRir = rirOf(set);
-      }
-      const vol = toNum(set.weight) * reps;
-      if (vol > bestSetVolume) { bestSetVolume = vol; bestSetVolumeRir = rirOf(set); }
-      const oneRM = set1RM(set);
-      if (oneRM > best1RM) { best1RM = oneRM; best1RMRir = rirOf(set); }
-    }
-
-    if (isTimeBased) {
-      for (const set of doneSets) {
-        const dur = Number(set.duration) || 0;
-        if (dur > bestDuration) { bestDuration = dur; bestDurationRir = rirOf(set); }
-      }
-    } else {
-      // Numbers are compared explicitly: values that slipped through as
-      // strings would otherwise compare lexically ("60" > "7" is false).
-      for (const set of doneSets) {
-        const weight = Number(set.weight) || 0;
-        const reps = Number(set.reps) || 0;
-        if (weight > bestWeight) {
-          bestWeight = weight;
-          bestRepsAtBestWeight = reps;
-          bestWeightRir = rirOf(set);
-        } else if (weight === bestWeight && reps > bestRepsAtBestWeight) {
-          bestRepsAtBestWeight = reps;
-          bestWeightRir = rirOf(set);
-        }
-      }
-    }
+  // Gerechnet wird von ALT nach NEU, obwohl die Liste neueste-zuerst steht.
+  // Das ist keine Kosmetik: Der Wiederholungs-Rekord haengt an der Reihenfolge,
+  // weil er nur bei mindestens demselben Gewicht wie der bisherige zaehlt.
+  // Rueckwaerts gelesen entstand daraus ein "Bestwert", der aus den juengsten
+  // Saetzen zuerst gebaut wurde - ein aelterer Satz mit mehr Wiederholungen
+  // bei weniger Gewicht fiel dann still hinten runter, obwohl er zu seiner
+  // Zeit der Rekord war. Vorwaerts gelesen entsteht genau das, was die Regel
+  // sagt: der beste Wert, den es zu diesem Zeitpunkt zu schlagen gab.
+  const h = emptyExerciseHistory();
+  for (let i = past.length - 1; i >= 0; i--) {
+    addSessionToExerciseHistory(h, past[i], exerciseId, isTimeBased, false);
   }
-
-  return {
-    lastSets, lastDate, lastRir, bestWeight, bestRepsAtBestWeight, bestDuration, lastNote,
-    best1RM, bestSetVolume, bestSetReps, bestSetRepsWeight,
-    bestTotalVolume, bestTotalReps, bestTotalDuration,
-    comparableSessions,
-    bestWeightRir, best1RMRir, bestSetVolumeRir, bestSetRepsRir, bestDurationRir,
-    bestTotalVolumeRir, bestTotalRepsRir, bestTotalDurationRir,
-    rirHistory,
-    typicalRir: typicalRir(rirHistory),
-  };
+  return finishExerciseHistory(h, false);
 }
 
 // Wie hart beendest du diese Übung üblicherweise? Median statt Mittelwert,
@@ -1312,6 +1339,9 @@ function getExerciseTimeline(logs, exerciseId) {
 // Without an earlier session there is nothing to beat, so nothing counts.
 // setRir = die Reserve, die fuer GENAU DIESEN Satz gilt - also die Angabe der
 // Uebung nur dann, wenn dieser Satz ihr letzter war (siehe getExerciseHistory).
+// key = die Kennzahl, zu der dieser Rekord gehoert. Damit weiss die
+// Uebungs-Statistik, an welche Kurve der Pokal gehoert: Ein
+// Wiederholungs-Rekord hat auf der Gewichts-Kurve nichts zu suchen.
 export function describeSetPRs(set, best, isTimeBased = false, hasWeight = true, setRir = null) {
   if (!set || !set.done || set.warmup) return [];
   if (!best || (best.comparableSessions || 0) === 0) return [];
@@ -1321,6 +1351,7 @@ export function describeSetPRs(set, best, isTimeBased = false, hasWeight = true,
     const dur = toNum(set.duration);
     if (dur > 0 && dur > toNum(best.bestDuration)) {
       found.push({
+        key: "maxDuration",
         title: "Längster Satz",
         value: `${dur} Sek.`,
         previous: toNum(best.bestDuration) > 0 ? `${toNum(best.bestDuration)} Sek.` : null,
@@ -1338,6 +1369,7 @@ export function describeSetPRs(set, best, isTimeBased = false, hasWeight = true,
   // der bisherige. Sonst waere jeder leichte Ausbelastungssatz ein "Rekord".
   if (reps > 0 && reps > toNum(best.bestSetReps) && weight >= toNum(best.bestSetRepsWeight)) {
     found.push({
+      key: "maxReps",
       title: "Meiste Wiederholungen in einem Satz",
       value: `${reps} Wdh.`,
       previous: toNum(best.bestSetReps) > 0 ? `${toNum(best.bestSetReps)} Wdh.` : null,
@@ -1352,6 +1384,7 @@ export function describeSetPRs(set, best, isTimeBased = false, hasWeight = true,
 
   if (weight > toNum(best.bestWeight)) {
     found.push({
+      key: "maxWeight",
       title: "Höchstes Gewicht",
       value: `${fmtDecimal(weight)} kg`,
       previous: toNum(best.bestWeight) > 0 ? `${fmtDecimal(best.bestWeight)} kg` : null,
@@ -1362,6 +1395,7 @@ export function describeSetPRs(set, best, isTimeBased = false, hasWeight = true,
   const oneRM = set1RM(set);
   if (oneRM > 0 && oneRM > toNum(best.best1RM)) {
     found.push({
+      key: "best1RM",
       title: "Höchste geschätzte 1RM",
       value: `${Math.round(oneRM)} kg`,
       previous: toNum(best.best1RM) > 0 ? `${Math.round(toNum(best.best1RM))} kg` : null,
@@ -1372,6 +1406,7 @@ export function describeSetPRs(set, best, isTimeBased = false, hasWeight = true,
   const vol = weight * reps;
   if (vol > 0 && vol > toNum(best.bestSetVolume)) {
     found.push({
+      key: "maxSetVolume",
       title: "Höchstes Satzvolumen",
       value: `${Math.round(vol)} kg`,
       previous: toNum(best.bestSetVolume) > 0 ? `${Math.round(toNum(best.bestSetVolume))} kg` : null,
@@ -1396,6 +1431,7 @@ export function describeExercisePRs(sets, best, isTimeBased = false, hasWeight =
     const total = done.reduce((a, x) => a + toNum(x.duration), 0);
     if (total > 0 && total > toNum(best.bestTotalDuration)) {
       found.push({
+        key: "totalDuration",
         title: "Längste Gesamtzeit der Übung",
         value: `${total} Sek.`,
         previous: toNum(best.bestTotalDuration) > 0 ? `${toNum(best.bestTotalDuration)} Sek.` : null,
@@ -1409,6 +1445,7 @@ export function describeExercisePRs(sets, best, isTimeBased = false, hasWeight =
   const totalReps = done.reduce((a, x) => a + toNum(x.reps), 0);
   if (totalReps > 0 && totalReps > toNum(best.bestTotalReps)) {
     found.push({
+      key: "totalReps",
       title: "Meiste Wiederholungen der Übung",
       value: `${totalReps} Wdh.`,
       previous: toNum(best.bestTotalReps) > 0 ? `${toNum(best.bestTotalReps)} Wdh.` : null,
@@ -1420,6 +1457,7 @@ export function describeExercisePRs(sets, best, isTimeBased = false, hasWeight =
     const totalVol = done.reduce((a, x) => a + toNum(x.weight) * toNum(x.reps), 0);
     if (totalVol > 0 && totalVol > toNum(best.bestTotalVolume)) {
       found.push({
+        key: "totalVolume",
         title: "Höchstes Gesamtvolumen der Übung",
         value: `${Math.round(totalVol)} kg`,
         previous: toNum(best.bestTotalVolume) > 0
@@ -1985,16 +2023,30 @@ function logsHistoryWeeks(logs, nowTs = Date.now()) {
 // Zeitraum-Vergleiche in der Statistik lassen die Entlastungswochen bewusst
 // drin: Dort ist die Frage "wie viel war es verglichen mit damals?", und die
 // leichte Woche gehört zur Antwort.
-export function muscleLoadChange(values, compareWeeks, maxLookback = Infinity, deloadFlags = null) {
+// Der Schnitt, GEGEN den diese Prozentzahl rechnet - als eigene Funktion,
+// weil ihn auch das Diagramm braucht: Dort wird jeder einzelne Punkt gegen
+// denselben Schnitt gestellt, damit der Punkt ganz rechts exakt die Zahl
+// trifft, die in der Übersicht neben der Muskelgruppe steht. Wäre der Schnitt
+// dort nochmal getrennt gerechnet, würden Liste und Diagramm sich früher oder
+// später widersprechen.
+// null heißt auch hier "nicht berechenbar" - keine Vorgeschichte, oder in
+// den Vergleichswochen wurde gar nichts trainiert.
+export function muscleLoadBasis(values, compareWeeks, maxLookback = Infinity, deloadFlags = null) {
   if (!Array.isArray(values) || values.length < 2) return null;
   const usableWeeks = Math.min(compareWeeks, maxLookback);
   if (usableWeeks <= 0) return null;
-  if (Array.isArray(deloadFlags) && deloadFlags[values.length - 1]) return null;
-  const current = values[values.length - 1] || 0;
   const reference = weeksBefore(values, values.length - 1, usableWeeks, deloadFlags);
   if (reference.length === 0) return null;
   const avg = reference.reduce((sum, v) => sum + (v || 0), 0) / reference.length;
-  if (avg <= 0) return null;
+  return avg > 0 ? avg : null;
+}
+
+export function muscleLoadChange(values, compareWeeks, maxLookback = Infinity, deloadFlags = null) {
+  if (!Array.isArray(values) || values.length < 2) return null;
+  if (Array.isArray(deloadFlags) && deloadFlags[values.length - 1]) return null;
+  const avg = muscleLoadBasis(values, compareWeeks, maxLookback, deloadFlags);
+  if (avg == null) return null;
+  const current = values[values.length - 1] || 0;
   return ((current - avg) / avg) * 100;
 }
 
@@ -3883,6 +3935,43 @@ function TrainingAppInner() {
         }
         .history-exercise-row .ex-name-clickable {
           font-weight: 500;
+        }
+        /* Uebungsname und Pokal gehoeren zusammen und stehen links; die
+           Satzzusammenfassung bleibt rechts (space-between der Zeile). */
+        .history-exercise-name {
+          display: flex;
+          align-items: center;
+          gap: 6px;
+          min-width: 0;
+        }
+        .pr-trophy {
+          background: var(--fill);
+          border: 1px solid var(--border);
+          color: var(--brass);
+          border-radius: 999px;
+          padding: 2px 6px;
+          display: inline-flex;
+          align-items: center;
+          gap: 3px;
+          font-size: 11px;
+          font-weight: 600;
+          line-height: 1;
+          cursor: pointer;
+          flex-shrink: 0;
+        }
+        .pr-trophy.active {
+          border-color: var(--brass);
+          background: transparent;
+        }
+        .history-pr-count {
+          color: var(--brass);
+        }
+        .history-pr-list {
+          margin: 4px 0 2px;
+          padding-left: 18px;
+          font-size: 12px;
+          line-height: 1.5;
+          color: var(--text-dim);
         }
         .history-set-summary {
           color: var(--text-dim);
@@ -5957,6 +6046,31 @@ function TrainingAppInner() {
           color: var(--text-dim);
           margin: 5px 0 0;
         }
+        /* Der im Diagramm markierte Zeitraum. Abgesetzter Kasten statt einer
+           weiteren Zeile Fließtext: Was hier steht, gehört zur eigenen
+           Auswahl und nicht zur festen Erklärung darüber. */
+        .range-summary {
+          margin-top: 8px;
+          padding: 8px 10px;
+          border: 1px solid var(--border);
+          border-radius: 10px;
+          background: var(--fill);
+        }
+        .range-summary-head {
+          display: flex;
+          justify-content: space-between;
+          align-items: center;
+          gap: 8px;
+          font-size: 12px;
+          font-weight: 600;
+          color: var(--text);
+        }
+        .link-like {
+          color: var(--accent);
+          font-weight: 600;
+          cursor: pointer;
+          white-space: nowrap;
+        }
         .cal-day {
           background: transparent;
           border: none;
@@ -7301,6 +7415,154 @@ function ActiveSessionBar({ session, restEndsAt, onOpen }) {
 // Pokal in der Trainingsansicht. Wer sich 60/70/80 hocharbeitet, schlägt mit
 // allen drei Sätzen den alten Bestwert; drei Einträge dafür sagen weniger als
 // einer für den Satz, auf den es ankam.
+// Die Historie, wie sie VOR diesem Training aussah. getExerciseHistory kennt
+// von sich aus keine Zeitrichtung - es nimmt alle Logs ausser dem einen
+// ausgeschlossenen, also auch spaetere. Im laufenden Training ist das
+// dasselbe (es gibt nichts Spaeteres), beim Nachschlagen alter Trainings
+// nicht: Ein Rekord vom Mai waere sonst nachtraeglich keiner mehr, sobald er
+// im Juli ueberboten wurde. Er war aber im Mai einer, und genau darum geht es
+// bei einem Pokal im Verlauf.
+export function logsBefore(logs, log) {
+  const ts = new Date(log?.date).getTime();
+  const alle = Array.isArray(logs) ? logs : [];
+  if (!Number.isFinite(ts)) return alle;
+  return alle.filter((l) => {
+    if (l?.id === log?.id) return false;
+    const t = new Date(l?.date).getTime();
+    return Number.isFinite(t) && t < ts;
+  });
+}
+
+// Die Rekorde EINES Trainings fuer EINE Uebung, gemessen an einer schon
+// fertigen Historie. Der eigentliche Kern - alles andere unterscheidet sich
+// nur darin, WOHER diese Historie kommt.
+//
+// Gezaehlt wird pro Uebung nur der BESTE Satz des Trainings - genau wie beim
+// Pokal in der Trainingsansicht. Wer sich 60/70/80 hocharbeitet, schlaegt mit
+// allen drei Saetzen den alten Bestwert; drei Eintraege dafuer sagen weniger
+// als einer fuer den Satz, auf den es ankam.
+function prsAgainstHistory(entry, history, isTime) {
+  const performed = performedWorkingSets(entrySets(entry));
+  const hasWeight = performed.some((x) => toNum(x.weight) > 0);
+  let bester = null;
+  let bestesErgebnis = [];
+  let bestePunkte = -1;
+  performed.forEach((set) => {
+    const prs = describeSetPRs(set, history, isTime, hasWeight, entry.rir);
+    if (prs.length === 0) return;
+    // Derselbe Massstab wie in der Trainingsansicht: der schwerste Satz,
+    // bei Gleichstand der mit den meisten Wiederholungen.
+    const punkte = isTime
+      ? toNum(set.duration)
+      : toNum(set.weight) * 1000 + toNum(set.reps);
+    if (punkte > bestePunkte) { bestePunkte = punkte; bester = set; bestesErgebnis = prs; }
+  });
+  // Getrennt gehalten, weil nicht jede Anzeige beides will: Die Liste
+  // "Rekorde der letzten 7 Tage" zeigt nur die Satz-Rekorde - ein
+  // Gesamtvolumen ist schon ueberboten, wenn man einen Satz mehr macht, und
+  // wuerde die Liste zumuellen. Die Uebungs-Diagramme zeigen beides, weil es
+  // dort eine eigene Kurve fuer das Gesamtvolumen gibt.
+  const gesamt = describeExercisePRs(performed, history, isTime, hasWeight, entry.rir);
+  if (!bester && gesamt.length === 0) return null;
+  return { set: bester, prs: bestesErgebnis, gesamt };
+}
+
+// Dasselbe fuer ein einzelnes Training, mit frisch aufgebauter Historie.
+export function entryPRs(logs, log, entry, isTime, gymId) {
+  const history = getExerciseHistory(logsBefore(logs, log), entry.exerciseId, log.id, isTime, gymId);
+  return prsAgainstHistory(entry, history, isTime);
+}
+
+// Alle Trainings einmal von alt nach neu durchgehen und zu jedem melden,
+// welche Rekorde es gebracht hat. Die Historie waechst dabei mit, statt fuer
+// jedes Training neu aufgebaut zu werden - das ist der Unterschied zwischen
+// "ist sofort da" und "eine Sekunde Standbild" bei ein paar hundert
+// Trainings.
+//
+// Die Gym-Regel aus getExerciseHistory gilt unveraendert: Gemessen wird
+// innerhalb desselben Gyms, solange es dort schon ein frueheres Training
+// gab - sonst gegen alles. Deshalb laufen zwei Konten nebeneinander mit.
+function walkLogPRs(logs, timeBasedExercises, gymIndependentExercises, melde) {
+  const chronologisch = (Array.isArray(logs) ? logs : [])
+    .filter(Boolean)
+    .map((l) => ({ log: l, ts: new Date(l?.date).getTime() }))
+    .filter((x) => Number.isFinite(x.ts))
+    .sort((a, b) => a.ts - b.ts);
+  const ueberAlles = {};        // exerciseId -> Historie ueber alle Gyms
+  const proGym = {};            // gymId -> exerciseId -> Historie
+  const trainingsProGym = {};   // gymId -> Anzahl frueherer Trainings
+  const zeitCache = {};         // exerciseId -> ist das eine Zeit-Uebung?
+  const istZeit = (entry) => {
+    if (!(entry.exerciseId in zeitCache)) {
+      zeitCache[entry.exerciseId] = isTimeBasedInLogs(logs, entry.exerciseId, timeBasedExercises);
+    }
+    return zeitCache[entry.exerciseId] || !!entry.targetUseTime;
+  };
+  const konto = (topf, exerciseId) =>
+    topf[exerciseId] || (topf[exerciseId] = emptyExerciseHistory());
+  chronologisch.forEach(({ log }) => {
+    const eintraege = logEntries(log);
+    eintraege.forEach((entry) => {
+      const isTime = istZeit(entry);
+      const gymId = effectiveGymId(entry.exerciseId, log.gymId, gymIndependentExercises);
+      // Genau die Bedingung aus getExerciseHistory: In diesem Gym gab es
+      // schon ein Training (irgendeines, nicht nur dieser Uebung).
+      const imGym = !!gymId && (trainingsProGym[gymId] || 0) > 0;
+      const stand = imGym
+        ? konto(proGym[gymId] || (proGym[gymId] = {}), entry.exerciseId)
+        : konto(ueberAlles, entry.exerciseId);
+      const treffer = prsAgainstHistory(entry, finishExerciseHistory(stand, false), isTime);
+      if (treffer) melde(log, entry, treffer);
+    });
+    // Erst danach zaehlt dieses Training selbst mit - fuer alle spaeteren.
+    const gesehen = new Set();
+    eintraege.forEach((entry) => {
+      if (gesehen.has(entry.exerciseId)) return;
+      gesehen.add(entry.exerciseId);
+      const isTime = istZeit(entry);
+      addSessionToExerciseHistory(konto(ueberAlles, entry.exerciseId), log, entry.exerciseId, isTime, false);
+      if (log.gymId) {
+        const gymKonten = proGym[log.gymId] || (proGym[log.gymId] = {});
+        addSessionToExerciseHistory(konto(gymKonten, entry.exerciseId), log, entry.exerciseId, isTime, false);
+      }
+    });
+    if (log.gymId) trainingsProGym[log.gymId] = (trainingsProGym[log.gymId] || 0) + 1;
+  });
+}
+
+// Welche Trainings dieser Uebung einen Rekord gebracht haben - als
+// Nachschlagewerk { logId: [Rekorde] } fuer die Pokale in den Diagrammen.
+export function getExercisePRHistory(logs, exerciseId, isTimeBased = false, gymIndependent = false) {
+  const map = {};
+  walkLogPRs(
+    logs,
+    { [exerciseId]: !!isTimeBased },
+    gymIndependent ? { [exerciseId]: true } : {},
+    (log, entry, treffer) => {
+      if (entry.exerciseId !== exerciseId) return;
+      map[log.id] = [...(map[log.id] || []), ...treffer.prs, ...treffer.gesamt];
+    }
+  );
+  return map;
+}
+
+// Welche Trainings welche Rekorde gebracht haben - fuer die Pokale im
+// Verlauf. { logId: { entrySchluessel: [Rekorde] } }.
+// Einmal fuer alle Trainings gerechnet statt pro aufgeklapptem Training:
+// Die Pokale sollen in der Liste zu SEHEN sein, nicht erst auftauchen, wenn
+// man ein Training oeffnet - sonst muesste man jedes einzeln aufklappen, um
+// zu finden, wo etwas passiert ist.
+export function getLogsPRIndex(logs, timeBasedExercises, gymIndependentExercises) {
+  const index = {};
+  walkLogPRs(logs, timeBasedExercises, gymIndependentExercises, (log, entry, treffer) => {
+    const alle = [...treffer.prs, ...treffer.gesamt];
+    if (alle.length === 0) return;
+    if (!index[log.id]) index[log.id] = {};
+    index[log.id][entry.id || entry.exerciseId] = alle;
+  });
+  return index;
+}
+
 export function getRecentPRs(
   logs, exBy, timeBasedExercises, gymIndependentExercises, days = 7, nowTs = Date.now()
 ) {
@@ -7314,27 +7576,12 @@ export function getRecentPRs(
       if (!ex) return;
       const isTime =
         isTimeBasedInLogs(logs, entry.exerciseId, timeBasedExercises) || !!entry.targetUseTime;
-      const history = getExerciseHistory(
-        logs, entry.exerciseId, log.id, isTime,
+      const gefunden = entryPRs(
+        logs, log, entry, isTime,
         effectiveGymId(entry.exerciseId, log.gymId, gymIndependentExercises)
       );
-      const performed = performedWorkingSets(entrySets(entry));
-      const hasWeight = performed.some((x) => toNum(x.weight) > 0);
-      // Derselbe Maßstab wie in der Trainingsansicht: der schwerste Satz,
-      // bei Gleichstand der mit den meisten Wiederholungen.
-      let bester = null;
-      let bestesErgebnis = [];
-      let bestePunkte = -1;
-      performed.forEach((set) => {
-        const prs = describeSetPRs(set, history, isTime, hasWeight, entry.rir);
-        if (prs.length === 0) return;
-        const punkte = isTime
-          ? toNum(set.duration)
-          : toNum(set.weight) * 1000 + toNum(set.reps);
-        if (punkte > bestePunkte) { bestePunkte = punkte; bester = set; bestesErgebnis = prs; }
-      });
-      if (!bester) return;
-      bestesErgebnis.forEach((pr) => {
+      if (!gefunden) return;
+      gefunden.prs.forEach((pr) => {
         treffer.push({
           exerciseId: entry.exerciseId,
           exerciseName: ex.name,
@@ -7342,7 +7589,7 @@ export function getRecentPRs(
           title: pr.title,
           value: pr.value,
           previous: pr.previous,
-          set: bester,
+          set: gefunden.set,
         });
       });
     });
@@ -7357,7 +7604,7 @@ function countLogPRs(log, logs, exBy, timeBasedExercises, gymIndependentExercise
     const isTime =
       isTimeBasedInLogs(logs, entry.exerciseId, timeBasedExercises) || !!entry.targetUseTime;
     const history = getExerciseHistory(
-      logs, entry.exerciseId, log.id, isTime,
+      logsBefore(logs, log), entry.exerciseId, log.id, isTime,
       effectiveGymId(entry.exerciseId, log.gymId, gymIndependentExercises)
     );
     if (entrySets(entry).some((s) => s.done && !s.warmup && isNewPR(s, history, isTime))) prs += 1;
@@ -13762,7 +14009,9 @@ export function buildPercentSeries(data, keys, compareWeeks, toleranceDays = PER
   if (!Number.isFinite(compareWeeks)) {
     const ersteWerte = {};
     return data.map((pt) => {
-      const out = { date: pt.date, ts: pt.ts };
+      // prs wandert unveraendert mit: Ein Rekord bleibt derselbe, egal ob die
+      // Karte gerade absolute Zahlen oder Prozente zeigt.
+      const out = { date: pt.date, ts: pt.ts, prs: pt.prs };
       keys.forEach((key) => {
         const val = pt[key];
         if (!(val > 0)) { out[key] = null; return; }
@@ -13783,7 +14032,7 @@ export function buildPercentSeries(data, keys, compareWeeks, toleranceDays = PER
     targetOffsetMs * PERCENT_TOLERANCE_SHARE
   );
   return data.map((pt, i) => {
-    const out = { date: pt.date, ts: pt.ts };
+    const out = { date: pt.date, ts: pt.ts, prs: pt.prs };
     keys.forEach((key) => {
       const val = pt[key];
       if (!(val > 0)) { out[key] = null; return; }
@@ -13853,6 +14102,15 @@ function ExerciseCharts({ logs, exerciseId, isTimeBased, theme, gyms = [], gymIn
   const gymLabel = (key) =>
     key === "none" ? "Ohne Gym" : gyms.find((g) => g.id === key)?.name || "Unbekanntes Gym";
 
+  // In welchem Training wurde mit dieser Uebung ein Rekord aufgestellt - fuer
+  // die Pokale in den Kurven. Bewusst gemerkt statt bei jedem Neuzeichnen
+  // gerechnet: Dafuer muss fuer jedes Training die komplette Historie davor
+  // durchgegangen werden.
+  const prHistory = useMemo(
+    () => getExercisePRHistory(logs, selected, selectedIsTimeBased, gymIndependent),
+    [logs, selected, selectedIsTimeBased, gymIndependent]
+  );
+
   const chartData = relevantLogs
     .map((l) => {
       // Eine Uebung kann mehrfach im selben Training stehen (Zirkel: A, B, A).
@@ -13920,9 +14178,18 @@ function ExerciseCharts({ logs, exerciseId, isTimeBased, theme, gyms = [], gymIn
         totalVolume__detail: totalVolumeDetail,
       };
 
+      // Zu jedem Punkt die Rekorde dieses Trainings, sortiert nach der
+      // Kennzahl, zu der sie gehoeren - damit der Pokal auf der Kurve
+      // auftaucht, die den Rekord auch zeigt.
+      const prByKey = {};
+      (prHistory[l.id] || []).forEach((pr) => {
+        if (pr.key && !prByKey[pr.key]) prByKey[pr.key] = pr;
+      });
+
       const base = {
         date: fmtDate(l.date),
         ts: new Date(l.date).getTime(),
+        prs: prByKey,
       };
       if (!splitByGym) {
         return { ...base, ...details, maxWeight, totalReps, totalDuration, maxSetVolume,
@@ -14002,6 +14269,43 @@ function ExerciseCharts({ logs, exerciseId, isTimeBased, theme, gyms = [], gymIn
   );
 }
 
+// Ein Pokal MITTEN IN EINEM DIAGRAMM. Bewusst als Pfad gezeichnet und nicht
+// als das fertige Symbol aus der Icon-Sammlung: Das ist selbst ein <svg>, und
+// ein <svg> in einem <svg> ignoriert die angegebene Groesse - es fuellt
+// stattdessen die ganze Zeichenflaeche. In der Karte darunter (normales HTML)
+// ist das Symbol dagegen unproblematisch.
+// Die Pfade sind dieselben wie beim Symbol "Trophy", gezeichnet auf 24x24 und
+// hier auf die gewuenschte Groesse heruntergerechnet.
+const TROPHY_PATHS = [
+  "M6 9H4.5a2.5 2.5 0 0 1 0-5H6",
+  "M18 9h1.5a2.5 2.5 0 0 0 0-5H18",
+  "M4 22h16",
+  "M10 14.66V17c0 .55-.47.98-.97 1.21C7.85 18.75 7 20.24 7 22",
+  "M14 14.66V17c0 .55.47.98.97 1.21C16.15 18.75 17 20.24 17 22",
+  "M18 2H6v7a6 6 0 0 0 12 0V2Z",
+];
+
+function TrophyGlyph({ cx, cy, size = 11, color, strokeWidth = 2.4 }) {
+  const f = size / 24;
+  return (
+    <g transform={`translate(${cx - size / 2} ${cy - size / 2}) scale(${f})`}>
+      {/* Die Strichstaerke wird mitverkleinert, also vorher hochgerechnet -
+          sonst waere der Pokal bei 11 Pixeln nur noch ein Schatten. */}
+      <g
+        fill="none"
+        stroke={color}
+        strokeWidth={strokeWidth / f}
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      >
+        {TROPHY_PATHS.map((d) => (
+          <path key={d} d={d} />
+        ))}
+      </g>
+    </g>
+  );
+}
+
 // Eine einzelne Übungs-Statistik-Karte mit zwei Reitern: "Absolut" (wie
 // bisher) und "Verlauf in %" - dieselbe Karte, nur mit einer anderen
 // Datenreihe (siehe buildPercentSeries), damit man nicht zwischen zwei
@@ -14055,6 +14359,41 @@ function ExerciseStatCard({ title, dataKey, color, chartData, splitByGym, gymKey
   );
   const activeData = mode === "percent" ? sichtbarProzent : sichtbarAbsolut;
 
+  // Ein Pokal an jeder Stelle, an der in DIESER Kennzahl ein Rekord steht.
+  // Nicht an jedem Rekord des Trainings: Ein Wiederholungs-Rekord auf der
+  // Gewichts-Kurve wuerde behaupten, das Gewicht sei gestiegen.
+  const [openPR, setOpenPR] = useState(null);
+  const hatPokale = activeData.some((pt) => pt?.prs?.[dataKey]);
+  const prDot = (dotColor) => (dotProps) => {
+    const { cx, cy, index, payload } = dotProps;
+    if (!Number.isFinite(cx) || !Number.isFinite(cy)) return null;
+    const pr = payload?.prs?.[dataKey];
+    if (!pr) return <circle key={index} cx={cx} cy={cy} r={3} fill={dotColor} />;
+    const aktiv = openPR?.index === index;
+    return (
+      <g key={index} style={{ cursor: "pointer" }}>
+        <circle
+          cx={cx}
+          cy={cy}
+          r={8}
+          fill={chartColors.tooltipBg}
+          stroke={aktiv ? chartColors.series.gold : dotColor}
+          strokeWidth={aktiv ? 2.5 : 1.5}
+        />
+        <TrophyGlyph cx={cx} cy={cy} size={11} color={chartColors.series.gold} strokeWidth={1.3} />
+        {/* Antippbare Flaeche: Ein 11-Pixel-Symbol trifft kein Finger. */}
+        <rect
+          x={cx - 16}
+          y={cy - 16}
+          width={32}
+          height={32}
+          fill="transparent"
+          onClick={() => setOpenPR(aktiv ? null : { pr, date: payload.date, index })}
+        />
+      </g>
+    );
+  };
+
   const renderLines = () =>
     splitByGym
       ? gymKeys.map((g, i) => {
@@ -14067,7 +14406,7 @@ function ExerciseStatCard({ title, dataKey, color, chartData, splitByGym, gymKey
               name={gymLabel(g)}
               stroke={lineColor}
               strokeWidth={2.5}
-              dot={{ r: 3, fill: lineColor, strokeWidth: 0 }}
+              dot={prDot(lineColor)}
               activeDot={{ r: 5 }}
               connectNulls={mode === "absolute"}
             />
@@ -14079,7 +14418,7 @@ function ExerciseStatCard({ title, dataKey, color, chartData, splitByGym, gymKey
           dataKey={dataKey}
           stroke={color}
           strokeWidth={2.5}
-          dot={{ r: 3, fill: color, strokeWidth: 0 }}
+          dot={prDot(color)}
           activeDot={{ r: 5 }}
         />
       );
@@ -14179,6 +14518,37 @@ function ExerciseStatCard({ title, dataKey, color, chartData, splitByGym, gymKey
               {gymLegend}
             </LineChart>
           </ResponsiveContainer>
+        </div>
+      )}
+      {/* Was der angetippte Pokal bedeutet. Bewusst unter der Kurve statt in
+          einem eigenen Fenster: Man sieht den Punkt und die Erklaerung
+          gleichzeitig und muss nichts wegklicken, um weiterzuschauen. */}
+      {openPR && (
+        <div className="range-summary">
+          <div className="range-summary-head">
+            <span>
+              <Trophy size={13} style={{ verticalAlign: -2, marginRight: 4, color: "var(--brass)" }} />
+              Rekord am {openPR.date}
+            </span>
+            <span className="link-like" onClick={() => setOpenPR(null)}>
+              Schließen
+            </span>
+          </div>
+          <p className="deload-basis" style={{ marginTop: 4 }}>
+            {openPR.pr.title}: <strong>{openPR.pr.value}</strong>
+            {openPR.pr.previous
+              ? ` – vorher ${openPR.pr.previous}`
+              : " – der erste Wert dieser Art, es gab noch nichts zu schlagen"}
+            {fmtRir(openPR.pr.currentRir) ? ` · ${fmtRir(openPR.pr.currentRir)}` : ""}
+            {openPR.pr.previous && fmtRir(openPR.pr.previousRir)
+              ? ` (vorher ${fmtRir(openPR.pr.previousRir)})`
+              : ""}
+          </p>
+        </div>
+      )}
+      {hatPokale && !openPR && (
+        <div className="chart-hint">
+          Die Pokale markieren Trainings mit einem Rekord in dieser Zahl – antippen zeigt welchen.
         </div>
       )}
       {/* Ein einzelner Punkt ohne Linie sieht aus wie ein Fehler. Er ist
@@ -15330,6 +15700,13 @@ function ProgressView({
   // Wie bei "Sätze pro Muskelgruppe": Tippen auf eine Zeile öffnet ein
   // Vollbild-Chart, gezoomt auf loadCompareWeeks.
   const [loadChartGroup, setLoadChartGroup] = useState(null);
+  // Der Maßstab der rechten Achse: derselbe Schnitt, gegen den auch die
+  // Prozentzahl neben der Muskelgruppe in der Liste rechnet (muscleLoadBasis).
+  // Deshalb steht am rechten Ende der gestrichelten Linie genau diese Zahl.
+  const loadChartBasis = useMemo(
+    () => (loadChartGroup ? muscleLoadBasis(loadChartGroup.values, loadCompareWeeks, loadHistoryWeeks) : null),
+    [loadChartGroup, loadCompareWeeks, loadHistoryWeeks]
+  );
   const loadChartGroupData = useMemo(() => {
     if (!loadChartGroup) return [];
     const zoomed = compareWindowSeries(loadChartGroup.values, loadCompareWeeks);
@@ -15341,11 +15718,14 @@ function ProgressView({
     return zoomed.map((v, i) => {
       const weeksAgo = weekCount - 1 - i;
       const ts = Date.now() - weeksAgo * LOAD_WEEK_MS;
-      // Veränderung zur Vorwoche - die zweite Linie auf der rechten Achse.
-      // null (nicht 0) für die erste Woche und für Wochen nach einer Pause:
-      // "keine Vergleichsgrundlage" ist etwas anderes als "keine Veränderung".
-      const vorher = i > 0 ? zoomed[i - 1] : null;
-      const change = vorher > 0 && v > 0 ? (v / vorher - 1) * 100 : null;
+      // Abstand zum Schnitt des Vergleichszeitraums - die zweite Linie auf
+      // der rechten Achse. Jeder Punkt wird gegen DENSELBEN Schnitt gestellt,
+      // nicht gegen seine eigene Vorwoche: So liest sich die Linie als "wie
+      // weit über oder unter dem Üblichen lag diese Woche", und der letzte
+      // Punkt ist die Zahl aus der Übersicht.
+      // null (nicht 0) heißt "nicht berechenbar" - in den Vergleichswochen
+      // wurde gar nichts trainiert, es gibt also keinen Schnitt.
+      const change = loadChartBasis == null ? null : (v / loadChartBasis - 1) * 100;
       return {
         date: fmtDate(new Date(ts).toISOString()),
         load: v,
@@ -15353,7 +15733,42 @@ function ProgressView({
         deload: !!loadDeloadFlags[offset + i],
       };
     });
-  }, [loadChartGroup, loadCompareWeeks, loadDeloadFlags]);
+  }, [loadChartGroup, loadCompareWeeks, loadDeloadFlags, loadChartBasis]);
+
+  // Frei markierbarer Zeitraum im Diagramm: erster Tipp setzt den Anfang,
+  // zweiter das Ende. Ein dritter Tipp beginnt eine neue Markierung, ein
+  // Tipp auf dieselbe Woche hebt sie auf. Gespeichert werden Positionen in
+  // loadChartGroupData, nicht Daten - der Ausschnitt wechselt ja mit dem
+  // gewählten Zeitraum.
+  const [loadRange, setLoadRange] = useState(null);
+  // Beim Wechsel von Muskelgruppe oder Zeitraum zeigt dieselbe Position auf
+  // eine andere Woche. Eine stehengebliebene Markierung wäre dann schlicht
+  // falsch, deshalb fällt sie weg.
+  useEffect(() => { setLoadRange(null); }, [loadChartGroup, loadCompareWeeks]);
+  const pickLoadRange = (e) => {
+    const idx = e?.activeTooltipIndex;
+    if (!Number.isFinite(idx)) return;
+    setLoadRange((r) => {
+      if (!r || r.b != null) return { a: idx, b: null };
+      if (idx === r.a) return null;
+      return { a: Math.min(r.a, idx), b: Math.max(r.a, idx) };
+    });
+  };
+  const loadRangeInfo = useMemo(() => {
+    if (!loadRange || loadRange.b == null) return null;
+    const von = loadChartGroupData[loadRange.a];
+    const bis = loadChartGroupData[loadRange.b];
+    if (!von || !bis) return null;
+    const werte = loadChartGroupData.slice(loadRange.a, loadRange.b + 1).map((d) => d.load || 0);
+    const schnitt = werte.reduce((s, v) => s + v, 0) / werte.length;
+    // Verglichen werden die beiden Randwochen - das ist die Frage, die die
+    // Markierung stellt ("wie hat es sich von hier bis hier verändert?").
+    // Ist eine der beiden leer, gibt es darauf keine ehrliche Antwort:
+    // "-100 %" hieße, die Belastung sei eingebrochen, dabei war schlicht
+    // Pause. Lieber keine Zahl als eine erfundene.
+    const prozent = von.load > 0 && bis.load > 0 ? (bis.load / von.load - 1) * 100 : null;
+    return { von, bis, schnitt, prozent, wochen: werte.length };
+  }, [loadRange, loadChartGroupData]);
 
   // Plateau-/Überlastungs-Signal für die aktuell aufgeklappte Einzelübung
   // (siehe detectLoadSignal). Eigene, übungsspezifische Historienlänge statt
@@ -16078,7 +16493,11 @@ function ProgressView({
           </div>
           <div style={{ height: 220 }}>
             <ResponsiveContainer width="99%" height="100%" debounce={1}>
-              <LineChart data={loadChartGroupData} margin={{ top: 6, right: 0, left: 0, bottom: 0 }}>
+              <LineChart
+                data={loadChartGroupData}
+                margin={{ top: 6, right: 0, left: 0, bottom: 0 }}
+                onClick={pickLoadRange}
+              >
                 <CartesianGrid strokeDasharray="3 3" stroke={chartColors.grid} vertical={false} />
                 <XAxis
                   dataKey="date"
@@ -16096,11 +16515,11 @@ function ProgressView({
                   tickLine={false}
                   width={28}
                 />
-                {/* Rechts dieselbe Kurve noch einmal als Veränderung zur
-                    Vorwoche. Links steht "wie viel Arbeit war das", rechts
-                    "wie viel mehr oder weniger als letzte Woche" - eine gute
-                    Woche ist damit auch dann als Ausschlag zu erkennen, wenn
-                    die Kurve insgesamt gerade tief liegt. */}
+                {/* Rechts dieselbe Kurve noch einmal, gemessen am Schnitt
+                    des gewählten Zeitraums. Links steht "wie viel Arbeit war
+                    das", rechts "wie viel mehr oder weniger als üblich" -
+                    und der Punkt ganz rechts ist genau die Prozentzahl, die
+                    in der Übersicht neben dieser Muskelgruppe steht. */}
                 <YAxis
                   yAxisId="rechts"
                   orientation="right"
@@ -16120,7 +16539,7 @@ function ProgressView({
                   }}
                   formatter={(v, name, item) => {
                     if (name === "Veränderung") {
-                      return [v == null ? "–" : `${v > 0 ? "+" : ""}${Math.round(v)} %`, "ggü. Vorwoche"];
+                      return [v == null ? "–" : `${v > 0 ? "+" : ""}${Math.round(v)} %`, "ggü. Schnitt"];
                     }
                     return [
                       `${(Math.round(v * 100) / 100).toLocaleString("de-DE")}${
@@ -16131,6 +16550,28 @@ function ProgressView({
                   }}
                 />
                 <ReferenceLine yAxisId="rechts" y={0} stroke={chartColors.axis} strokeDasharray="3 3" />
+                {/* Der markierte Zeitraum. Nach dem ersten Tipp steht erst
+                    eine einzelne Linie da - sonst sähe es aus, als wäre der
+                    Tipp ins Leere gegangen. */}
+                {loadRange && loadRange.b != null && loadChartGroupData[loadRange.a] && loadChartGroupData[loadRange.b] && (
+                  <ReferenceArea
+                    yAxisId="links"
+                    x1={loadChartGroupData[loadRange.a].date}
+                    x2={loadChartGroupData[loadRange.b].date}
+                    fill={chartColors.series.accent}
+                    fillOpacity={0.12}
+                    stroke={chartColors.series.accent}
+                    strokeOpacity={0.4}
+                  />
+                )}
+                {loadRange && loadRange.b == null && loadChartGroupData[loadRange.a] && (
+                  <ReferenceLine
+                    yAxisId="links"
+                    x={loadChartGroupData[loadRange.a].date}
+                    stroke={chartColors.series.accent}
+                    strokeWidth={2}
+                  />
+                )}
                 <Line
                   yAxisId="rechts"
                   type="monotone"
@@ -16174,9 +16615,57 @@ function ProgressView({
             </ResponsiveContainer>
           </div>
           <p className="deload-basis" style={{ marginTop: 6 }}>
-            Durchgezogen: relative Belastung (Skala links). Gestrichelt:
-            Veränderung zur Vorwoche in Prozent (Skala rechts).
+            Durchgezogen: relative Belastung (Skala links). Gestrichelt: wie
+            viel Prozent über oder unter dem Schnitt des gewählten Zeitraums
+            (Skala rechts) – der Punkt ganz rechts ist genau die Zahl, die in
+            der Übersicht neben dieser Gruppe steht.
           </p>
+          {/* Frei markierbarer Zeitraum. Die Anleitung steht immer da, wo man
+              gerade ist: erst "zwei Wochen antippen", dann "jetzt die
+              Endwoche", dann das Ergebnis. */}
+          {!loadRange && loadChartGroupData.length > 1 && (
+            <p className="deload-basis" style={{ marginTop: 6 }}>
+              Tippe zwei Wochen im Diagramm an, um einen eigenen Zeitraum zu
+              markieren.
+            </p>
+          )}
+          {loadRange && loadRange.b == null && (
+            <p className="deload-basis" style={{ marginTop: 6 }}>
+              Start {loadChartGroupData[loadRange.a]?.date} – jetzt die
+              Endwoche antippen.
+            </p>
+          )}
+          {loadRangeInfo && (
+            <div className="range-summary">
+              <div className="range-summary-head">
+                <span>
+                  {loadRangeInfo.von.date} → {loadRangeInfo.bis.date} ·{" "}
+                  {loadRangeInfo.wochen} Wochen
+                </span>
+                <span className="link-like" onClick={() => setLoadRange(null)}>
+                  Aufheben
+                </span>
+              </div>
+              {loadRangeInfo.prozent == null ? (
+                <p className="deload-basis" style={{ marginTop: 4 }}>
+                  In einer der beiden Randwochen wurde nichts trainiert – daraus
+                  lässt sich keine Veränderung rechnen. Schnitt im Zeitraum:{" "}
+                  {fmtDecimal(loadRangeInfo.schnitt)}.
+                </p>
+              ) : (
+                <p className="deload-basis" style={{ marginTop: 4 }}>
+                  Belastung{" "}
+                  <strong>
+                    {loadRangeInfo.prozent > 0 ? "+" : ""}
+                    {Math.round(loadRangeInfo.prozent)} %
+                  </strong>{" "}
+                  – von {fmtDecimal(loadRangeInfo.von.load)} in der ersten auf{" "}
+                  {fmtDecimal(loadRangeInfo.bis.load)} in der letzten Woche.
+                  Schnitt im Zeitraum: {fmtDecimal(loadRangeInfo.schnitt)}.
+                </p>
+              )}
+            </div>
+          )}
           {loadChartGroupData.some((d) => d.deload) && (
             <p className="deload-basis" style={{ marginTop: 6 }}>
               Hohle Punkte sind Entlastungswochen – absichtlich leichter, deshalb
@@ -16370,6 +16859,16 @@ function HistoryView({
     return [...logs].sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
   }, [logs]);
 
+  // Pokale: wo wurde ein Rekord aufgestellt. Einmal gerechnet und gemerkt -
+  // dafuer muss zu jedem Training die gesamte Historie davor durchgegangen
+  // werden, das darf nicht bei jedem Antippen neu passieren.
+  const prIndex = useMemo(
+    () => getLogsPRIndex(logs, timeBasedExercises, gymIndependentExercises),
+    [logs, timeBasedExercises, gymIndependentExercises]
+  );
+  // Welcher Pokal gerade aufgeklappt ist: "logId:entrySchluessel".
+  const [openPRKey, setOpenPRKey] = useState(null);
+
   if (sortedLogs.length === 0) {
     return (
       <div className="empty-state">
@@ -16387,6 +16886,8 @@ function HistoryView({
           (sum, e) => sum + performedWorkingSets(entrySets(e)).length,
           0
         );
+        const logPRs = prIndex[log.id] || {};
+        const logPRCount = Object.values(logPRs).reduce((sum, l) => sum + l.length, 0);
         return (
           <div
             className="card history-card"
@@ -16415,6 +16916,11 @@ function HistoryView({
               <span>
                 <ClipboardList size={12} /> {totalSets} Sätze
               </span>
+              {logPRCount > 0 && (
+                <span className="history-pr-count" title="In diesem Training wurde ein Rekord aufgestellt">
+                  <Trophy size={12} /> {logPRCount} {logPRCount === 1 ? "Rekord" : "Rekorde"}
+                </span>
+              )}
               {log.durationMinutes ? (
                 <span>
                   <Clock size={12} /> {log.durationMinutes} Min.
@@ -16463,20 +16969,53 @@ function HistoryView({
                           : shortSet(s))
                     )
                     .join(", ");
+                  const entryKey = entry.id || entry.exerciseId;
+                  const entryPRList = logPRs[entryKey] || [];
+                  const prOffen = openPRKey === `${log.id}:${entryKey}`;
                   return (
-                    <div key={entry.id || entry.exerciseId}>
+                    <div key={entryKey}>
                       <div className="history-exercise-row">
+                        <span className="history-exercise-name">
                         <span
                           className="ex-name-clickable"
                           onClick={() => setSelectedExerciseId(entry.exerciseId)}
                         >
                           {ex.name}
                         </span>
+                        {entryPRList.length > 0 && (
+                          <button
+                            className={`pr-trophy ${prOffen ? "active" : ""}`}
+                            onClick={() =>
+                              setOpenPRKey(prOffen ? null : `${log.id}:${entryKey}`)
+                            }
+                            title="Antippen: welcher Rekord war das?"
+                          >
+                            <Trophy size={13} />
+                            {entryPRList.length > 1 && <span>{entryPRList.length}</span>}
+                          </button>
+                        )}
+                        </span>
                         <span className="history-set-summary">
                           {summary || "–"}
                           {fmtRir(entry.rir) ? ` · ${fmtRir(entry.rir)}` : ""}
                         </span>
                       </div>
+                      {/* Der Rekord steht erst da, wenn man den Pokal antippt:
+                          In der Liste zaehlt der Ueberblick, die Herleitung
+                          holt man sich gezielt. */}
+                      {prOffen && (
+                        <ul className="history-pr-list">
+                          {entryPRList.map((pr, i) => (
+                            <li key={i}>
+                              <strong>{pr.title}:</strong> {pr.value}
+                              {pr.previous
+                                ? ` – vorher ${pr.previous}`
+                                : " – der erste Wert dieser Art"}
+                              {fmtRir(pr.currentRir) ? ` · ${fmtRir(pr.currentRir)}` : ""}
+                            </li>
+                          ))}
+                        </ul>
+                      )}
                       {/* Die Übungsnotiz steht bewusst nicht hier: sie ist eine
                           dauerhafte Notiz zur Übung und wiederholt sich sonst
                           unter jedem Training. Zu sehen ist sie im Training

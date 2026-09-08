@@ -365,13 +365,52 @@ einer Übung sind, stand nirgends. Jetzt im Kopf des Übungs-Fensters als blasse
 der Hauptgruppe, und im Reiter „Info" ein Satz dazu, was das bedeutet.
 
 **Das Belastungs-Diagramm hat zwei Skalen.**
-Links die relative Belastung, rechts die Veränderung zur Vorwoche in Prozent, als zweite,
-gestrichelte Linie. Grund: Die Kurve selbst ist an den eigenen Bestwert gebunden und liegt
-deshalb je nach Trainingsstand unterschiedlich hoch – eine gute Woche ist als Ausschlag nach
-oben nicht immer zu erkennen. Die Prozentlinie beantwortet genau diese Frage unabhängig vom
-Niveau. Der Tooltip nennt beide Werte. Wochen ohne Vergleichsgrundlage (die erste, und Wochen
-nach einer Pause) bekommen `null` statt 0 – die Linie bricht dort, statt „keine Veränderung" zu
+Links die relative Belastung, rechts der Abstand zum Schnitt des gewählten Zeitraums in Prozent,
+als zweite, gestrichelte Linie. Grund: Die Kurve selbst ist an den eigenen Bestwert gebunden und
+liegt deshalb je nach Trainingsstand unterschiedlich hoch – eine gute Woche ist als Ausschlag
+nach oben nicht immer zu erkennen. Die Prozentlinie beantwortet genau diese Frage unabhängig vom
+Niveau. Der Tooltip nennt beide Werte.
+
+Gemessen wird gegen **denselben** Schnitt, gegen den auch die Prozentzahl neben der Muskelgruppe
+in der Übersicht rechnet (`muscleLoadBasis`, herausgezogen aus `muscleLoadChange`). Damit steht
+am rechten Ende der Linie exakt die Zahl aus der Liste. Zuerst zeigte die Linie die Veränderung
+zur jeweiligen Vorwoche – dieselbe Ansicht, aber zwei verschiedene Zahlen für dieselbe Frage;
+das ist genau die Sorte Widerspruch, die eine Statistik unglaubwürdig macht. Gibt es keinen
+Schnitt (in den Vergleichswochen wurde nichts trainiert), bleibt die Linie leer statt 0 zu
 behaupten.
+
+**Einen eigenen Zeitraum im Diagramm markieren.**
+Zwei Tipser auf die Kurve markieren Anfang und Ende; darunter steht, wie sich die Belastung über
+genau diesen Zeitraum verändert hat, plus der Schnitt darin. Verglichen werden die beiden
+Randwochen – das ist die Frage, die die Markierung stellt. Ist eine davon leer, gibt es keine
+Zahl: „−100 %" hieße, die Belastung sei eingebrochen, dabei war schlicht Pause. Die Markierung
+fällt weg, sobald Muskelgruppe oder Zeitraum wechseln – dieselbe Position zeigt dann auf eine
+andere Woche und wäre schlicht falsch.
+
+**Pokale, wo ein Rekord gefallen ist.**
+Im Verlauf trägt jedes Training die Zahl seiner Rekorde, und im aufgeklappten Training steht
+neben der Übung ein antippbarer Pokal: welcher Rekord, welcher Wert, was war vorher. In den
+Übungs-Diagrammen sitzt der Pokal auf dem Punkt selbst – aber nur auf der Kurve, zu der der
+Rekord gehört (`key` an jedem Rekord). Ein Wiederholungs-Rekord auf der Gewichtskurve würde
+behaupten, das Gewicht sei gestiegen.
+
+Dabei fielen zwei Fehler auf, die vorher unbemerkt in der Rechnung standen:
+
+- **Ein Rekord blieb keiner.** `getExerciseHistory` kennt keine Zeitrichtung: Es nimmt alle
+  Trainings außer dem einen ausgeschlossenen – also auch spätere. Im laufenden Training ist das
+  egal, beim Nachschlagen nicht: Der Rekord vom Mai wäre keiner mehr, sobald er im Juli
+  überboten wird. `logsBefore` schneidet jetzt bei jedem Nachschlagen alles Spätere ab.
+- **Der Wiederholungs-Rekord hing an der Leserichtung.** Er zählt nur bei mindestens demselben
+  Gewicht wie der bisherige – und wurde rückwärts gerechnet, von neu nach alt. Ein älterer Satz
+  mit mehr Wiederholungen bei weniger Gewicht fiel damit still hinten runter, obwohl er zu
+  seiner Zeit der Rekord war. Gerechnet wird jetzt von alt nach neu.
+
+Und eine Rechnung, die vorher nicht getragen hätte: Für jedes Training die ganze Historie davor
+neu aufzubauen kostet bei 300 Trainings gut 700 ms – jedes Mal, wenn der Verlauf aufgeht. Die
+Historie wird deshalb einmal von alt nach neu mitgeführt (`walkLogPRs`), was denselben Fall auf
+gut 20 ms bringt und linear mitwächst. Der Rechenweg ist derselbe, nur die Reihenfolge ist eine
+andere; ein Test hält beide Wege über zufällige Trainingshistorien aneinander, damit sie nicht
+auseinanderlaufen können.
 
 **Der Rundenmodus ist keine neue Datenstruktur.**
 Im Zirkel *ist* „Satz N" gleichbedeutend mit „Runde N": Satz 1 aller Übungen ist Runde 1. Die

@@ -1602,7 +1602,7 @@ const STAT_EXPLANATIONS = {
     ],
   },
   deload: {
-    title: "Entlastungswochen",
+    title: "Entlastungen",
     paragraphs: [
       "Eine Entlastung ist ein absichtlich leichterer Zeitraum. Damit die App ihn nicht für einen Einbruch hält, trägst du ihn im Kalender ein: ersten Tag antippen, „Entlastung ab hier\" wählen, letzten Tag antippen. Der Zeitraum darf beliebig laufen - Mittwoch bis übernächsten Donnerstag genauso wie Montag bis Sonntag.",
       "Was das ändert: Im markierten Zeitraum zeigt die App keine Warnzeichen, und in den Wochen danach lässt sie ihn aus dem Vergleich heraus. Sonst würde dein ganz normaler Wiedereinstieg wie ein Sprung nach oben aussehen - der Schnitt, gegen den verglichen wird, wäre ja nach unten gezogen.",
@@ -14711,7 +14711,7 @@ function ProgressView({
           nach der eigenen Schätzung da (KONZEPT.md, Regeln 1 und 3). */}
       <div className="card">
         <ExplainableTitle onExplain={() => setExplain(STAT_EXPLANATIONS.deload)}>
-          Entlastungswochen
+          Entlastungen
         </ExplainableTitle>
 
         {!deloadInfo ? (

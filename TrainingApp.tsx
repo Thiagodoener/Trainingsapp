@@ -1254,16 +1254,15 @@ export function typicalRir(values, window = TYPICAL_RIR_WINDOW) {
 // die Zahl. null bedeutet "keine Vorgeschichte", nicht 0 %.
 // Volumen dieser Übung gegen das letzte Mal - live, während man einträgt.
 //
-// Gezählt wird nur, was ABGEHAKT ist. Vorher zählten auf der linken Seite die
-// vorbelegten Sätze des Plans mit: Beim Öffnen eines Trainings stand dann
-// schon "+31 %" neben einer Übung, an der man noch keinen Finger gerührt
-// hatte - eine Behauptung über Arbeit, die noch gar nicht stattgefunden hat.
-// Die rechte Seite (letztes Mal) hatte diesen Fehler nie, dort stehen von
-// Anfang an nur abgehakte Sätze. Genau diese Regel steht auch in KONZEPT.md:
-// "Gezählt wird nur, was abgehakt ist."
+// Gezählt werden hier BEWUSST alle eingetragenen Sätze, auch die noch nicht
+// abgehakten. Das Abzeichen beantwortet nicht "was habe ich schon geschafft",
+// sondern "worauf läuft es hinaus, wenn ich es so mache, wie es dasteht" -
+// und es zieht sofort mit, sobald man Gewicht oder Wiederholungen ändert.
+// Deshalb ist es die einzige Stelle in der App, an der auch geplante Sätze
+// zählen; überall sonst gilt "nur was abgehakt ist" (KONZEPT.md).
 //
-// Solange nichts abgehakt ist, gibt es nichts zu vergleichen - dann bleibt
-// das Abzeichen weg, statt mit "-100 %" zu begrüßen.
+// Ein Anlauf, das auf abgehakte Sätze umzustellen, ist wieder zurückgebaut
+// worden: Er nahm dem Abzeichen genau den Zweck, für den es da ist.
 function exerciseVolumeChange(currentSets, lastSets, isTimeBased, usesWeight) {
   if (!Array.isArray(lastSets) || lastSets.length === 0) return null;
   const metric = (set) =>
@@ -1272,15 +1271,13 @@ function exerciseVolumeChange(currentSets, lastSets, isTimeBased, usesWeight) {
       : usesWeight
       ? toNum(set.weight) * toNum(set.reps)
       : toNum(set.reps);
-  const sum = (sets, nurAbgehakt) =>
+  const sum = (sets) =>
     (Array.isArray(sets) ? sets : [])
-      .filter((s) => s && !s.warmup && (!nurAbgehakt || s.done))
+      .filter((s) => s && !s.warmup)
       .reduce((total, s) => total + metric(s), 0);
-  const lastTotal = sum(lastSets, false);
+  const lastTotal = sum(lastSets);
   if (lastTotal <= 0) return null;
-  const currentTotal = sum(currentSets, true);
-  if (currentTotal <= 0) return null;
-  return ((currentTotal - lastTotal) / lastTotal) * 100;
+  return ((sum(currentSets) - lastTotal) / lastTotal) * 100;
 }
 
 // Liefert die komplette Verlaufsliste einer Übung über alle Trainings hinweg

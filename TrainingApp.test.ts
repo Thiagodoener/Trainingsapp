@@ -44,6 +44,7 @@ import {
   getExercisePRHistory,
   getLogsPRIndex,
   entryPRs,
+  set1RM,
 } from "./TrainingApp";
 
 // Diese Tests sichern die Rechenfunktionen ab - also das, was die App
@@ -1334,5 +1335,155 @@ describe("Wiederholungs-Rekord wird von alt nach neu gerechnet", () => {
     expect(
       describeSetPRs(satz({ weight: 60, reps: 13 }), history).some((p: any) => p.key === "maxReps")
     ).toBe(true);
+  });
+});
+
+
+describe("Gewichte mit Komma", () => {
+  // Die App speichert ein Gewicht so, wie es getippt wurde - deutsch also
+  // "62,5". Gerechnet wurde an mehreren Stellen trotzdem mit Number(), und
+  // Number("62,5") ist NaN. Ergebnis: kein geschaetztes 1RM, kein
+  // Gewichts-Bestwert (und damit bei JEDEM Satz erneut ein "Rekord"), leere
+  // Bestwert-Kacheln und ein Wochenvolumen, in dem der Satz fehlte.
+  const halb = (over: Record<string, unknown> = {}) =>
+    satz({ weight: "62,5", reps: 8, ...over });
+
+  it("Regression: 62,5 kg ergibt ein geschaetztes 1RM", () => {
+    expect(estimate1RM("62,5" as never, 8)).toBeCloseTo(estimate1RM(62.5, 8), 10);
+    expect(estimate1RM("62,5" as never, 8)).toBeGreaterThan(70);
+  });
+
+  it("Regression: 62,5 kg landet im Gewichts-Bestwert", () => {
+    const logs = [
+      training({ id: "a", date: new Date(Date.now() - 20 * TAG).toISOString(),
+        entries: [{ id: "e", exerciseId: "bankdruecken", sets: [halb()] }] }),
+    ];
+    const history: any = getExerciseHistory(logs, "bankdruecken", "x");
+    expect(history.bestWeight).toBe(62.5);
+    expect(history.best1RM).toBeGreaterThan(70);
+  });
+
+  it("Regression: derselbe Satz ist danach kein Rekord mehr", () => {
+    const logs = [
+      training({ id: "a", date: new Date(Date.now() - 20 * TAG).toISOString(),
+        entries: [{ id: "e", exerciseId: "bankdruecken", sets: [halb()] }] }),
+      training({ id: "b", date: new Date(Date.now() - 10 * TAG).toISOString(),
+        entries: [{ id: "e", exerciseId: "bankdruecken", sets: [halb()] }] }),
+    ];
+    const history = getExerciseHistory(logs, "bankdruecken", "x");
+    expect(describeSetPRs(halb(), history)).toEqual([]);
+  });
+
+  it("Regression: die Bestwert-Kacheln bleiben nicht leer", () => {
+    const logs = [
+      training({ id: "a", date: new Date(Date.now() - 20 * TAG).toISOString(),
+        entries: [{ id: "e", exerciseId: "bankdruecken", sets: [halb()] }] }),
+    ];
+    const best: any = getExerciseBestStats(logs, "bankdruecken");
+    expect(best.bestSetVolume).toBe(500);
+    expect(best.best1RM).toBeGreaterThan(70);
+    expect(best.best1RMSource?.weight).toBe(62.5);
+  });
+});
+
+
+describe("Geschaetztes 1RM rechnet die Reserve mit", () => {
+  // Epley und Brzycki beschreiben einen Satz bis zum Muskelversagen. Acht
+  // Wiederholungen mit drei in Reserve sind aber ungefaehr ein Elfer-Maximum.
+  it("acht Wdh. mit drei in Reserve zaehlen wie elf bis zum Versagen", () => {
+    const set = satz({ weight: 100, reps: 8 });
+    expect(set1RM(set, 3)).toBeCloseTo(estimate1RM(100, 11), 10);
+  });
+
+  it("ohne Angabe bleibt es exakt die alte Rechnung", () => {
+    const set = satz({ weight: 100, reps: 8 });
+    expect(set1RM(set)).toBeCloseTo(estimate1RM(100, 8), 10);
+    expect(set1RM(set, null)).toBeCloseTo(estimate1RM(100, 8), 10);
+  });
+
+  it("derselbe Satz naeher am Limit ist kein Kraftzuwachs mehr", () => {
+    // 100x8 mit 3 in Reserve und 100x8 am Limit: Frueher waren beide gleich,
+    // obwohl der zweite deutlich mehr Kraft gezeigt hat. Jetzt liegt der
+    // vorsichtige Satz hoeher - er haette ja noch drei Wdh. gehabt.
+    const set = satz({ weight: 100, reps: 8 });
+    expect(set1RM(set, 3)).toBeGreaterThan(set1RM(set, 0));
+  });
+
+  it("schaetzt nicht mehr, wenn Wdh. plus Reserve ueber der Grenze liegen", () => {
+    // Ab 13 wird bewusst nicht mehr geschaetzt - das gilt dann auch fuer
+    // 10 Wdh. mit 3 in Reserve.
+    expect(set1RM(satz({ weight: 60, reps: 10 }), 3)).toBe(0);
+    expect(set1RM(satz({ weight: 60, reps: 10 }), 2)).toBeGreaterThan(0);
+  });
+
+  it("Baender bleiben aussen vor", () => {
+    expect(set1RM({ ...satz({ weight: 18, reps: 8 }), bandId: "b1" } as never, 3)).toBe(0);
+  });
+});
+
+
+describe("Koerpergewichts-Uebungen mit Zusatzgewicht", () => {
+  const exBy: any = {
+    klimmzug: { id: "klimmzug", name: "Klimmzug", group: "ruecken", equipment: "Körpergewicht" },
+  };
+  const zug = (over: Record<string, unknown> = {}) =>
+    satz({ weight: 0, reps: 10, ...over });
+  const bauLogs = (zusatz: number) => {
+    const logs: any[] = [];
+    for (let w = 5; w >= 1; w--) {
+      logs.push(training({
+        id: "l" + w,
+        date: new Date(Date.now() - w * WOCHE + TAG).toISOString(),
+        entries: [{ id: "e", exerciseId: "klimmzug", sets: [zug(), zug(), zug()] }],
+      }));
+    }
+    logs.push(training({
+      id: "heute",
+      date: new Date(Date.now() - TAG).toISOString(),
+      entries: [{ id: "e", exerciseId: "klimmzug", sets: [zug({ weight: zusatz, reps: 8 })] }],
+    }));
+    return logs;
+  };
+  const reihe = (zusatz: number, opts: any = {}) =>
+    getMuscleLoadSeries(bauLogs(zusatz), exBy, {}, {}, 7, Date.now(), opts)
+      .find((g: any) => g.id === "ruecken")!.values;
+
+  it("Regression: der erste Satz mit Gurt loescht nicht die ganze Historie", () => {
+    // Frueher: Sobald ein Satz Gewicht hatte, wurde die Uebung in Kilogramm
+    // gemessen - und jeder Klimmzug ohne Gurt war damit null Kilogramm Arbeit.
+    // Die Reihe fiel von 3,0 pro Woche auf 0,0.
+    const ohne = reihe(0);
+    const mit = reihe(10);
+    expect(ohne[2]).toBeCloseTo(3, 6);
+    expect(mit[2]).toBeCloseTo(3, 6);
+  });
+
+  it("ohne Koerpergewicht zaehlen nur die Wiederholungen", () => {
+    // Ehrlich statt erfunden: Ohne die Angabe kann die App den Gurt nicht
+    // gewichten, also laesst sie ihn weg - statt die Historie zu zerlegen.
+    expect(reihe(0)).toEqual(reihe(30));
+  });
+
+  it("mit Koerpergewicht zaehlt der Gurt mit", () => {
+    const ohneGurt = reihe(0, { bodyWeight: 80 });
+    const mitGurt = reihe(10, { bodyWeight: 80 });
+    const letzte = ohneGurt.length - 1;
+    expect(mitGurt[letzte]).toBeGreaterThan(ohneGurt[letzte]);
+  });
+
+  it("eine normale Hantel-Uebung bleibt unberuehrt", () => {
+    const hantelExBy: any = {
+      bankdruecken: { id: "bankdruecken", name: "Bankdrücken", group: "brust", equipment: "Langhantel" },
+    };
+    const logs = [
+      training({ id: "a", date: new Date(Date.now() - 2 * WOCHE).toISOString(),
+        entries: [{ id: "e", exerciseId: "bankdruecken", sets: [satz({ weight: 100, reps: 8 })] }] }),
+      training({ id: "b", date: new Date(Date.now() - TAG).toISOString(),
+        entries: [{ id: "e", exerciseId: "bankdruecken", sets: [satz({ weight: 100, reps: 8 })] }] }),
+    ];
+    const ohne = getMuscleLoadSeries(logs, hantelExBy, {}, {}, 4);
+    const mit = getMuscleLoadSeries(logs, hantelExBy, {}, {}, 4, Date.now(), { bodyWeight: 80 });
+    expect(mit.find((g: any) => g.id === "brust")!.values)
+      .toEqual(ohne.find((g: any) => g.id === "brust")!.values);
   });
 });

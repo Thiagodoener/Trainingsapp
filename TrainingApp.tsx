@@ -38,6 +38,7 @@ import {
   Info,
   BatteryLow,
   Settings,
+  User,
 } from "lucide-react";
 import {
   LineChart,
@@ -795,8 +796,8 @@ function addSessionToExerciseHistory(h, log, exerciseId, isTimeBased, newestFirs
       set.done &&
       !set.warmup &&
       (isTimeBased
-        ? Number(set.duration) > 0
-        : Number(set.weight) > 0 || Number(set.reps) > 0)
+        ? toNum(set.duration) > 0
+        : toNum(set.weight) > 0 || toNum(set.reps) > 0)
   );
   if (doneSets.length === 0) return;
 
@@ -841,21 +842,21 @@ function addSessionToExerciseHistory(h, log, exerciseId, isTimeBased, newestFirs
     }
     const vol = toNum(set.weight) * reps;
     if (vol > h.bestSetVolume) { h.bestSetVolume = vol; h.bestSetVolumeRir = rirOf(set); }
-    const oneRM = set1RM(set);
+    const oneRM = set1RM(set, rirOf(set));
     if (oneRM > h.best1RM) { h.best1RM = oneRM; h.best1RMRir = rirOf(set); }
   }
 
   if (isTimeBased) {
     for (const set of doneSets) {
-      const dur = Number(set.duration) || 0;
+      const dur = toNum(set.duration);
       if (dur > h.bestDuration) { h.bestDuration = dur; h.bestDurationRir = rirOf(set); }
     }
   } else {
     // Numbers are compared explicitly: values that slipped through as
     // strings would otherwise compare lexically ("60" > "7" is false).
     for (const set of doneSets) {
-      const weight = Number(set.weight) || 0;
-      const reps = Number(set.reps) || 0;
+      const weight = toNum(set.weight);
+      const reps = toNum(set.reps);
       if (weight > h.bestWeight) {
         h.bestWeight = weight;
         h.bestRepsAtBestWeight = reps;
@@ -1027,7 +1028,7 @@ const FEELING_EXPECT_MIN = 2;      // darunter ist es keine Erwartung, sondern e
 const FEELING_MIN_SESSIONS_TENDENCY = 3;  // ab hier eine Tendenz in Worten
 const FEELING_MIN_SESSIONS_PERCENT = 5;   // ab hier eine Prozentzahl
 
-export function getFeelingPerformance(logs, timeBasedExercises, deloadWeeks = null) {
+export function getFeelingPerformance(logs, timeBasedExercises, deloadWeeks = null, opts = {}) {
   // Trainings aus Entlastungswochen bleiben draußen. Sie sind absichtlich
   // leichter und würden gleich doppelt stören: Die Einheit selbst läge weit
   // unter der Erwartung, und als Nachbar-Einheit zöge sie die Erwartung der
@@ -1042,13 +1043,19 @@ export function getFeelingPerformance(logs, timeBasedExercises, deloadWeeks = nu
   // Womit die Arbeit eines Satzes gemessen wird, hängt an der Übungsart -
   // einmal je Übung bestimmt statt in jeder Schleifenrunde neu.
   const modeCache = {};
+  // opts.exBy nennt die Uebungen, opts.bodyWeight das Koerpergewicht - ohne
+  // beides rechnet es wie vorher (siehe loadModeFor).
+  const bodyLoadOf = (exerciseId) => bodyLoadFor(opts?.exBy?.[exerciseId], opts);
   const modeFor = (exerciseId) => {
     if (modeCache[exerciseId]) return modeCache[exerciseId];
     const isTime = isTimeBasedInLogs(safeLogs, exerciseId, timeBasedExercises);
     const hasWeight = safeLogs.some((l) =>
       performedWorkingSets(logSetsFor(l, exerciseId)).some((s) => toNum(s.weight) > 0)
     );
-    modeCache[exerciseId] = isTime ? "time" : hasWeight ? "weight" : "reps";
+    modeCache[exerciseId] = loadModeFor(opts?.exBy?.[exerciseId], {
+      isTime, hasWeight, bodyLoad: bodyLoadOf(exerciseId),
+      equipmentOverrides: opts?.equipmentOverrides,
+    });
     return modeCache[exerciseId];
   };
 
@@ -1070,7 +1077,8 @@ export function getFeelingPerformance(logs, timeBasedExercises, deloadWeeks = nu
       const sets = performedWorkingSets(logSetsFor(log, exerciseId));
       if (sets.length === 0) return;
       const mode = modeFor(exerciseId);
-      const perSet = sets.reduce((sum, s) => sum + loadSetWork(s, mode), 0) / sets.length;
+      const perSet =
+        sets.reduce((sum, s) => sum + loadSetWork(s, mode, bodyLoadOf(exerciseId)), 0) / sets.length;
       if (!(perSet > 0)) return;
       const series = seriesByExercise[exerciseId] || (seriesByExercise[exerciseId] = []);
       series.push({ logId: log.id, feeling, perSet });
@@ -1392,7 +1400,7 @@ export function describeSetPRs(set, best, isTimeBased = false, hasWeight = true,
       currentRir: setRir,
     });
   }
-  const oneRM = set1RM(set);
+  const oneRM = set1RM(set, setRir);
   if (oneRM > 0 && oneRM > toNum(best.best1RM)) {
     found.push({
       key: "best1RM",
@@ -1490,14 +1498,46 @@ const ONE_RM_MAX_REPS = 12;
 // steigt mit der Dehnung, ein "einmaliges Maximum" ist dabei keine sinnvolle
 // Groesse - anders als bei einer Hantel, die auf dem ganzen Weg gleich schwer
 // bleibt. Ein Bandsatz liefert deshalb 0, also "dazu sagt die App nichts".
-export function set1RM(set) {
+export function set1RM(set, rir = null) {
   if (!set || set.bandId) return 0;
-  return estimate1RM(set.weight, set.reps);
+  return estimate1RM(set.weight, toNum(set.reps) + reserveReps(rir));
+}
+
+// Wie viele Wiederholungen noch drin gewesen waeren. Epley und Brzycki
+// beschreiben einen Satz BIS ZUM MUSKELVERSAGEN - acht Wiederholungen mit drei
+// in Reserve sind aber kein Achter-Maximum, sondern ungefaehr ein Elfer. Ohne
+// diese Umrechnung wird das Maximum systematisch zu niedrig geschaetzt, und
+// zwar umso mehr, je vorsichtiger trainiert wurde: Wer denselben Satz einmal
+// naeher am Limit macht, saehe einen "Kraftzuwachs", der keiner ist.
+//
+// Ohne Angabe wird nichts dazugerechnet (Reserve 0) - das ist der Satz, wie
+// er dasteht, und damit genau die alte Rechnung. Fehlende Daten verschieben
+// nichts.
+//
+// Gilt nur fuer den LETZTEN abgehakten Arbeitssatz einer Uebung: Nur fuer den
+// wird die Reserve abgefragt. Dieselbe Regel wie bei der Belastungsrechnung
+// (siehe rirLoadFactor) und bei den Rekorden.
+function reserveReps(rir) {
+  const n = Number(rir);
+  if (!Number.isFinite(n) || n <= 0) return 0;
+  return Math.min(RIR_MAX, Math.round(n));
+}
+
+// Geht die abgehakten Arbeitssaetze eines Uebungs-Eintrags durch und reicht
+// die Reserve-Angabe genau dem letzten davon weiter. Diese Regel steht sonst
+// an vier Stellen gleichzeitig - und wenn sie an einer davon fehlt, rechnet
+// eine Kachel anders als die Kurve daneben.
+function forEachPerformedSet(entry, fn) {
+  const performed = performedWorkingSets(entrySets(entry));
+  const last = performed[performed.length - 1] || null;
+  performed.forEach((set) => fn(set, set === last ? entry?.rir : null));
 }
 
 export function estimate1RM(weight, reps) {
-  const w = Number(weight) || 0;
-  const r = Number(reps) || 0;
+  // toNum statt Number: Ein Gewicht steht so da, wie es getippt wurde -
+  // bei "62,5" ergibt Number() NaN und daraus wird still eine 0.
+  const w = toNum(weight);
+  const r = toNum(reps);
   if (w <= 0 || r <= 0) return 0;
   if (r > ONE_RM_MAX_REPS) return 0;
   if (r === 1) return w;
@@ -1524,16 +1564,19 @@ export function getExerciseBestStats(logs, exerciseId) {
   let bestSetVolume = 0;
   let bestSetVolumeSource = null;
   (Array.isArray(logs) ? logs : []).forEach((log) => {
-    logSetsFor(log, exerciseId).forEach((set) => {
-      if (!set.done || set.warmup) return;
-      const weight = Number(set.weight) || 0;
-      const reps = Number(set.reps) || 0;
-      if (weight <= 0 || reps <= 0) return;
-      const herkunft = { date: log.date, weight, reps, bandName: set.bandName || null };
-      const oneRM = set1RM(set);
-      if (oneRM > best1RM) { best1RM = oneRM; best1RMSource = herkunft; }
-      const vol = weight * reps;
-      if (vol > bestSetVolume) { bestSetVolume = vol; bestSetVolumeSource = herkunft; }
+    // Ueber die Eintraege statt ueber die blanken Saetze, weil die Reserve am
+    // Eintrag haengt und ins geschaetzte 1RM eingeht (siehe set1RM).
+    logEntriesFor(log, exerciseId).forEach((entry) => {
+      forEachPerformedSet(entry, (set, rir) => {
+        const weight = toNum(set.weight);
+        const reps = toNum(set.reps);
+        if (weight <= 0 || reps <= 0) return;
+        const herkunft = { date: log.date, weight, reps, bandName: set.bandName || null };
+        const oneRM = set1RM(set, rir);
+        if (oneRM > best1RM) { best1RM = oneRM; best1RMSource = herkunft; }
+        const vol = weight * reps;
+        if (vol > bestSetVolume) { bestSetVolume = vol; bestSetVolumeSource = herkunft; }
+      });
     });
   });
   return { best1RM, best1RMSource, bestSetVolume, bestSetVolumeSource };
@@ -1557,11 +1600,10 @@ function getBest1RMOverall(logs, exBy, timeBasedExercises) {
       const ex = exBy[entry.exerciseId];
       if (!ex) return;
       if (isTimeBasedInLogs(logs, entry.exerciseId, timeBasedExercises)) return;
-      entrySets(entry).forEach((set) => {
-        if (!set.done || set.warmup) return;
+      forEachPerformedSet(entry, (set, rir) => {
         const weight = toNum(set.weight);
         const reps = toNum(set.reps);
-        const oneRM = set1RM(set);
+        const oneRM = set1RM(set, rir);
         if (oneRM > best1RM) {
           best1RM = oneRM;
           best1RMSource = {
@@ -1585,7 +1627,7 @@ function getTimePR(logs, exerciseId) {
     // Alle Plaetze der Uebung, nicht nur den ersten - sonst faellt der
     // Rekord aus dem zweiten Zirkel-Durchgang unter den Tisch.
     logSetsFor(log, exerciseId).forEach((s) => {
-      if (s && s.done && !s.warmup) best = Math.max(best, Number(s.duration) || 0);
+      if (s && s.done && !s.warmup) best = Math.max(best, toNum(s.duration));
     });
   });
   return best;
@@ -1668,11 +1710,12 @@ const STAT_EXPLANATIONS = {
       "Deshalb wird jeder Satz an deinem eigenen besten Satz in genau dieser Übung gemessen: \"Wie viel von meinem Bestwert war das?\" Ein Satz auf Bestniveau zählt 1,0. Ein Kurzhantel-Satz mit 22 kg ist damit genauso viel wert wie ein Langhantel-Satz mit 60 kg, wenn beide gleich nah am jeweiligen persönlichen Bestwert liegen.",
       "Wie bei den Sätzen darüber zählt die Arbeit voll auf die Hauptgruppe und halb auf jede Nebengruppe: Bankdrücken belastet auch Schultern und Trizeps.",
       "Ein neuer Rekord verfälscht die Vergangenheit dabei nicht - er wird auf alle Wochen gleich angewendet und kürzt sich beim Prozentvergleich wieder heraus.",
+      "Bei Klimmzügen, Dips oder Liegestützen ist dein Körper das Gewicht, und in der App steht dort nur das Zusatzgewicht. Ohne dein Körpergewicht (Zahnrad-Menü) zählt die App deshalb die Wiederholungen und lässt den Gurt weg; mit der Angabe rechnet sie mit Körpergewicht + Zusatz. Bewusst nicht geschätzt: Ein erfundenes Körpergewicht wäre schlechter als keins.",
       "Zusätzlich zählt, wie hart du den letzten Satz einer Übung beendet hast: Derselbe Satz ist nicht dieselbe Belastung, wenn er einmal am Limit und einmal mit vier Wiederholungen in Reserve endete. Gewichtet wird nur dieser eine Satz, denn nur für ihn gibt es die Angabe - die früheren Sätze bleiben unangetastet. Verglichen wird mit deiner eigenen üblichen Reserve für genau diese Übung; ohne Angabe ändert sich nichts.",
       "Die Warnzeichen rechts kommen aus derselben Reihe: ein Hinweis, wenn die aktuelle Woche mehr als 15 % über dem Schnitt der 4 Wochen davor liegt, ein deutlicher Alarm ab 30 %, und ein Plateau-Zeichen, wenn die letzten zwei Wochen im Schnitt nicht über den zwei Wochen davor liegen. Das sind Fragen, keine Urteile - wie es sich anfühlt, weißt nur du.",
     ],
     formula: [
-      "Wert eines Satzes = (kg × Wdh.) ÷ bester Satz dieser Übung. Bei Übungen ohne Gewicht zählen die Wiederholungen, bei Zeit-Übungen die Sekunden.",
+      "Wert eines Satzes = (kg × Wdh.) ÷ bester Satz dieser Übung. Bei Übungen ohne Gewicht zählen die Wiederholungen, bei Zeit-Übungen die Sekunden. Bei Körpergewichts-Übungen mit eingetragenem Körpergewicht: (Körpergewicht + Zusatz) × Wdh.",
       "Reserve-Gewichtung = nur auf den letzten abgehakten Arbeitssatz: je Stufe RIR unter deinem Üblichen 3 % mehr, je Stufe darüber 3 % weniger, höchstens 12 % in beide Richtungen. Ohne RIR-Angabe: keine Änderung.",
       "Wochenwert = Summe aller Satzwerte der Muskelgruppe in einem 7-Tage-Fenster. Dropsätze zählen hier voll mit.",
       "Plateau = Schnitt der letzten 2 Wochen ≤ Schnitt der 2 Wochen davor plus 2 %. Wochen ohne Training und markierte Entlastungen zählen als Lücke; von den vier Wochen darf höchstens eine fehlen, sonst wird nichts gemeldet.",
@@ -1757,10 +1800,52 @@ export function compareWindowSeries(values, compareWeeks) {
 // Womit die "Arbeit" eines Satzes gemessen wird, hängt an der Übungsart.
 // Bei Übungen ohne Gewicht wären Kilogramm immer 0, bei Zeit-Übungen gibt es
 // gar keine Wiederholungen - jede Art braucht ihr eigenes Maß.
-function loadSetWork(set, mode) {
+function loadSetWork(set, mode, bodyWeight = 0) {
   if (mode === "time") return toNum(set.duration);
   if (mode === "reps") return toNum(set.reps);
-  return toNum(set.weight) * toNum(set.reps);
+  // Bei einer Koerpergewichts-Uebung ist das eingetragene Gewicht das
+  // ZUSATZgewicht; das eigentliche Gewicht ist der Koerper. Ohne diese Zeile
+  // wiegt ein Klimmzug ohne Gurt null Kilogramm - und die gesamte Historie
+  // einer Uebung faellt in dem Moment auf null, in dem zum ersten Mal ein
+  // Gurt dazukommt (siehe modeOf).
+  return (bodyWeight + toNum(set.weight)) * toNum(set.reps);
+}
+
+// Eine Uebung, bei der der eigene Koerper die Last ist. Genommen wird das
+// Geraet, das an der Uebung steht (mit deiner Korrektur, falls du eine
+// gesetzt hast) - nicht geraten aus den Zahlen: Eine Maschinenuebung, die
+// jemand versehentlich mit 0 kg protokolliert, ist keine
+// Koerpergewichts-Uebung.
+function isBodyweightExercise(exercise, equipmentOverrides) {
+  if (!exercise) return false;
+  return getExerciseEquipment(exercise, equipmentOverrides) === "Körpergewicht";
+}
+
+// Wie viel Koerpergewicht bei dieser Uebung als Last zaehlt: das eingetragene
+// Koerpergewicht, wenn der Koerper die Last ist - sonst 0. Ohne eingetragenes
+// Koerpergewicht bleibt es bei 0, und die Uebung wird wie eh und je ueber die
+// Wiederholungen gemessen.
+function bodyLoadFor(exercise, opts) {
+  const bw = toNum(opts?.bodyWeight);
+  if (!(bw > 0)) return 0;
+  return isBodyweightExercise(exercise, opts?.equipmentOverrides) ? bw : 0;
+}
+
+// Womit eine Uebung gemessen wird. Der Sonderfall steht hier an einer Stelle,
+// weil ihn sonst vier Auswertungen einzeln kennen muessten:
+//
+// Eine Koerpergewichts-Uebung wird ueber die Wiederholungen gemessen - das
+// eingetragene Gewicht ist ja nur das ZUSATZgewicht. Fruehe Versionen haben
+// stattdessen "hat irgendwann Gewicht" gefragt und sind dann auf Kilogramm
+// umgeschwenkt: Ab dem ersten Klimmzug mit Gurt zaehlte jeder Satz ohne Gurt
+// null Kilogramm, und die ganze Historie dieser Uebung fiel auf null.
+// Mit eingetragenem Koerpergewicht wird stattdessen in Kilogramm gerechnet
+// (Koerper + Zusatz), und beides zaehlt richtig.
+function loadModeFor(exercise, { isTime, hasWeight, bodyLoad, equipmentOverrides }) {
+  if (isTime) return "time";
+  if (bodyLoad > 0) return "weight";
+  if (isBodyweightExercise(exercise, equipmentOverrides)) return "reps";
+  return hasWeight ? "weight" : "reps";
 }
 
 // weekCount = wie viele 7-Tage-Fenster zurück betrachtet werden. Fenster 0 ist
@@ -1772,7 +1857,10 @@ export function getMuscleLoadSeries(
   subgroupOverrides,
   timeBasedExercises,
   weekCount = 12,
-  nowTs = Date.now()
+  nowTs = Date.now(),
+  // { equipmentOverrides, bodyWeight } - siehe loadModeFor. Ohne diese
+  // Angaben rechnet alles wie vorher.
+  opts = {}
 ) {
   const safeLogs = Array.isArray(logs) ? logs : [];
   const emptyWeeks = () => new Array(weekCount).fill(0);
@@ -1792,12 +1880,23 @@ export function getMuscleLoadSeries(
       });
     });
   });
+  const bodyLoadCache = {};
+  const bodyLoadOf = (exerciseId) => {
+    if (!(exerciseId in bodyLoadCache)) {
+      bodyLoadCache[exerciseId] = bodyLoadFor(exBy[exerciseId], opts);
+    }
+    return bodyLoadCache[exerciseId];
+  };
   const modeOf = (exerciseId) => {
     if (!(exerciseId in timeCache)) {
       timeCache[exerciseId] = isTimeBasedInLogs(safeLogs, exerciseId, timeBasedExercises);
     }
-    if (timeCache[exerciseId]) return "time";
-    return hasWeight[exerciseId] ? "weight" : "reps";
+    return loadModeFor(exBy[exerciseId], {
+      isTime: timeCache[exerciseId],
+      hasWeight: !!hasWeight[exerciseId],
+      bodyLoad: bodyLoadOf(exerciseId),
+      equipmentOverrides: opts?.equipmentOverrides,
+    });
   };
 
   // Schritt 2: Der beste Einzelsatz aller Zeiten je Übung - der Maßstab, an
@@ -1808,7 +1907,7 @@ export function getMuscleLoadSeries(
       const mode = modeOf(e.exerciseId);
       entrySets(e).forEach((s) => {
         if (!s.done || s.warmup) return;
-        const work = loadSetWork(s, mode);
+        const work = loadSetWork(s, mode, bodyLoadOf(e.exerciseId));
         if (work > (best[e.exerciseId] || 0)) best[e.exerciseId] = work;
       });
     });
@@ -1844,7 +1943,7 @@ export function getMuscleLoadSeries(
       const rirFactor = rirLoadFactor(e.rir, typicalRirs[e.exerciseId]);
       let score = 0;
       performed.forEach((s) => {
-        const work = loadSetWork(s, mode) / reference;
+        const work = loadSetWork(s, mode, bodyLoadOf(e.exerciseId)) / reference;
         score += s === lastPerformed ? work * rirFactor : work;
       });
       if (score === 0) return;
@@ -2159,7 +2258,7 @@ export function detectLoadSignal(values, historyWeeks = Infinity, deloadFlags = 
 // Bestwert-Normierung wie getMuscleLoadSeries (siehe dort für die Herleitung),
 // nur ohne die Aggregation über Muskelgruppen. Grundlage für
 // detectLoadSignal auf Einzelübungs-Ebene.
-function getExerciseLoadSeries(logs, exerciseId, timeBasedExercises, weekCount = 12, nowTs = Date.now()) {
+function getExerciseLoadSeries(logs, exerciseId, timeBasedExercises, weekCount = 12, nowTs = Date.now(), opts = {}) {
   const safeLogs = Array.isArray(logs) ? logs : [];
   const isTime = isTimeBasedInLogs(safeLogs, exerciseId, timeBasedExercises);
   const hasWeight = safeLogs.some((l) =>
@@ -2169,7 +2268,12 @@ function getExerciseLoadSeries(logs, exerciseId, timeBasedExercises, weekCount =
         entrySets(e).some((s) => s.done && !s.warmup && toNum(s.weight) > 0)
     )
   );
-  const mode = isTime ? "time" : hasWeight ? "weight" : "reps";
+  // opts.exercise ist die Uebung selbst - ohne sie waere hier nicht zu
+  // erkennen, dass der Koerper die Last ist (siehe loadModeFor).
+  const bodyLoad = bodyLoadFor(opts?.exercise, opts);
+  const mode = loadModeFor(opts?.exercise, {
+    isTime, hasWeight, bodyLoad, equipmentOverrides: opts?.equipmentOverrides,
+  });
 
   let best = 0;
   safeLogs.forEach((l) => {
@@ -2177,7 +2281,7 @@ function getExerciseLoadSeries(logs, exerciseId, timeBasedExercises, weekCount =
       if (e.exerciseId !== exerciseId) return;
       entrySets(e).forEach((s) => {
         if (!s.done || s.warmup) return;
-        const work = loadSetWork(s, mode);
+        const work = loadSetWork(s, mode, bodyLoad);
         if (work > best) best = work;
       });
     });
@@ -2200,7 +2304,7 @@ function getExerciseLoadSeries(logs, exerciseId, timeBasedExercises, weekCount =
       const lastPerformed = performed[performed.length - 1] || null;
       const rirFactor = rirLoadFactor(e.rir, typicalHere);
       performed.forEach((s) => {
-        const work = loadSetWork(s, mode) / best;
+        const work = loadSetWork(s, mode, bodyLoad) / best;
         weeks[idx] += s === lastPerformed ? work * rirFactor : work;
       });
     });
@@ -2409,7 +2513,7 @@ const DELOAD_PATTERN_MIN = 3;          // ab so vielen Entlastungen ein Durchsch
 // Ergebnis, ohne stärker geworden zu sein. Gemittelt wird über die Übungen,
 // die auf beiden Seiten vorkommen - eine Übung, die nur einmal auftaucht,
 // hätte keinen Vergleichswert.
-export function getDeloadEffect(logs, range, timeBasedExercises, nowTs = Date.now()) {
+export function getDeloadEffect(logs, range, timeBasedExercises, nowTs = Date.now(), opts = {}) {
   const r = range && typeof range === "object" && range.startTs
     ? range
     : deloadRanges([range])[0];
@@ -2431,13 +2535,19 @@ export function getDeloadEffect(logs, range, timeBasedExercises, nowTs = Date.no
   if (before.length < DELOAD_EFFECT_MIN_SESSIONS || after.length < DELOAD_EFFECT_MIN_SESSIONS) return null;
 
   const modeCache = {};
+  // opts.exBy nennt die Uebungen, opts.bodyWeight das Koerpergewicht - ohne
+  // beides rechnet es wie vorher (siehe loadModeFor).
+  const bodyLoadOf = (exerciseId) => bodyLoadFor(opts?.exBy?.[exerciseId], opts);
   const modeFor = (exerciseId) => {
     if (modeCache[exerciseId]) return modeCache[exerciseId];
     const isTime = isTimeBasedInLogs(safeLogs, exerciseId, timeBasedExercises);
     const hasWeight = safeLogs.some((l) =>
       performedWorkingSets(logSetsFor(l, exerciseId)).some((s) => toNum(s.weight) > 0)
     );
-    modeCache[exerciseId] = isTime ? "time" : hasWeight ? "weight" : "reps";
+    modeCache[exerciseId] = loadModeFor(opts?.exBy?.[exerciseId], {
+      isTime, hasWeight, bodyLoad: bodyLoadOf(exerciseId),
+      equipmentOverrides: opts?.equipmentOverrides,
+    });
     return modeCache[exerciseId];
   };
 
@@ -2450,7 +2560,8 @@ export function getDeloadEffect(logs, range, timeBasedExercises, nowTs = Date.no
       ids.forEach((id) => {
         const sets = performedWorkingSets(logSetsFor(log, id));
         if (sets.length === 0) return;
-        const perSet = sets.reduce((sum, s) => sum + loadSetWork(s, modeFor(id)), 0) / sets.length;
+        const perSet =
+          sets.reduce((sum, s) => sum + loadSetWork(s, modeFor(id), bodyLoadOf(id)), 0) / sets.length;
         if (!(perSet > 0)) return;
         const row = acc[id] || (acc[id] = { sum: 0, n: 0 });
         row.sum += perSet;
@@ -2496,9 +2607,9 @@ export function getDeloadEffect(logs, range, timeBasedExercises, nowTs = Date.no
 // letzterer erst ab DELOAD_PATTERN_MIN Entlastungen. Bei einer Entlastung alle
 // 6-8 Wochen sind das rund sieben Datenpunkte im Jahr; eine Zahl aus einem
 // einzigen Vorgang wäre eine Behauptung, kein Muster.
-export function getDeloadEffects(logs, deloadWeeks, timeBasedExercises, nowTs = Date.now()) {
+export function getDeloadEffects(logs, deloadWeeks, timeBasedExercises, nowTs = Date.now(), opts = {}) {
   const results = deloadRanges(deloadWeeks)
-    .map((r) => getDeloadEffect(logs, r, timeBasedExercises, nowTs))
+    .map((r) => getDeloadEffect(logs, r, timeBasedExercises, nowTs, opts))
     .filter(Boolean)
     .reverse();
   const pattern =
@@ -2612,6 +2723,8 @@ const BACKUP_KEYS = [
   "deload-interval",
   "deload-suggestion-hidden",
   "resistance-bands",
+  "rest-sound",
+  "body-weight",
 ];
 
 async function buildBackup() {
@@ -2896,6 +3009,14 @@ function TrainingAppInner() {
   // from "target minus now", so a screen that was off, an app that was in
   // the background and even a full reload all resolve to the correct value.
   const [restEndsAt, setRestEndsAt] = useState(0);
+  // Der Ton am Ende der Pause. Gehoert zum Geraet, nicht zum Training -
+  // deshalb hier oben und gespeichert: Wer ihn ausschaltet, weil er im Buero
+  // trainiert, will ihn nicht beim naechsten Training wieder anhaben.
+  const [soundOn, setSoundOn] = useState(true);
+  // Das eigene Koerpergewicht - freiwillig. Nur eine Zahl, keine Verlaufskurve:
+  // Sie ist eine Umrechnungseinheit fuer Koerpergewichts-Uebungen (siehe
+  // loadModeFor), kein Messwert, den die App auswerten wuerde.
+  const [bodyWeight, setBodyWeight] = useState(null);
 
   // Native window.confirm()/alert() are unreliable inside a sandboxed
   // artifact preview — they can silently no-op, which made every delete
@@ -2928,7 +3049,7 @@ function TrainingAppInner() {
 
   useEffect(() => {
     (async () => {
-      const [p, l, c, f, en, no, tb, gi, active, prog, activeProg, sg, ce, cc, eq, th, gy, activeGy, restEnd, brEx, brLogs, dw, di, dsh, bnd] = await Promise.all([
+      const [p, l, c, f, en, no, tb, gi, active, prog, activeProg, sg, ce, cc, eq, th, gy, activeGy, restEnd, brEx, brLogs, dw, di, dsh, bnd, snd, bw] = await Promise.all([
         loadJSON("training-plans", []),
         loadJSON("workout-logs", []),
         loadJSON("custom-exercises", []),
@@ -2954,6 +3075,8 @@ function TrainingAppInner() {
         loadJSON("deload-interval", null),
         loadJSON("deload-suggestion-hidden", null),
         loadJSON("resistance-bands", []),
+        loadJSON("rest-sound", true),
+        loadJSON("body-weight", null),
       ]);
       // Migration: users who already had folders before "programs" existed
       // get one default program that all their existing folders are
@@ -3000,6 +3123,8 @@ function TrainingAppInner() {
       setDeloadInterval(Number.isFinite(Number(di)) && Number(di) > 0 ? Number(di) : null);
       setDeloadSuggestionHiddenAt(typeof dsh === "string" ? dsh : null);
       setBands(Array.isArray(bnd) ? bnd : []);
+      setSoundOn(snd !== false);
+      setBodyWeight(Number.isFinite(Number(bw)) && Number(bw) > 0 ? Number(bw) : null);
       setGyms(gy);
       setActiveGymId(activeGy && gy.some((g) => g.id === activeGy) ? activeGy : gy[0]?.id || null);
       setExerciseEquipmentOverrides(eq);
@@ -3312,6 +3437,18 @@ function TrainingAppInner() {
     const value = typeof endsAt === "number" && endsAt > Date.now() ? endsAt : 0;
     setRestEndsAt(value);
     await saveJSON("rest-timer", value);
+  };
+
+  const persistBodyWeight = async (value) => {
+    const n = toNum(value);
+    const next = n > 0 ? n : null;
+    setBodyWeight(next);
+    await saveJSON("body-weight", next);
+  };
+
+  const updateSoundOn = async (value) => {
+    setSoundOn(!!value);
+    await saveJSON("rest-sound", !!value);
   };
 
   const clearActiveSession = async () => {
@@ -3689,6 +3826,8 @@ function TrainingAppInner() {
   // Ist im Abschluss-Fenster das Nachtrag-Formular für eine Atemübung offen?
   const [finishBreathingOpen, setFinishBreathingOpen] = useState(false);
   const [bandManagerOpen, setBandManagerOpen] = useState(false);
+  const [bodyWeightOpen, setBodyWeightOpen] = useState(false);
+  const [bodyWeightDraft, setBodyWeightDraft] = useState("");
   const [bandDraft, setBandDraft] = useState({ name: "", kg: "" });
   const [renamingBandId, setRenamingBandId] = useState(null);
   const [gymDraftName, setGymDraftName] = useState("");
@@ -6517,9 +6656,9 @@ function TrainingAppInner() {
                       const workingSets = entry.sets.filter((s) => s.done && !s.warmup);
                       const lastSet = workingSets[workingSets.length - 1];
                       if (!lastSet) return item;
-                      const achievedReps = Math.round(Number(lastSet.reps) || 0);
-                      const achievedWeight = Number(lastSet.weight) || 0;
-                      const achievedDuration = Math.round(Number(lastSet.duration) || 0);
+                      const achievedReps = Math.round(toNum(lastSet.reps));
+                      const achievedWeight = toNum(lastSet.weight);
+                      const achievedDuration = Math.round(toNum(lastSet.duration));
                       const isTime = !!item.useTime;
                       const changed = isTime
                         ? achievedDuration > 0 && achievedDuration !== item.duration
@@ -6543,6 +6682,8 @@ function TrainingAppInner() {
               onDiscard={() => askConfirm("Aktives Training wirklich verwerfen? Alle nicht gespeicherten Sätze gehen verloren.", clearActiveSession)}
               restEndsAt={restEndsAt}
               onSetRestEndsAt={updateRestEndsAt}
+              soundOn={soundOn}
+              onSetSoundOn={updateSoundOn}
               onAddCustom={handleAddCustomExercise}
             />
           </div>
@@ -6555,6 +6696,8 @@ function TrainingAppInner() {
           </div>
         ) : tab === "dashboard" ? (
           <DashboardView
+            exerciseEquipmentOverrides={exerciseEquipmentOverrides}
+            bodyWeight={bodyWeight}
             plans={allPlans}
             logs={logs}
             exBy={allExBy}
@@ -6570,6 +6713,11 @@ function TrainingAppInner() {
             onToggleTheme={toggleTheme}
             onManageGyms={() => setGymManagerOpen(true)}
             onManageBands={() => setBandManagerOpen(true)}
+            bodyWeight={bodyWeight}
+            onEditBodyWeight={() => {
+              setBodyWeightDraft(bodyWeight > 0 ? fmtDecimal(bodyWeight) : "");
+              setBodyWeightOpen(true);
+            }}
             onManageBreathing={() => { setBreathingEditing(null); setBreathingManagerOpen(true); }}
             onOpenBackup={() => setBackupOpen(true)}
             onStartWorkout={(plan, entryId) => startScheduledWorkout(plan, entryId)}
@@ -6745,6 +6893,7 @@ function TrainingAppInner() {
           null
         ) : (
           <ProgressView
+            bodyWeight={bodyWeight}
             focusLogId={historyFocusLogId}
             onFocusHandled={() => setHistoryFocusLogId(null)}
             onResumeLog={resumeLog}
@@ -7025,6 +7174,56 @@ function TrainingAppInner() {
           onFinish={finishBreathingSession}
           onCancel={() => setBreathingSession(null)}
         />
+      )}
+
+      {bodyWeightOpen && (
+        <Modal title="Körpergewicht" onClose={() => setBodyWeightOpen(false)}>
+          {/* Wozu die Zahl da ist, steht direkt daneben - eine Eingabe ohne
+              erkennbaren Zweck ist eine Zumutung (Regel 4 aus KONZEPT.md).
+              Und was NICHT passiert, steht auch da: Die App wertet das
+              Gewicht nicht aus und sagt nichts dazu. */}
+          <p className="deload-basis" style={{ marginTop: 0 }}>
+            Bei Klimmzügen, Dips oder Liegestützen ist dein Körper das Gewicht.
+            Ohne diese Angabe zählt die App dort nur die Wiederholungen – ein
+            Klimmzug mit 20 kg Gurt ist dann so viel wert wie einer ohne. Mit
+            der Angabe rechnet sie in der Belastungs-Statistik mit
+            Körpergewicht + Zusatz.
+          </p>
+          <p className="deload-basis">
+            Freiwillig. Die Zahl wird nirgends ausgewertet und nirgends
+            beurteilt – sie ist nur eine Umrechnungsgröße.
+          </p>
+          <label className="field-label" style={{ marginTop: 10 }}>Gewicht in kg</label>
+          <input
+            type="text"
+            inputMode="decimal"
+            placeholder="z. B. 78,5"
+            value={bodyWeightDraft}
+            onChange={(e) => setBodyWeightDraft(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") {
+                persistBodyWeight(bodyWeightDraft);
+                setBodyWeightOpen(false);
+              }
+            }}
+          />
+          <button
+            className="btn btn-primary btn-block btn-sm"
+            style={{ marginTop: 10 }}
+            onClick={() => { persistBodyWeight(bodyWeightDraft); setBodyWeightOpen(false); }}
+          >
+            <Check size={14} /> Speichern
+          </button>
+          {bodyWeight > 0 && (
+            <button
+              className="btn btn-ghost btn-block btn-sm"
+              style={{ marginTop: 8 }}
+              onClick={() => { persistBodyWeight(null); setBodyWeightOpen(false); }}
+            >
+              Angabe entfernen
+            </button>
+          )}
+        </Modal>
       )}
 
       {bandManagerOpen && (
@@ -7620,14 +7819,17 @@ function DashboardView({
   breathingExercises,
   breathingLogs,
   exerciseSubgroupOverrides,
+  exerciseEquipmentOverrides,
   timeBasedExercises,
   gymIndependentExercises,
+  bodyWeight = null,
   deloadWeeks = [],
   deloadStatusInfo = null,
   theme,
   onToggleTheme = () => {},
   onManageGyms = () => {},
   onManageBands = () => {},
+  onEditBodyWeight = () => {},
   onManageBreathing = () => {},
   onOpenBackup = () => {},
   onStartWorkout,
@@ -7663,9 +7865,11 @@ function DashboardView({
   const loadSeries = useMemo(
     () => getMuscleLoadSeries(
       logs, exBy, exerciseSubgroupOverrides, timeBasedExercises,
-      muscleSeriesWeekCount(loadHistoryWeeks)
+      muscleSeriesWeekCount(loadHistoryWeeks), Date.now(),
+      { equipmentOverrides: exerciseEquipmentOverrides, bodyWeight }
     ),
-    [logs, exBy, exerciseSubgroupOverrides, timeBasedExercises, loadHistoryWeeks]
+    [logs, exBy, exerciseSubgroupOverrides, timeBasedExercises, loadHistoryWeeks,
+     exerciseEquipmentOverrides, bodyWeight]
   );
 
   // Entlastungswochen zählen in den Warnungen als Lücke, nicht als Tief -
@@ -7832,6 +8036,17 @@ function DashboardView({
               onClick={() => { setSettingsOpen(false); onManageBreathing(); }}
             >
               <Wind size={14} /> Atemübungen
+            </button>
+            <button
+              className="program-menu-item"
+              onClick={() => { setSettingsOpen(false); onEditBodyWeight(); }}
+            >
+              <User size={14} /> Körpergewicht
+              {bodyWeight > 0 && (
+                <span style={{ marginLeft: "auto", color: "var(--text-dim)" }}>
+                  {fmtDecimal(bodyWeight)} kg
+                </span>
+              )}
             </button>
             <button
               className="program-menu-item"
@@ -9969,7 +10184,7 @@ function ExerciseDetailSheet({
                       wert: `${Math.round(bestStats.best1RM)} kg`,
                       quelle: bestStats.best1RMSource,
                       erklaerung:
-                        "Aus Gewicht und Wiederholungen dieses einen Satzes wird geschätzt, was einmal maximal gegangen wäre. Je mehr Wiederholungen, desto ungenauer - über 12 Wiederholungen wird gar nicht mehr geschätzt.",
+                        "Aus Gewicht und Wiederholungen dieses einen Satzes wird geschätzt, was einmal maximal gegangen wäre. Hast du für die Übung eine Reserve angegeben, wird sie beim letzten Satz mitgezählt: 8 Wdh. mit 3 in Reserve rechnen wie 11 bis zum Muskelversagen - sonst wäre derselbe Satz näher am Limit fälschlich ein Kraftzuwachs. Je mehr Wiederholungen, desto ungenauer; ab 13 (Wdh. plus Reserve) wird gar nicht mehr geschätzt.",
                     })
                   }
                   title={bestStats.best1RMSource ? "Antippen: aus welchem Satz stammt dieser Wert?" : undefined}
@@ -11191,9 +11406,9 @@ function PlanBuilder({
                     autoRun: i.autoRun === true || i.autoRun === false ? i.autoRun : null,
                     autoSeconds: i.autoSeconds != null ? Math.max(1, Number(i.autoSeconds) || 1) : null,
                     sets: Math.max(1, Number(i.sets) || 1),
-                    reps: Math.max(1, Number(i.reps) || 1),
+                    reps: Math.max(1, toNum(i.reps) || 1),
                     weight: Math.max(0, toNum(i.weight) || 0),
-                    duration: Math.max(1, Number(i.duration) || 1),
+                    duration: Math.max(1, toNum(i.duration) || 1),
                   })),
                 })
               }
@@ -11978,6 +12193,8 @@ function LogView({
   gyms = [],
   restEndsAt = 0,
   onSetRestEndsAt,
+  soundOn = true,
+  onSetSoundOn,
   onAddCustom,
 }) {
   const sessionGymName = session
@@ -12017,7 +12234,6 @@ function LogView({
   const [creatingExercise, setCreatingExercise] = useState(false);
   const [entryMenuUp, setEntryMenuUp] = useState(false);
   const [prInfo, setPrInfo] = useState(null);
-  const [soundOn, setSoundOn] = useState(true);
   const [headerOutOfView, setHeaderOutOfView] = useState(false);
   const sessionHeaderRef = useRef(null);
 
@@ -13017,7 +13233,7 @@ function LogView({
                   style={{ marginTop: 10 }}
                   onClick={() => {
                     const next = !soundOn;
-                    setSoundOn(next);
+                    onSetSoundOn?.(next);
                     if (next) playBell();
                   }}
                 >
@@ -14117,18 +14333,27 @@ function ExerciseCharts({ logs, exerciseId, isTimeBased, theme, gyms = [], gymIn
       // Deshalb alle Plaetze zusammennehmen - ein .find() wuerde die Saetze
       // der zweiten Kopie still aus allen Charts entfernen.
       const workingSets = performedWorkingSets(logSetsFor(l, selected));
-      const maxWeight = selectedIsTimeBased
-        ? 0
-        : Math.max(0, ...workingSets.map((s) => s.weight || 0));
-      const totalReps = workingSets.reduce((sum, s) => sum + (Number(s.reps) || 0), 0);
-      const totalDuration = workingSets.reduce((sum, s) => sum + (Number(s.duration) || 0), 0);
+      // Zu welchem Satz die Reserve-Angabe gehoert - sie geht ins geschaetzte
+      // 1RM ein (siehe set1RM) und haengt am Eintrag, nicht am Satz.
+      const rirBySet = new Map();
+      logEntriesFor(l, selected).forEach((entry) => {
+        forEachPerformedSet(entry, (set, rir) => { if (rir != null) rirBySet.set(set, rir); });
+      });
+      const oneRMOf = (set) => set1RM(set, rirBySet.get(set) ?? null);
+      const maxWeight = selectedIsTimeBased || !hatGewicht
+        ? null
+        // toNum: Math.max("62,5") ist NaN, und ein NaN in der Reihe reisst
+        // die ganze Kurve mit.
+        : Math.max(0, ...workingSets.map((s) => toNum(s.weight)));
+      const totalReps = workingSets.reduce((sum, s) => sum + toNum(s.reps), 0);
+      const totalDuration = workingSets.reduce((sum, s) => sum + toNum(s.duration), 0);
       // Heaviest single set of the session (weight x reps of one set), not
       // the session total — shows how hard the hardest set was over time.
-      const maxSetVolume = selectedIsTimeBased
-        ? 0
+      const maxSetVolume = selectedIsTimeBased || !hatGewicht
+        ? null
         : Math.max(
             0,
-            ...workingSets.map((s) => (Number(s.weight) || 0) * (Number(s.reps) || 0))
+            ...workingSets.map((s) => toNum(s.weight) * toNum(s.reps))
           );
       // Nicht nur WIE VIEL, sondern WOMIT: zu jedem Punkt der Kurve wird der
       // Satz gemerkt, aus dem der Wert entstanden ist. Ohne das ist "640" oder
@@ -14147,19 +14372,19 @@ function ExerciseCharts({ logs, exerciseId, isTimeBased, theme, gyms = [], gymIn
         ? null
         : workingSets.reduce(
             (best, s) =>
-              !best || set1RM(s) > set1RM(best) ? s : best,
+              !best || oneRMOf(s) > oneRMOf(best) ? s : best,
             null
           );
       // Best estimated one-rep max of the session: the strongest single set
       // converted to a 1RM, which tracks strength progress even when the
       // rep scheme changes between workouts.
-      const best1RM = selectedIsTimeBased
-        ? 0
-        : Math.max(0, ...workingSets.map((s) => set1RM(s)));
+      const best1RM = selectedIsTimeBased || !hatGewicht
+        ? null
+        : Math.max(0, ...workingSets.map(oneRMOf));
       // Whole-session volume (all sets added up) and the best single set by
       // reps or seconds - the numbers the charts below are built from.
-      const totalVolume = selectedIsTimeBased
-        ? 0
+      const totalVolume = selectedIsTimeBased || !hatGewicht
+        ? null
         : workingSets.reduce((sum, x) => sum + toNum(x.weight) * toNum(x.reps), 0);
       const maxReps = Math.max(0, ...workingSets.map((x) => toNum(x.reps)));
       const maxDuration = Math.max(0, ...workingSets.map((x) => toNum(x.duration)));
@@ -15499,6 +15724,7 @@ function ProgressView({
   onSetExerciseEquipment,
   timeBasedExercises,
   gymIndependentExercises,
+  bodyWeight = null,
   onUpdateExerciseNote,
   onRenameExercise,
   onToggleTimeBased,
@@ -15572,8 +15798,10 @@ function ProgressView({
 
   const stats = useMemo(() => getBest1RMOverall(logs, exBy, timeBasedExercises), [logs, exBy, timeBasedExercises]);
   const feelingPerformance = useMemo(
-    () => getFeelingPerformance(logs, timeBasedExercises, deloadWeeks),
-    [logs, timeBasedExercises, deloadWeeks]
+    () => getFeelingPerformance(logs, timeBasedExercises, deloadWeeks, {
+      exBy, equipmentOverrides: exerciseEquipmentOverrides, bodyWeight,
+    }),
+    [logs, timeBasedExercises, deloadWeeks, exBy, exerciseEquipmentOverrides, bodyWeight]
   );
   const calibration = useMemo(() => getCalibration(logs), [logs]);
   // Rekorde der letzten 7 Tage statt eines Lebenszeit-Zaehlers. Gezaehlt wird
@@ -15591,8 +15819,10 @@ function ProgressView({
     [deloadWeeks, deloadInterval]
   );
   const deloadEffects = useMemo(
-    () => getDeloadEffects(logs, deloadWeeks, timeBasedExercises),
-    [logs, deloadWeeks, timeBasedExercises]
+    () => getDeloadEffects(logs, deloadWeeks, timeBasedExercises, Date.now(), {
+      exBy, equipmentOverrides: exerciseEquipmentOverrides, bodyWeight,
+    }),
+    [logs, deloadWeeks, timeBasedExercises, exBy, exerciseEquipmentOverrides, bodyWeight]
   );
   const deloadGuessOf = (start) =>
     deloadRanges(deloadWeeks).find((r) => r.start === start)?.guess || null;
@@ -15684,8 +15914,13 @@ function ProgressView({
   // der Formel. weekCount deckt jetzt immer mindestens 52 Wochen ab, plus die
   // komplette echte Historie für die Chip-Option "Gesamt".
   const muscleLoadSeries = useMemo(
-    () => getMuscleLoadSeries(logs, exBy, exerciseSubgroupOverrides, timeBasedExercises, muscleSeriesWeekCount(loadHistoryWeeks)),
-    [logs, exBy, exerciseSubgroupOverrides, timeBasedExercises, loadHistoryWeeks]
+    () => getMuscleLoadSeries(
+      logs, exBy, exerciseSubgroupOverrides, timeBasedExercises,
+      muscleSeriesWeekCount(loadHistoryWeeks), Date.now(),
+      { equipmentOverrides: exerciseEquipmentOverrides, bodyWeight }
+    ),
+    [logs, exBy, exerciseSubgroupOverrides, timeBasedExercises, loadHistoryWeeks,
+     exerciseEquipmentOverrides, bodyWeight]
   );
   // Entlastungswochen als Lücke behandeln - aber nur in den Warnzeichen,
   // nicht in den frei gewählten Zeitraum-Vergleichen (siehe muscleLoadChange).
@@ -15775,8 +16010,15 @@ function ProgressView({
   // loadHistoryWeeks - eine erst kürzlich hinzugefügte Übung soll nicht an
   // der Gesamthistorie aller Logs gemessen werden.
   const selectedExerciseSeries = useMemo(
-    () => (selected ? getExerciseLoadSeries(logs, selected, timeBasedExercises, 12) : []),
-    [selected, logs, timeBasedExercises]
+    () =>
+      selected
+        ? getExerciseLoadSeries(logs, selected, timeBasedExercises, 12, Date.now(), {
+            exercise: exBy[selected],
+            equipmentOverrides: exerciseEquipmentOverrides,
+            bodyWeight,
+          })
+        : [],
+    [selected, logs, timeBasedExercises, exBy, exerciseEquipmentOverrides, bodyWeight]
   );
   const selectedExerciseHistoryWeeks = useMemo(() => {
     if (!selected) return 0;
@@ -15856,7 +16098,7 @@ function ProgressView({
   const selectedIsTimeBased = isTimeBasedInLogs(logs, selected, timeBasedExercises);
 
   const weeklyWorkouts = logs.filter((l) => Date.now() - new Date(l.date).getTime() <= 7 * 86400000).length;
-  const last7Volume = logs.filter((l) => Date.now() - new Date(l.date).getTime() <= 7 * 86400000).reduce((sum, l) => sum + logEntries(l).reduce((s, e) => s + entrySets(e).filter((x) => x.done && !x.warmup).reduce((a, x) => a + (Number(x.weight) || 0) * (Number(x.reps) || 0), 0), 0), 0);
+  const last7Volume = logs.filter((l) => Date.now() - new Date(l.date).getTime() <= 7 * 86400000).reduce((sum, l) => sum + logEntries(l).reduce((s, e) => s + entrySets(e).filter((x) => x.done && !x.warmup).reduce((a, x) => a + toNum(x.weight) * toNum(x.reps), 0), 0), 0);
 
 
   return (

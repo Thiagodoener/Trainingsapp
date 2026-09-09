@@ -419,6 +419,54 @@ definiert (die Übungsliste) und dazu gesagt, wie oft sie läuft; die Automatik-
 „Runde X von Y" statt „Satz X". Sind die Satzzahlen unterschiedlich, steht im Plan „gemischt"
 und die Leiste rechnet mit der längsten Übung.
 
+**Gewichte mit Komma haben die halbe Statistik lahmgelegt.**
+Ein Gewicht wird so gespeichert, wie es getippt wurde – deutsch also „62,5". Der Kommentar im Code
+sagte „gerechnet wird überall mit `toNum()`", nur stimmte das an acht Stellen nicht: Dort stand
+`Number()`, und `Number("62,5")` ist `NaN`. Die Folgen waren einzeln unauffällig und zusammen
+verheerend: kein geschätztes 1RM (die Kachel stand auf 0), kein Gewichts-Bestwert – wodurch
+*jeder* Satz mit 62,5 kg erneut als „Höchstes Gewicht" gemeldet wurde –, ein Wochenvolumen, in dem
+der Satz fehlte, eine Satzvolumen-Kurve auf null, und ein Plan, der das erreichte Gewicht nicht
+übernahm. `Math.max(0, "62,5")` ergibt außerdem `NaN` und riss die Maximalgewichts-Kurve komplett
+mit. Betroffen war jeder, der in Halb-Kilo-Schritten arbeitet – also fast jeder.
+
+**Bei Klimmzügen ist der Körper das Gewicht.**
+In der App steht bei einer Körpergewichts-Übung nur das *Zusatz*gewicht. Die Belastungsrechnung
+fragte aber „hat diese Übung irgendwann Gewicht gehabt?" und schwenkte dann auf Kilogramm um –
+ab dem ersten Klimmzug mit Gurt war damit jeder Satz ohne Gurt null Kilogramm Arbeit.
+Gemessen: 3,0 pro Woche über Monate, und ein einziger Satz mit Gurt drückte die gesamte Historie
+dieser Übung auf 0,0.
+
+Gelöst über eine freiwillige Angabe im Zahnrad-Menü: Mit eingetragenem Körpergewicht rechnet die
+Belastung mit (Körpergewicht + Zusatz) × Wdh., ohne Angabe über die Wiederholungen. Dann bleibt
+der Gurt zwar unberücksichtigt, aber nichts fällt auf null – lieber eine Lücke in der Aussage als
+eine falsche Zahl. Welche Übung eine Körpergewichts-Übung ist, kommt aus dem Gerät an der Übung
+(mit deiner Korrektur), nicht aus den Zahlen: Eine Maschinenübung, die jemand versehentlich mit
+0 kg protokolliert, ist keine. Bewusst *kein* Anteil je Übung (Liegestütz ~65 % des Körpers,
+Klimmzug ~100 %): Das wäre eine erfundene Tabelle, und die Zahl wird ohnehin gegen den eigenen
+besten Satz derselben Übung normiert, wo ein konstanter Faktor sich weitgehend heraus kürzt.
+Ebenfalls bewusst keine Verlaufskurve des Körpergewichts – die Zahl ist eine Umrechnungsgröße,
+kein Messwert, den die App beurteilen würde (Regel 3).
+
+**Das geschätzte 1RM rechnet die Reserve mit.**
+Epley und Brzycki beschreiben einen Satz *bis zum Muskelversagen*. Acht Wiederholungen mit drei in
+Reserve sind aber ungefähr ein Elfer-Maximum. Ohne diese Umrechnung wurde das Maximum systematisch
+zu niedrig geschätzt, und zwar umso mehr, je vorsichtiger trainiert wurde – wer denselben Satz
+einmal näher am Limit macht, sah einen „Kraftzuwachs", der keiner war. Gerechnet wird jetzt mit
+Wdh. + Reserve, und wie überall sonst gilt die Angabe nur für den letzten abgehakten Arbeitssatz,
+weil nur für den gefragt wird. Ohne Angabe bleibt es exakt die alte Rechnung. Die Grenze von 12
+Wiederholungen gilt für Wdh. + Reserve zusammen: 10 Wdh. mit 3 in Reserve werden nicht mehr
+geschätzt.
+
+**Wo es keine Zahl gab, steht jetzt eine Lücke.**
+Die Übungs-Kurven „Satzvolumen", „1RM", „Gesamtvolumen" und „Maximalgewicht" setzten für ein
+Training ohne Gewicht eine 0. Bei einer Körpergewichts-Übung, die man manchmal mit Gurt macht, fiel
+die Kurve damit bei jedem Training ohne Gurt bis auf den Boden, als wäre die Leistung eingebrochen.
+Diese Zahl gab es an dem Tag aber schlicht nicht – die Linie bricht dort jetzt.
+
+**Der Ton am Pausenende merkt sich seinen Zustand.**
+Er stand in einem lokalen Zustand der Trainingsansicht und war nach jedem Tab-Wechsel wieder an.
+Jetzt gespeichert und in der Sicherung mit dabei.
+
 ---
 
 ## Offene Punkte

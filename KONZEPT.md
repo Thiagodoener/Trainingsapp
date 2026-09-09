@@ -517,6 +517,28 @@ hängt von Ziel, Zeit und Erholung ab, und davon weiß sie nichts (Regel 3). Der
 denselben gerundeten Zahlen, die daneben stehen – sonst bekäme eine Zeile mit „+10 %" keinen Satz,
 weil dahinter 9,6 steht, und die daneben mit derselben Anzeige schon.
 
+**Ein fehlender Name hat die Übungsansicht zum Absturz gebracht.**
+Beim Antippen einer beliebigen Übung erschien nur noch „Da ist etwas schiefgelaufen –
+Can't find variable: hatGewicht". Die Variable war beim Bearbeiten verloren gegangen, an vier
+Stellen aber weiter benutzt worden.
+
+Bemerkenswert ist nicht der Fehler, sondern dass ihn nichts abgefangen hat:
+
+- Der **Build** wandelt nur um. Er prüft nicht, ob es einen Namen gibt.
+- Die **Rechen-Tests** rufen einzelne Funktionen auf, keine Oberfläche.
+- Die **Browser-Prüfung** hätte ihn gefunden – zwei Skripte scheiterten sogar genau an dieser
+  Stelle. Beide Fehlschläge wurden als Bedienfehler des Skripts abgetan statt nachgesehen.
+
+Deshalb gibt es jetzt `pruefe-namen.mjs`, angehängt an `npm test`: TypeScript beantwortet die eine
+Frage „gibt es diesen Namen?" auch für eine ungetypte Datei. Geprüft wird ausschließlich auf
+TS2304/TS2552; alles andere, was TypeScript an reinem JavaScript auszusetzen hat, wird bewusst
+ignoriert, damit die Prüfung eine klare Aussage behält. Gegengeprüft am kaputten Stand: Sie meldet
+genau die vier Zeilen.
+
+Und für die Browser-Prüfung gilt ab jetzt: Ein Skript, das an einer Bedienung scheitert, ist ein
+Befund, kein Skriptproblem – bis nachgesehen wurde. Zur Prüfung gehört, mindestens eine Übung jedes
+Typs zu öffnen (mit Gewicht, Körpergewicht, Zeit).
+
 ---
 
 ## Offene Punkte

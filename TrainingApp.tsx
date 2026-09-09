@@ -14682,6 +14682,13 @@ function ExerciseCharts({ logs, exerciseId, isTimeBased, theme, gyms = [], gymIn
         forEachPerformedSet(entry, (set, rir) => { if (rir != null) rirBySet.set(set, rir); });
       });
       const oneRMOf = (set) => set1RM(set, rirBySet.get(set) ?? null);
+      // Hatte dieses Training ueberhaupt Gewicht auf der Stange? Bei einer
+      // Koerpergewichts-Uebung, die man manchmal mit Gurt macht, haben die
+      // Trainings ohne Gurt kein Satzvolumen und kein 1RM. Frueher stand dort
+      // eine 0 und die Kurve fiel bis auf den Boden, als waere die Leistung
+      // eingebrochen - dabei gab es diese Zahl an dem Tag schlicht nicht.
+      // Lieber eine Luecke als eine Null (siehe KONZEPT.md).
+      const hatGewicht = workingSets.some((s) => toNum(s.weight) > 0);
       const maxWeight = selectedIsTimeBased || !hatGewicht
         ? null
         // toNum: Math.max("62,5") ist NaN, und ein NaN in der Reihe reisst

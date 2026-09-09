@@ -539,6 +539,30 @@ Und für die Browser-Prüfung gilt ab jetzt: Ein Skript, das an einer Bedienung 
 Befund, kein Skriptproblem – bis nachgesehen wurde. Zur Prüfung gehört, mindestens eine Übung jedes
 Typs zu öffnen (mit Gewicht, Körpergewicht, Zeit).
 
+**Veröffentlicht wird über GitHub, nicht mehr über Netlify.**
+Netlify rechnete jede Aktualisierung gegen ein Guthaben ab, was dazu führte, dass Verbesserungen
+gesammelt statt ausgeliefert wurden. GitHub Pages kostet bei einem öffentlichen Repository nichts
+und hat dieselbe Aufgabe: `.github/workflows/app-veroeffentlichen.yml` baut die App bei jedem Push
+auf `main` und stellt sie online.
+
+Zwei Entscheidungen darin:
+
+- **Die Prüfungen laufen mit.** Sie hängen bewusst nicht am Build (siehe oben), damit man beim
+  Entwickeln nicht bei jedem Speichern aufgehalten wird. Beim Veröffentlichen ist die Abwägung
+  umgekehrt: Eine kaputte App auf dem Telefon ist schlimmer als eine Aktualisierung, die ausbleibt.
+  Schlägt eine Prüfung fehl, geht nichts online und die App bleibt auf dem letzten funktionierenden
+  Stand.
+- **`base: './'` statt des fest eingetragenen Ordnernamens.** Bei GitHub Pages liegt die App in
+  einem Unterordner; mit absoluten Pfaden suchte der Browser die Dateien eine Ebene zu weit oben und
+  die Seite bliebe weiß. Relativ gebaut läuft dieselbe App an jeder Stelle – im Unterordner, oben
+  auf einer eigenen Adresse, lokal beim Entwickeln – ohne dass die Konfiguration angefasst werden
+  muss. Möglich ist das, weil die App nur eine einzige Seite hat und keine Unteradressen benutzt.
+
+**Der Umzug kostet die Daten, wenn man ihn falsch macht.** Die App legt alles im Browser ab, und der
+trennt streng nach Adresse. Unter der neuen Adresse startet sie deshalb leer. Erst sichern
+(Zahnrad → Daten sichern), dann drüben wiederherstellen, dann das Symbol auf dem Homescreen neu
+anlegen.
+
 ---
 
 ## Offene Punkte

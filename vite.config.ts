@@ -3,6 +3,19 @@ import react from '@vitejs/plugin-react';
 
 export default defineConfig({
   plugins: [react()],
+  // Relative Pfade zu den eigenen Dateien.
+  //
+  // Bei GitHub Pages liegt die App nicht ganz oben auf der Adresse, sondern in
+  // einem Unterordner (.../Trainingsapp/). Mit den sonst ueblichen absoluten
+  // Pfaden ("/assets/app.js") suchte der Browser die Dateien eine Ebene zu
+  // weit oben und faende nichts - die Seite bliebe weiss.
+  //
+  // Bewusst "./" statt des fest eingetragenen Ordnernamens: So laeuft
+  // dieselbe gebaute App an jeder Stelle - oben auf einer eigenen Adresse, in
+  // einem Unterordner, oder lokal beim Entwickeln - ohne dass die
+  // Konfiguration angefasst werden muss. Moeglich ist das, weil die App nur
+  // eine einzige Seite hat und keine Unteradressen benutzt.
+  base: './',
   build: {
     rollupOptions: {
       output: {

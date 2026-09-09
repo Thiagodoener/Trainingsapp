@@ -1,0 +1,76 @@
+# Baut die App und stellt sie auf GitHub Pages online - bei jedem Push auf
+# main. Ersetzt Netlify: dieselbe Aufgabe, nur ohne Guthaben-Zaehler.
+#
+# Warum die Tests hier mitlaufen: Sie sind bewusst NICHT an den Build
+# gehaengt (siehe KONZEPT.md), damit man beim Entwickeln nicht bei jedem
+# Speichern aufgehalten wird. Beim Veroeffentlichen ist die Abwaegung
+# umgekehrt - eine kaputte App auf dem Telefon ist schlimmer als eine
+# Aktualisierung, die ausbleibt. Schlaegt eine Pruefung fehl, wird nichts
+# online gestellt und die App bleibt auf dem letzten funktionierenden Stand.
+name: App veröffentlichen
+
+on:
+  push:
+    branches: [main]
+  # Erlaubt, die Veroeffentlichung von Hand anzustossen (Reiter "Actions"),
+  # ohne dass sich am Code etwas geaendert haben muss.
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# Laeuft immer nur eine Veroeffentlichung gleichzeitig. Kommen zwei Pushes
+# kurz hintereinander, gewinnt der neuere - der aeltere waere ohnehin
+# ueberholt.
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  bauen:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+
+      # npm ci statt npm install: installiert exakt die Versionen aus
+      # package-lock.json. Sonst koennte hier eine andere Fassung einer
+      # Bibliothek landen als die, mit der geprueft wurde.
+      - name: Abhängigkeiten installieren
+        run: npm ci
+
+      # Erst pruefe-namen.mjs (unbekannte Namen = sicherer Absturz),
+      # dann die Rechen-Tests. Beides steckt in "npm test".
+      - name: Prüfungen
+        run: npm test
+
+      - name: App bauen
+        run: npm run build
+
+      # enablement: true schaltet GitHub Pages beim ersten Lauf selbst ein,
+      # statt dass man es vorher von Hand unter Settings -> Pages einstellen
+      # muss. Schlaegt das fehl (z. B. weil die Einstellung gesperrt ist),
+      # bricht der Lauf mit einer klaren Meldung ab - dann geht es von Hand.
+      - uses: actions/configure-pages@v5
+        with:
+          enablement: true
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: dist
+
+  veroeffentlichen:
+    needs: bauen
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.online.outputs.page_url }}
+    steps:
+      - id: online
+        uses: actions/deploy-pages@v4

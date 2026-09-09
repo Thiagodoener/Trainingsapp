@@ -50,6 +50,7 @@ import {
   getStrengthVolumeSeries,
   halfPeriodChange,
   strengthVolumeNote,
+  plural,
 } from "./TrainingApp";
 
 // Diese Tests sichern die Rechenfunktionen ab - also das, was die App
@@ -1672,5 +1673,21 @@ describe("Kraft gegen Volumen", () => {
     // Anzeige.
     expect(strengthVolumeNote(9.6, -26)).toBe(strengthVolumeNote(10, -26));
     expect(strengthVolumeNote(9.6, -26)).toMatch(/Mehr Kraft/);
+  });
+});
+
+
+describe("Einzahl und Mehrzahl", () => {
+  it("Regression: eine Uebung ist keine Uebungen", () => {
+    expect(plural(1, "Übung", "Übungen")).toBe("1 Übung");
+    expect(plural(5, "Übung", "Übungen")).toBe("5 Übungen");
+    expect(plural(0, "Übung", "Übungen")).toBe("0 Übungen");
+  });
+
+  it("halbe Saetze bleiben Mehrzahl", () => {
+    // Nebengruppen zaehlen mit halben Saetzen - "0,5 Sätze" ist richtig.
+    expect(plural(0.5, "Satz", "Sätze")).toBe("0,5 Sätze");
+    expect(plural(12.5, "Satz", "Sätze")).toBe("12,5 Sätze");
+    expect(plural(1, "Satz", "Sätze")).toBe("1 Satz");
   });
 });

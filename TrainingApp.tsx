@@ -267,6 +267,14 @@ export function fmtDecimal(value) {
   return String(Math.round(n * 100) / 100).replace(".", ",");
 }
 
+// "1 Übungen" liest sich falsch, und es stand an einem Dutzend Stellen so da.
+// Eine Stelle fuer alle Zaehlungen, statt an jeder einzelnen daran zu denken.
+// Gezaehlt wird ueber fmtDecimal, weil Saetze halbe Werte haben koennen
+// (Nebengruppen zaehlen halb) - "0,5 Sätze" ist richtig, "1 Satz" auch.
+export function plural(n, einzahl, mehrzahl) {
+  return `${fmtDecimal(n)} ${toNum(n) === 1 ? einzahl : mehrzahl}`;
+}
+
 export const toNum = (value) => {
   if (typeof value === "number") return Number.isFinite(value) ? value : 0;
   const n = Number(String(value ?? "").trim().replace(",", "."));
@@ -4009,7 +4017,7 @@ function TrainingAppInner() {
       const s = summarizeBackup(backup);
       setBackupMessage({
         kind: "ok",
-        text: `Sicherung erstellt: ${s.plans} Pläne, ${s.logs} Trainings, ${s.exercises} eigene Übungen.`,
+        text: `Sicherung erstellt: ${plural(s.plans, "Plan", "Pläne")}, ${plural(s.logs, "Training", "Trainings")}, ${plural(s.exercises, "eigene Übung", "eigene Übungen")}.`,
       });
     } catch (e) {
       setBackupMessage({ kind: "error", text: "Sicherung fehlgeschlagen: " + e.message });
@@ -4279,7 +4287,13 @@ function TrainingAppInner() {
         .history-card-meta {
           display: flex;
           align-items: center;
-          gap: 10px;
+          /* Umbrechen als ganze Angaben, nicht innerhalb einer Angabe: Sobald
+             die Zeile zu voll wird (zweistellige Rekordzahl reicht schon),
+             quetschte sie sonst jede einzelne Angabe auf zwei Zeilen -
+             "5 / Übungen", "19 / Sätze", "55 / Min." untereinander. Jetzt
+             rutscht die letzte Angabe als Ganzes in die nächste Zeile. */
+          flex-wrap: wrap;
+          gap: 4px 10px;
           font-size: 11.5px;
           color: var(--text-dim);
           margin-top: 4px;
@@ -4288,6 +4302,7 @@ function TrainingAppInner() {
           display: flex;
           align-items: center;
           gap: 4px;
+          white-space: nowrap;
         }
         .history-exercise-list {
           margin-top: 10px;
@@ -7396,7 +7411,8 @@ function TrainingAppInner() {
                       <span style={{ minWidth: 0 }}>
                         <span style={{ display: "block" }}>{b.name}</span>
                         <span style={{ fontSize: 12, color: "var(--text-dim)" }}>
-                          {breathingPhases(b).length} Phasen · {breathingRounds(b)} Runden
+                          {plural(breathingPhases(b).length, "Phase", "Phasen")} ·{" "}
+                          {plural(breathingRounds(b), "Runde", "Runden")}
                           {total == null ? " · offene Dauer" : ` · ca. ${Math.round(total / 60)} Min.`}
                         </span>
                       </span>
@@ -8401,7 +8417,8 @@ function DashboardView({
                     {ex.name}
                   </div>
                   <div style={{ margin: "6px 0 10px", color: "var(--text-dim)", fontSize: 13 }}>
-                    {breathingPhases(ex).length} Phasen · {breathingRounds(ex)} Runden
+                    {plural(breathingPhases(ex).length, "Phase", "Phasen")} ·{" "}
+                    {plural(breathingRounds(ex), "Runde", "Runden")}
                     {total == null ? " · offene Dauer" : ` · ca. ${Math.max(1, Math.round(total / 60))} Min.`}
                   </div>
                   <button
@@ -8422,7 +8439,7 @@ function DashboardView({
                 <div className="plan-title">{plan.name}</div>
                 <div style={{ margin: "6px 0 10px", color: "var(--text-dim)", fontSize: 13 }}>
                   {groups.length > 0 && <>{groups.join(" · ")}<br /></>}
-                  {(plan.items || []).length} Übungen
+                  {plural((plan.items || []).length, "Übung", "Übungen")}
                   {minutes ? ` · ca. ${minutes} Min.` : ""}
                 </div>
                 <button
@@ -8496,8 +8513,8 @@ function DashboardView({
           <div className="fatigue-note">
             <BatteryLow size={14} className="fatigue-note-icon" />
             <div>
-              Seit {deloadStatusInfo.weeksSince} Wochen keine Entlastung – dein
-              Rhythmus sind {deloadStatusInfo.intervalWeeks} Wochen.
+              Seit {plural(deloadStatusInfo.weeksSince, "Woche", "Wochen")} keine
+              Entlastung – dein Rhythmus sind {deloadStatusInfo.intervalWeeks} Wochen.
             </div>
           </div>
         )}
@@ -8533,7 +8550,7 @@ function DashboardView({
             <div style={{ marginTop: 6, color: "var(--text-dim)", fontSize: 13 }}>
               {timeAgoShort(lastLogInfo.date)}
               {lastLogInfo.minutes > 0 ? ` · ${lastLogInfo.minutes} Min.` : ""}
-              {` · ${lastLogInfo.doneSets} Sätze`}
+              {` · ${plural(lastLogInfo.doneSets, "Satz", "Sätze")}`}
             </div>
             {lastLogInfo.prs > 0 && (
               <div style={{ marginTop: 6, color: "var(--brass)", fontSize: 13, display: "flex", alignItems: "center", gap: 6 }}>
@@ -8976,7 +8993,11 @@ function CalendarView({
               Entlastung {fmtDate(dateFromKey(selectedDeload.range.start))} bis{" "}
               {fmtDate(dateFromKey(selectedDeload.range.end))}
               {" · "}
-              {Math.round((selectedDeload.range.endTs - selectedDeload.range.startTs) / 86400000)} Tage
+              {plural(
+                Math.round((selectedDeload.range.endTs - selectedDeload.range.startTs) / 86400000),
+                "Tag",
+                "Tage"
+              )}
             </span>
             <button
               className="btn-icon deload-remove"
@@ -9052,7 +9073,8 @@ function CalendarView({
                     {onOpenLog && <ChevronRight size={15} color="var(--text-dim)" />}
                   </div>
                   <div style={{ fontSize: 12.5, color: "var(--text-dim)", marginTop: 4 }}>
-                    {logEntries(l).length} Übungen · {saetze} Sätze
+                    {plural(logEntries(l).length, "Übung", "Übungen")} ·{" "}
+                    {plural(saetze, "Satz", "Sätze")}
                     {l.durationMinutes ? ` · ${l.durationMinutes} Min.` : ""}
                   </div>
                 </div>
@@ -11792,10 +11814,10 @@ function PlanBuilder({
         const maxItemSets = Math.max(1, ...items.map((i) => Math.max(1, toNum(i.sets))));
         const presetLabel = (n) =>
           kind === "rounds"
-            ? `${n} Runden`
+            ? plural(n, "Runde", "Runden")
             : n === 0
             ? "Aus"
-            : `${n} Sekunden`;
+            : plural(n, "Sekunde", "Sekunden");
 
         return (
           <Modal title={titles[kind]} onClose={() => setRestPopupFor(null)}>
@@ -17154,7 +17176,7 @@ function ProgressView({
                     borderRadius: 10,
                     fontSize: 12,
                   }}
-                  formatter={(v) => [`${v} Sätze`, ""]}
+                  formatter={(v) => [plural(v, "Satz", "Sätze"), ""]}
                 />
                 <Line
                   type="monotone"
@@ -17603,10 +17625,10 @@ function HistoryView({
             </div>
             <div className="history-card-meta">
               <span>
-                <Dumbbell size={12} /> {logEntries(log).length} Übungen
+                <Dumbbell size={12} /> {plural(logEntries(log).length, "Übung", "Übungen")}
               </span>
               <span>
-                <ClipboardList size={12} /> {totalSets} Sätze
+                <ClipboardList size={12} /> {plural(totalSets, "Satz", "Sätze")}
               </span>
               {logPRCount > 0 && (
                 <span className="history-pr-count" title="In diesem Training wurde ein Rekord aufgestellt">

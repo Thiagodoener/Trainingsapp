@@ -47,6 +47,9 @@ import {
   set1RM,
   bodyWeightEntries,
   bodyWeightAt,
+  getStrengthVolumeSeries,
+  halfPeriodChange,
+  strengthVolumeNote,
 } from "./TrainingApp";
 
 // Diese Tests sichern die Rechenfunktionen ab - also das, was die App
@@ -1568,3 +1571,106 @@ function toDateKeyForTest(d: Date) {
   const p = (n: number) => String(n).padStart(2, "0");
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
 }
+
+
+describe("Kraft gegen Volumen", () => {
+  const jetzt = Date.now();
+  // Ein Training pro Woche, weekCount Wochen zurueck.
+  const wochenLogs = (saetze: (w: number) => any[]) =>
+    [7, 6, 5, 4, 3, 2, 1, 0].map((w) =>
+      training({
+        id: "w" + w,
+        date: new Date(jetzt - w * WOCHE - TAG).toISOString(),
+        entries: [{ id: "e", exerciseId: "bankdruecken", rir: 2, sets: saetze(w) }],
+      })
+    );
+
+  it("Kraft ist der beste Satz der Woche, Volumen die Summe", () => {
+    const logs = wochenLogs(() => [
+      satz({ weight: 60, reps: 10 }),
+      satz({ weight: 100, reps: 5 }),
+    ]);
+    const reihen: any = getStrengthVolumeSeries(logs, 10, jetzt)["bankdruecken"];
+    const letzteMitDaten = reihen.volume.filter((v: number) => v > 0);
+    // 60x10 + 100x5 = 1100 kg pro Training.
+    expect(letzteMitDaten[0]).toBe(1100);
+    // Kraft = 1RM des 100x5-Satzes (mit 2 in Reserve), nicht die Summe.
+    const kraft = reihen.strength.filter((v: number) => v > 0);
+    expect(kraft[0]).toBeCloseTo(estimate1RM(100, 7), 6);
+  });
+
+  it("erkennt: mehr Arbeit, aber die Kraft steht", () => {
+    // Immer dasselbe Arbeitsgewicht, aber in der zweiten Haelfte doppelt so
+    // viele Saetze. Genau der Fall, um den es geht.
+    const logs = wochenLogs((w) =>
+      w >= 4
+        ? [satz({ weight: 100, reps: 8 }), satz({ weight: 100, reps: 8 })]
+        : [satz({ weight: 100, reps: 8 }), satz({ weight: 100, reps: 8 }),
+           satz({ weight: 100, reps: 8 }), satz({ weight: 100, reps: 8 })]
+    );
+    const r: any = getStrengthVolumeSeries(logs, 10, jetzt)["bankdruecken"];
+    const kraft = halfPeriodChange(r.strength, 7)!;
+    const volumen = halfPeriodChange(r.volume, 7)!;
+    expect(Math.round(kraft.change)).toBe(0);
+    expect(Math.round(volumen.change)).toBe(100);
+    expect(strengthVolumeNote(kraft.change, volumen.change)).toMatch(/Kraft steht/);
+  });
+
+  it("erkennt: mehr Kraft bei gleicher Arbeit", () => {
+    // Zweite Haelfte schwerer, dafuer weniger Wiederholungen - Volumen
+    // ungefaehr gleich.
+    const logs = wochenLogs((w) =>
+      w >= 4
+        ? [satz({ weight: 100, reps: 10 }), satz({ weight: 100, reps: 10 })]
+        : [satz({ weight: 125, reps: 8 }), satz({ weight: 125, reps: 8 })]
+    );
+    const r: any = getStrengthVolumeSeries(logs, 10, jetzt)["bankdruecken"];
+    const kraft = halfPeriodChange(r.strength, 7)!;
+    const volumen = halfPeriodChange(r.volume, 7)!;
+    expect(kraft.change).toBeGreaterThan(10);
+    expect(Math.abs(volumen.change)).toBeLessThan(3);
+    expect(strengthVolumeNote(kraft.change, volumen.change)).toMatch(/Mehr Kraft/);
+  });
+
+  it("Wochen ohne Training sind eine Luecke, keine Null", () => {
+    // Zweite Haelfte: nur eine von vier Wochen trainiert, aber genauso hart.
+    // Als Nullen gerechnet saehe das nach einem Einbruch von 75 % aus.
+    const werte = [100, 100, 100, 100, 0, 0, 0, 100];
+    const r = halfPeriodChange(werte, 7)!;
+    expect(Math.round(r.change)).toBe(0);
+    expect(r.weeksBefore).toBe(4);
+    expect(r.weeksAfter).toBe(1);
+  });
+
+  it("ohne Daten in einer Haelfte gibt es keine Zahl", () => {
+    expect(halfPeriodChange([0, 0, 0, 0, 5, 5, 5, 5], 7)).toBeNull();
+    expect(halfPeriodChange([], 7)).toBeNull();
+    expect(halfPeriodChange([5], 7)).toBeNull();
+  });
+
+  it("Koerpergewichts-Uebungen bekommen keine Kraftzahl", () => {
+    const logs = [
+      training({
+        id: "a",
+        date: new Date(jetzt - TAG).toISOString(),
+        entries: [{ id: "e", exerciseId: "klimmzug", sets: [satz({ weight: 0, reps: 10 })] }],
+      }),
+    ];
+    const r: any = getStrengthVolumeSeries(logs, 4, jetzt)["klimmzug"];
+    expect(Math.max(...r.strength)).toBe(0);
+    expect(Math.max(...r.volume)).toBe(0);
+  });
+
+  it("der Hinweis schweigt, wenn die Zahlen nichts Auffaelliges zeigen", () => {
+    expect(strengthVolumeNote(1, 1)).toBeNull();
+    expect(strengthVolumeNote(null, 20)).toBeNull();
+  });
+
+  it("Regression: der Hinweis richtet sich nach der angezeigten Zahl", () => {
+    // 9,6 % steht als "+10 %" da. Ohne Runden bekaeme diese Zeile keinen
+    // Satz, die Zeile daneben mit exakt 10,0 aber schon - bei identischer
+    // Anzeige.
+    expect(strengthVolumeNote(9.6, -26)).toBe(strengthVolumeNote(10, -26));
+    expect(strengthVolumeNote(9.6, -26)).toMatch(/Mehr Kraft/);
+  });
+});

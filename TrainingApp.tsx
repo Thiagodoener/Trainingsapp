@@ -1727,6 +1727,23 @@ const STAT_EXPLANATIONS = {
       "Änderung = (diese Woche − Schnitt der gewählten Wochen davor) ÷ Schnitt × 100.",
     ],
   },
+  strengthVolume: {
+    title: "Kraft und Volumen",
+    paragraphs: [
+      "Die Frage dahinter: Werde ich stärker, oder mache ich nur mehr? Beide Zahlen standen schon vorher in der App – Volumen auf der Startseite, geschätztes 1RM in den Übungs-Charts –, nur nie nebeneinander. Erst nebeneinander wird daraus eine Aussage: Wer 18 % mehr Arbeit leistet und dabei gleich stark bleibt, sieht in jeder der beiden Zahlen für sich nichts Auffälliges.",
+      "Kraft ist das beste geschätzte 1RM der Woche – der stärkste Satz, umgerechnet auf ein Einer-Maximum, mit deiner Reserve verrechnet. Bewusst nicht das reine Maximalgewicht: Das springt nur, wenn du eine Scheibe wechselst, und ist blind dafür, ob es fünf oder zehn Wiederholungen waren.",
+      "Volumen sind die bewegten Kilogramm der Woche (kg × Wdh. aller Arbeitssätze) – dieselbe Rechnung wie „Volumen diese Woche\" auf der Startseite.",
+      "Beides braucht Gewicht auf der Stange. Klimmzüge, Liegestütze und Bandübungen tauchen hier nicht auf: Für sie gibt es keine Kraftzahl, die sich vergleichen ließe, und eine erfundene wäre schlechter als keine.",
+      "Für eine Muskelgruppe wird die Kraft jeder Übung erst an ihrem eigenen Bestwert gemessen und dann gemittelt. Ohne das würde die Beinpresse mit 200 kg allein bestimmen, wie sich „die Kraft der Beine\" entwickelt, und der Beinstrecker käme gar nicht vor. Gezählt wird nur die Hauptgruppe einer Übung – anders als bei den Karten darüber, wo Nebengruppen halb mitzählen: Für eine Kraftaussage wären mitarbeitende Muskeln Rauschen.",
+      "Der Satz unter einer Zeile beschreibt, was die beiden Zahlen zusammen zeigen. Er sagt nicht, was zu tun ist – das hängt von Ziel, Zeit und Erholung ab, und davon weiß die App nichts.",
+    ],
+    formula: [
+      "Kraft einer Woche = bestes geschätztes 1RM dieser Woche. Volumen einer Woche = Summe aus kg × Wdh. aller abgehakten Arbeitssätze.",
+      "Veränderung = zweite Hälfte des gewählten Zeitraums gegen die erste, jeweils als Durchschnitt über die Wochen mit Daten. Wochen ohne Training zählen in keiner Hälfte mit; bei ungerader Wochenzahl fällt die mittlere heraus.",
+      "Bewusst nicht „aktuelle Woche gegen den Schnitt davor\" wie bei der Belastung: Dort geht es um diese eine Woche, hier um die Richtung über Wochen. Eine Übung, die du diese Woche zufällig nicht gemacht hast, hätte sonst gar keinen Wert.",
+      "Ein Strich statt einer Zahl heißt: In einer der beiden Hälften fehlen die Daten.",
+    ],
+  },
   deload: {
     title: "Entlastungen",
     paragraphs: [
@@ -2300,6 +2317,130 @@ export function detectLoadSignal(values, historyWeeks = Infinity, deloadFlags = 
     }
   }
 
+  return null;
+}
+
+// ---------------------------------------------------------------------------
+// Kraft gegen Volumen
+//
+// Die Frage, für die die App eigentlich gebaut wurde: "Werde ich stärker,
+// oder mache ich nur mehr?" Beide Zahlen gab es längst - Volumen in der
+// Startseite, geschätztes 1RM in den Übungs-Charts -, nur nie nebeneinander.
+// Genau nebeneinander wird daraus aber erst eine Aussage: Wer 18 % mehr
+// Arbeit leistet und dabei gleich stark bleibt, sieht in beiden Zahlen
+// einzeln nichts Auffälliges.
+//
+// Kraft = das beste geschätzte 1RM der Woche (mit Reserve, siehe set1RM).
+// Bewusst nicht das reine Maximalgewicht: Das springt nur beim
+// Scheibenwechsel und ist blind dafür, ob es fünf oder zehn Wiederholungen
+// waren. Und bewusst nicht das Satzvolumen: Das vermischt wieder genau die
+// beiden Größen, die hier getrennt werden sollen.
+//
+// Volumen = bewegte Kilogramm der Woche (kg × Wdh. aller Arbeitssätze) -
+// dieselbe Rechnung wie "Volumen diese Woche" auf der Startseite.
+//
+// Beides braucht Gewicht auf der Stange. Körpergewichts- und Bandübungen
+// haben hier keine Kraftzahl, und eine erfundene wäre schlechter als keine.
+// ---------------------------------------------------------------------------
+
+// Beide Wochenreihen für ALLE Übungen in einem Durchgang - getrennt je Übung
+// gerechnet, weil ein 1RM nur innerhalb derselben Übung vergleichbar ist.
+// Rückgabe alt -> neu, wie überall.
+export function getStrengthVolumeSeries(logs, weekCount = 26, nowTs = Date.now()) {
+  const out = {};
+  const leer = () => new Array(weekCount).fill(0);
+  (Array.isArray(logs) ? logs : []).forEach((log) => {
+    const ts = new Date(log?.date).getTime();
+    if (!Number.isFinite(ts)) return;
+    const idx = Math.max(0, Math.floor((nowTs - ts) / LOAD_WEEK_MS));
+    if (idx >= weekCount) return;
+    logEntries(log).forEach((entry) => {
+      // Zeit-Übungen haben weder Gewicht noch Wiederholungen - dort gibt es
+      // nichts zu vergleichen.
+      if (entry.targetUseTime) return;
+      const reihe =
+        out[entry.exerciseId] || (out[entry.exerciseId] = { strength: leer(), volume: leer() });
+      forEachPerformedSet(entry, (set, rir) => {
+        const oneRM = set1RM(set, rir);
+        // Die Woche bekommt den BESTEN Satz, nicht die Summe: Kraft ist das,
+        // was einmal ging, nicht was oft ging.
+        if (oneRM > reihe.strength[idx]) reihe.strength[idx] = oneRM;
+        reihe.volume[idx] += toNum(set.weight) * toNum(set.reps);
+      });
+    });
+  });
+  Object.values(out).forEach((r) => {
+    r.strength.reverse();
+    r.volume.reverse();
+  });
+  return out;
+}
+
+// Wie hat sich eine Reihe über den gewählten Zeitraum verändert: die zweite
+// Hälfte gegen die erste.
+//
+// Bewusst NICHT "aktuelle Woche gegen den Schnitt davor" wie bei der
+// Belastung. Dort geht es um "wie war diese Woche"; hier um "wohin läuft das
+// über Wochen". Eine einzelne Woche als Endpunkt wäre dafür zu wacklig -
+// eine Übung, die man diese Woche zufällig nicht gemacht hat, hätte gar
+// keinen Wert.
+//
+// Wochen ohne Daten zählen in keiner der beiden Hälften mit: Sie sind eine
+// Lücke, keine Null. Bei ungerader Wochenzahl fällt die mittlere Woche
+// heraus, damit beide Hälften gleich lang sind.
+export function halfPeriodChange(values, compareWeeks) {
+  const reihe = compareWindowSeries(Array.isArray(values) ? values : [], compareWeeks);
+  const haelfte = Math.floor(reihe.length / 2);
+  if (haelfte < 1) return null;
+  const erste = reihe.slice(0, haelfte).filter((v) => v > 0);
+  const zweite = reihe.slice(reihe.length - haelfte).filter((v) => v > 0);
+  if (erste.length === 0 || zweite.length === 0) return null;
+  const mittel = (l) => l.reduce((sum, v) => sum + v, 0) / l.length;
+  const vorher = mittel(erste);
+  if (!(vorher > 0)) return null;
+  return {
+    change: (mittel(zweite) / vorher - 1) * 100,
+    weeksBefore: erste.length,
+    weeksAfter: zweite.length,
+  };
+}
+
+// Ab wann eine Veränderung als "bewegt sich" gilt, und ab wann als "steht".
+// Dieselbe Größenordnung wie beim Plateau-Zeichen (2 % über zwei Wochen),
+// nur über einen längeren Zeitraum gelesen.
+const SV_FLAT = 3;   // bis hierhin gilt eine Kennzahl als unverändert
+const SV_CLEAR = 10; // ab hier gilt sie als deutlich verändert
+
+// Ein Satz zu dem, was da steht - und zwar nur für die Fälle, in denen die
+// beiden Zahlen zusammen etwas sagen, das keine von beiden allein sagt.
+// Beschreibend, kein Rat: WAS zu tun ist, hängt von Ziel, Zeit und Erholung
+// ab, und davon weiß die App nichts (Regel 3). Der auffällige Fall - viel
+// mehr Arbeit bei stehender Kraft - ist der einzige, bei dem eine Einordnung
+// über die reine Beschreibung hinausgeht; das ist eine bewusste Entscheidung
+// (siehe KONZEPT.md), weil genau dieser Fall der Grund für die Karte war.
+export function strengthVolumeNote(rohKraft, rohVolumen) {
+  if (rohKraft == null || rohVolumen == null) return null;
+  // Gerechnet wird mit denselben gerundeten Zahlen, die daneben stehen.
+  // Sonst bekommt eine Zeile mit "+10 %" keinen Satz, weil dahinter 9,6
+  // stehen - und die daneben mit derselben Anzeige schon.
+  const kraft = Math.round(rohKraft);
+  const volumen = Math.round(rohVolumen);
+  const kraftSteht = Math.abs(kraft) <= SV_FLAT;
+  if (volumen >= SV_CLEAR && kraft <= SV_FLAT) {
+    return "Deutlich mehr Arbeit, aber die Kraft steht – der Punkt, an dem sich Mehrarbeit oft nicht mehr in Kraft übersetzt.";
+  }
+  if (kraft >= SV_CLEAR && volumen <= SV_FLAT) {
+    return "Mehr Kraft bei gleicher oder weniger Arbeit.";
+  }
+  if (kraft >= SV_FLAT && volumen >= SV_FLAT) {
+    return "Kraft und Arbeit steigen zusammen.";
+  }
+  if (volumen <= -SV_CLEAR && kraftSteht) {
+    return "Deutlich weniger Arbeit, die Kraft hält sich.";
+  }
+  if (volumen <= -SV_FLAT && kraft <= -SV_FLAT) {
+    return "Weniger Arbeit, und die Kraft geht mit.";
+  }
   return null;
 }
 
@@ -5352,6 +5493,37 @@ function TrainingAppInner() {
         }
         .muscle-load-row-clickable {
           cursor: pointer;
+        }
+        /* Kraft und Volumen: zwei Zahlen nebeneinander, damit man sie
+           gegeneinander lesen kann - das ist der ganze Zweck der Karte. */
+        .sv-row {
+          display: grid;
+          grid-template-columns: 1fr 52px 52px 14px;
+          align-items: center;
+          gap: 8px;
+          margin-bottom: 9px;
+        }
+        .sv-row-clickable { cursor: pointer; }
+        .sv-row-sub { margin-bottom: 7px; }
+        .sv-row-sub .muscle-week-label { font-size: 12px; }
+        .sv-head {
+          display: grid;
+          grid-template-columns: 1fr 52px 52px 14px;
+          gap: 8px;
+          font-size: 10.5px;
+          letter-spacing: 0.4px;
+          text-transform: uppercase;
+          color: var(--text-faint);
+          margin-bottom: 6px;
+        }
+        .sv-head span { text-align: right; }
+        .sv-head span:first-child { text-align: left; }
+        .sv-note {
+          font-size: 12px;
+          line-height: 1.45;
+          color: var(--text-dim);
+          margin: -3px 0 10px;
+          padding-left: 2px;
         }
         .muscle-load-row-sub {
           grid-template-columns: 80px 1fr 46px 18px;
@@ -16070,6 +16242,60 @@ function ProgressView({
     [logs, exBy, exerciseSubgroupOverrides, timeBasedExercises, loadHistoryWeeks,
      exerciseEquipmentOverrides, bodyWeights]
   );
+  // Kraft gegen Volumen (siehe getStrengthVolumeSeries). Je Muskelgruppe
+  // zusammengefasst, mit den Übungen darunter beim Aufklappen.
+  const [svCompareWeeks, setSvCompareWeeks] = useState(12);
+  const strengthVolume = useMemo(() => {
+    const weekCount = muscleSeriesWeekCount(loadHistoryWeeks);
+    const perEx = getStrengthVolumeSeries(logs, weekCount);
+    const leer = () => new Array(weekCount).fill(0);
+    const gruppen = {};
+    Object.entries(perEx).forEach(([exId, reihen]) => {
+      const ex = exBy[exId];
+      if (!ex?.group) return;
+      // Ohne Gewicht gibt es keine Kraftzahl - Körpergewichts- und
+      // Bandübungen bleiben hier außen vor, statt mit einer 0 zu behaupten,
+      // die Kraft sei weg.
+      const bestStrength = Math.max(0, ...reihen.strength);
+      if (!(bestStrength > 0)) return;
+      const g =
+        gruppen[ex.group] ||
+        (gruppen[ex.group] = { relSum: leer(), relCount: leer(), volume: leer(), exercises: [] });
+      // Kraft je Übung an ihrem EIGENEN Bestwert gemessen, bevor gemittelt
+      // wird: Sonst bestimmte die Beinpresse mit 200 kg allein, wie sich die
+      // "Kraft der Beine" entwickelt, und der Beinstrecker käme nicht vor.
+      reihen.strength.forEach((v, i) => {
+        if (v > 0) {
+          g.relSum[i] += v / bestStrength;
+          g.relCount[i] += 1;
+        }
+      });
+      reihen.volume.forEach((v, i) => { g.volume[i] += v; });
+      g.exercises.push({
+        id: exId,
+        name: ex.name,
+        strength: halfPeriodChange(reihen.strength, svCompareWeeks),
+        volume: halfPeriodChange(reihen.volume, svCompareWeeks),
+      });
+    });
+    return MUSCLE_GROUPS.map((mg) => {
+      const g = gruppen[mg.id];
+      if (!g) return { id: mg.id, label: mg.label, strength: null, volume: null, exercises: [] };
+      const kraftReihe = g.relSum.map((sum, i) => (g.relCount[i] > 0 ? sum / g.relCount[i] : 0));
+      return {
+        id: mg.id,
+        label: mg.label,
+        strengthSeries: kraftReihe,
+        volumeSeries: g.volume,
+        strength: halfPeriodChange(kraftReihe, svCompareWeeks),
+        volume: halfPeriodChange(g.volume, svCompareWeeks),
+        exercises: g.exercises.sort((a, b) => a.name.localeCompare(b.name, "de")),
+      };
+    }).filter((g) => g.exercises.length > 0);
+  }, [logs, exBy, loadHistoryWeeks, svCompareWeeks]);
+  const [expandedSvGroups, setExpandedSvGroups] = useState({});
+  const toggleSvGroup = (id) => setExpandedSvGroups((s) => ({ ...s, [id]: !s[id] }));
+
   // Entlastungswochen als Lücke behandeln - aber nur in den Warnzeichen,
   // nicht in den frei gewählten Zeitraum-Vergleichen (siehe muscleLoadChange).
   const loadDeloadFlags = useMemo(
@@ -16418,6 +16644,82 @@ function ProgressView({
                 </div>
               );
             })}
+          </div>
+        )}
+      </div>
+
+      {/* Kraft gegen Volumen - die Frage, für die die App gebaut wurde.
+          Siehe getStrengthVolumeSeries für die Herleitung. */}
+      <div className="card">
+        <ExplainableTitle onExplain={() => setExplain(STAT_EXPLANATIONS.strengthVolume)}>
+          Kraft und Volumen
+        </ExplainableTitle>
+        <div className="chip-row" style={{ marginTop: 10, marginBottom: 4 }}>
+          {MUSCLE_COMPARE_OPTIONS.map(([weeks, label]) => (
+            <span
+              key={weeks}
+              className={`chip chip-sm ${svCompareWeeks === weeks ? "active" : ""}`}
+              onClick={() => setSvCompareWeeks(weeks)}
+            >
+              {label}
+            </span>
+          ))}
+        </div>
+        {strengthVolume.length === 0 ? (
+          <div className="empty-state" style={{ padding: "14px 0" }}>
+            Dafür braucht es Übungen mit Gewicht. Bei Körpergewichts- und
+            Bandübungen gibt es keine Kraftzahl, die sich vergleichen ließe.
+          </div>
+        ) : (
+          <div style={{ marginTop: 8 }}>
+            <div className="sv-head">
+              <span />
+              <span>Kraft</span>
+              <span>Volumen</span>
+              <span />
+            </div>
+            {strengthVolume.map((g) => {
+              const offen = !!expandedSvGroups[g.id];
+              const hinweis = strengthVolumeNote(g.strength?.change ?? null, g.volume?.change ?? null);
+              return (
+                <div key={g.id}>
+                  <div
+                    className="sv-row sv-row-clickable"
+                    onClick={() => toggleSvGroup(g.id)}
+                    title="Antippen: die einzelnen Übungen dieser Gruppe"
+                  >
+                    <span className="muscle-week-label">{g.label}</span>
+                    <LoadChangeBadge change={g.strength ? g.strength.change : null} />
+                    <LoadChangeBadge change={g.volume ? g.volume.change : null} />
+                    <span className="muscle-week-chevron">
+                      {offen ? (
+                        <ChevronDown size={14} color="var(--text-dim)" />
+                      ) : (
+                        <ChevronRight size={14} color="var(--text-dim)" />
+                      )}
+                    </span>
+                  </div>
+                  {hinweis && <div className="sv-note">{hinweis}</div>}
+                  {offen && (
+                    <div className="muscle-week-subs">
+                      {g.exercises.map((ex) => (
+                        <div className="sv-row sv-row-sub" key={ex.id}>
+                          <span className="muscle-week-label">{ex.name}</span>
+                          <LoadChangeBadge change={ex.strength ? ex.strength.change : null} />
+                          <LoadChangeBadge change={ex.volume ? ex.volume.change : null} />
+                          <span className="muscle-week-chevron" />
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+            <p className="deload-basis">
+              Verglichen wird die zweite Hälfte des gewählten Zeitraums gegen
+              die erste. Ein Strich heißt: dafür fehlen in einer der beiden
+              Hälften die Daten.
+            </p>
           </div>
         )}
       </div>

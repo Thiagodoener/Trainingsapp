@@ -488,15 +488,41 @@ Arbeitsspeicher, damit es auch einen Neustart übersteht) und kommt beim Verwerf
 Verlauf. Die Rückfrage sagt jetzt, was wirklich passiert: „Das Training vom 05.09. bleibt so, wie
 es war."
 
+**Kraft und Volumen nebeneinander – die Frage, für die die App gebaut wurde.**
+Beide Zahlen gab es längst: Volumen auf der Startseite, geschätztes 1RM in den Übungs-Charts.
+Nur nie nebeneinander – und einzeln sagt keine von beiden das Entscheidende. Wer 18 % mehr Arbeit
+leistet und dabei gleich stark bleibt, sieht in jeder Zahl für sich nichts Auffälliges.
+
+- **Kraft** = bestes geschätztes 1RM der Woche (mit Reserve). Nicht das reine Maximalgewicht: Das
+  springt nur beim Scheibenwechsel und ist blind dafür, ob es fünf oder zehn Wiederholungen waren.
+  Nicht das Satzvolumen: Das vermischt wieder genau die beiden Größen, die getrennt werden sollen.
+- **Volumen** = bewegte Kilogramm der Woche, dieselbe Rechnung wie „Volumen diese Woche".
+- **Verglichen** wird die zweite Hälfte des gewählten Zeitraums gegen die erste, jeweils über die
+  Wochen mit Daten. Bewusst *nicht* „aktuelle Woche gegen den Schnitt davor" wie bei der Belastung:
+  Dort geht es um diese eine Woche, hier um die Richtung über Wochen – und eine Übung, die man
+  diese Woche zufällig nicht gemacht hat, hätte sonst gar keinen Wert. Wochen ohne Training zählen
+  in keiner Hälfte mit; bei ungerader Wochenzahl fällt die mittlere heraus.
+- **Für eine Muskelgruppe** wird die Kraft jeder Übung erst an ihrem eigenen Bestwert gemessen und
+  dann gemittelt – sonst bestimmte die Beinpresse mit 200 kg allein, wie sich „die Kraft der Beine"
+  entwickelt. Gezählt wird nur die Hauptgruppe, anders als bei den Karten darüber: Für eine
+  Kraftaussage wären mitarbeitende Muskeln Rauschen.
+- **Körpergewichts- und Bandübungen** tauchen nicht auf. Für sie gibt es keine Kraftzahl, die sich
+  vergleichen ließe, und eine erfundene wäre schlechter als keine.
+
+Der Satz unter einer Zeile ist die einzige Stelle in der App, an der über die reine Beschreibung
+hinausgegangen wird: „Deutlich mehr Arbeit, aber die Kraft steht – der Punkt, an dem sich
+Mehrarbeit oft nicht mehr in Kraft übersetzt." Das ist eine bewusste Entscheidung von Max, weil
+genau dieser Fall der Grund für die Karte war. Was daraus folgt, sagt die App trotzdem nicht: Das
+hängt von Ziel, Zeit und Erholung ab, und davon weiß sie nichts (Regel 3). Der Satz rechnet mit
+denselben gerundeten Zahlen, die daneben stehen – sonst bekäme eine Zeile mit „+10 %" keinen Satz,
+weil dahinter 9,6 steht, und die daneben mit derselben Anzeige schon.
+
 ---
 
 ## Offene Punkte
 
 - **Unterbelastung erkennen** (Stufe 2, Normalbereich je Muskelgruppe) – die letzte offene der
   drei Zielsetzungen. Braucht das Fortschritts-Signal darunter als zweites Standbein.
-- **Progressive Overload in Klartext:** „Kraft seit 8 Wochen flach, Volumen +18 %". Kraft =
-  geschätztes 1RM des *ersten* Arbeitssatzes je Übung (Begründung in Stufe 2), Volumen getrennt
-  davon. Existiert bisher nirgends – auch nicht als Rechnung im Hintergrund.
 - **Antworten auf Warnungen justieren die Schwellen** (Regel 2). Die Warnungen stellen derzeit
   etwas fest und hören auf; die Rückfrage und das Merken der Antwort fehlen.
 - **Ausdauer** (Laufen, Rad, Schwimmen, Airbike) als eigene Einheiten mit Session-RPE als
@@ -511,6 +537,11 @@ Damit sie nicht in jeder Runde neu vorgeschlagen werden:
 - **Gym-Trennung in `getMuscleLoadSeries`** – von Max abgelehnt, September 2026.
 
 ### Erledigt
+
+- **Progressive Overload in Klartext** – gebaut als Karte „Kraft und Volumen" (siehe oben).
+  Abweichung vom ursprünglichen Vorschlag: Kraft kommt aus dem BESTEN Satz der Woche, nicht aus dem
+  ersten Arbeitssatz. Der erste Satz ist nicht zwangsläufig der stärkste (Aufwärmeffekt,
+  Steigerungssätze), und die Reserve-Angabe liegt ohnehin nur für den letzten Satz vor.
 
 - **1RM-Formel statt roher Tonnage** in `loadSetWork`: Die Wurzel-Lösung über RIR ist gebaut
   (siehe Tabelle oben). Die ursprünglich vorgeschlagene Formel-Mischung aus Epley, Brzycki und

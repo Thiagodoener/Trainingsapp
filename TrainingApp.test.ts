@@ -36,6 +36,7 @@ import {
   EXERCISES,
   getExerciseMeta,
   exerciseGroupShares,
+  withSecondaryOverride,
   set1RM,
   getRecentPRs,
   getExerciseBestStats,
@@ -1770,5 +1771,50 @@ describe("Der Automatik-Modus taktet, er misst nicht", () => {
     expect(isTimeBasedInLogs(getaktet, "plank", { plank: true })).toBe(true);
     // Von Hand ausgeschaltet: gilt auch gegen ein normales Training.
     expect(isTimeBasedInLogs(getaktet, "plank", { plank: false })).toBe(false);
+  });
+});
+
+
+describe("Nebenmuskelgruppen sind änderbar", () => {
+  const bankdruecken = { id: "bankdruecken", group: "brust", secondary: ["schultern", "arme"] };
+
+  it("ohne Override bleibt die Grundangabe der Übung stehen", () => {
+    const ex = withSecondaryOverride(bankdruecken, {});
+    expect(ex.secondary).toEqual(["schultern", "arme"]);
+    // Unveraendert durchgereicht, kein neues Objekt noetig.
+    expect(ex).toBe(bankdruecken);
+  });
+
+  it("ein Override ersetzt die Grundangabe", () => {
+    const ex = withSecondaryOverride(bankdruecken, { bankdruecken: ["beine"] });
+    expect(ex.secondary).toEqual(["beine"]);
+    expect(exerciseGroupShares(ex)).toEqual([["brust", 1], ["beine", 0.5]]);
+  });
+
+  it("Regression: eine leere Override-Liste bleibt leer, nicht die Grundangabe", () => {
+    // Das war der Fehler beim ersten Anlauf: hasOwnProperty statt eines
+    // truthy-Checks ist hier keine Formalie. Mit `secondaryOverrides[id] || …`
+    // waere eine leer geraeumte Liste ("Alle entfernen") wie "kein Override"
+    // behandelt worden - nach dem naechsten Neuladen waeren Schultern und
+    // Arme wieder da gewesen, obwohl sie bewusst entfernt wurden.
+    const ex = withSecondaryOverride(bankdruecken, { bankdruecken: [] });
+    expect(ex.secondary).toEqual([]);
+    expect(exerciseGroupShares(ex)).toEqual([["brust", 1]]);
+  });
+
+  it("betrifft nur die Übung, für die der Override gilt", () => {
+    const andere = { id: "kniebeuge", group: "beine", secondary: ["rumpf"] };
+    const ex = withSecondaryOverride(andere, { bankdruecken: [] });
+    expect(ex).toBe(andere);
+    expect(ex.secondary).toEqual(["rumpf"]);
+  });
+
+  it("eine eigene Übung ohne Grundangabe kann trotzdem Nebenmuskeln bekommen", () => {
+    // So kommt eine bei der Erstellung gewaehlte Nebenmuskelgruppe fuer eine
+    // eigene Uebung zustande - direkt am Objekt gesetzt (siehe
+    // NewExerciseForm), kein Override noetig, weil es noch nichts zu
+    // ueberschreiben gibt.
+    const eigene = { id: "custom-x", group: "arme", secondary: ["rumpf"] };
+    expect(exerciseGroupShares(eigene)).toEqual([["arme", 1], ["rumpf", 0.5]]);
   });
 });

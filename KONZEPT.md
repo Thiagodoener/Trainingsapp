@@ -588,6 +588,49 @@ zählt nicht mehr. Sie wurde von einem Fehler geschrieben, nicht von einer Entsc
 Übung wirklich in Sekunden misst, stellt das an der Übung ein – diese Angabe gewinnt gegen alles
 andere und ist der einzige Weg, der je gemeint war.
 
+**Nebenmuskelgruppen sind jetzt änderbar – bei jeder Übung, auch beim Anlegen.**
+Bis dahin standen sie nur bei den mitgelieferten Übungen fest (ein Array direkt an `EXERCISES`)
+und wurden lediglich als Marke angezeigt; eine eigene Übung hatte gar keine, weil das Anlegen-
+Formular das Feld nie gesetzt hat – `exerciseGroupShares` liest `exercise.secondary`, und das blieb
+`undefined`.
+
+Zwei getrennte Wege, je nachdem, wann die Angabe entsteht:
+
+- **Beim Anlegen** einer eigenen Übung steht ein eigener Auswahlblock „Nebenmuskelgruppen
+  (optional)" direkt neben der Muskelgruppen-Auswahl (Mehrfachauswahl, wie bei den Untergruppen).
+  Die Wahl landet direkt im neuen Objekt (`secondary: newSecondary`) – es gibt noch nichts, das
+  überschrieben werden müsste, und ein Wechsel der Hauptgruppe setzt die Auswahl zurück, damit die
+  alte Hauptgruppe nicht als eigene Nebengruppe stehen bleibt.
+- **Nachträglich**, bei jeder Übung (mitgelieferte wie eigene), über eine Override-Tabelle
+  (`exercise-secondary-overrides`) – genau das Muster, das Geräte- und Untergruppen-Overrides schon
+  vormachen. Die Nebenmuskel-Marken im Detail-Blatt sind jetzt selbst der Auslöser: antippen öffnet
+  denselben Auswahl-Dialog wie beim Gerät, mit „Alle entfernen" und einer Mehrfachauswahl der
+  übrigen Hauptgruppen (die eigene Hauptgruppe scheidet aus). Ohne Nebenmuskeln steht eine „+
+  Nebenmuskeln"-Marke an derselben Stelle.
+
+Der Override wird anders verdrahtet als bei Gerät/Untergruppe: Dort liest eine eigene Funktion
+(`getExerciseEquipment`/`getExerciseSubgroups`) die Override-Tabelle an der jeweiligen Anzeigestelle.
+`exercise.secondary` wird dagegen tief unten in der Statistik gelesen – `exerciseGroupShares`,
+aufgerufen aus `getMuscleLoadSeries`/`getWeeklySetSeries` über nichts als die `exBy`-Map, ohne dass
+diese Funktionen je eine Override-Tabelle sehen. Die Override-Tabelle dorthin durchzureichen hätte
+jede dieser Funktionen angefasst; stattdessen ersetzt `withSecondaryOverride` (neu, mit eigenen
+Tests) `exercise.secondary` direkt am Objekt, bevor es in `allExercises`/`exBy` landet – dieselbe
+Stelle, an der auch der Name-Override greift. Jede Rechnung, die eine Übung über `exBy` anfasst,
+bekommt die Änderung damit automatisch.
+
+`hasOwnProperty` statt eines truthy-Checks, hier wie bei den anderen beiden Overrides: eine leere
+Override-Liste („alle Nebenmuskeln entfernt") ist ein gültiger, von „kein Override" verschiedener
+Zustand. Ohne die Unterscheidung wäre „Alle entfernen" nach einem Neuladen der App wirkungslos
+gewesen – die ursprüngliche Liste wäre zurückgekommen, weil eine leere Liste sich wie „nichts
+gesetzt" angefühlt hätte.
+
+Nebenbei behoben: Der Escape-Handler des Detail-Blatts prüfte `editingEquipment`, hatte es aber
+nicht in seiner Abhängigkeitsliste – ein veralteter Blick auf einen Wert, der sich geändert hatte,
+bevor der Haken das mitbekam. Escape beim offenen Geräte-Dialog schloss dadurch nicht nur den
+Dialog, sondern gleich das ganze Blatt. Beim Bauen des gleichen Dialogs für Nebenmuskeln fiel es
+auf, weil dort exakt derselbe Fehler sofort einen echten Absturz-nahen Bedienfehler zeigte, nicht
+nur ein theoretisches Risiko.
+
 ---
 
 ## Offene Punkte

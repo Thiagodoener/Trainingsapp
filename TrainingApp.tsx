@@ -639,6 +639,28 @@ const EX_BY_ID = Object.fromEntries(EXERCISES.map((e) => [e.id, e]));
 // Genauigkeit vortaeuschen, die es bei Muskelbeteiligung ohne EMG nicht gibt.
 const SECONDARY_SHARE = 0.5;
 
+// Ersetzt exercise.secondary durch den Override, falls einer gesetzt ist -
+// direkt am Objekt, nicht ueber eine separate Nachschlagetabelle wie beim
+// Geraet oder den Untergruppen. Grund: exercise.secondary wird tief unten in
+// der Statistik gelesen (exerciseGroupShares, aufgerufen aus
+// getMuscleLoadSeries / getWeeklySetSeries ueber nichts als die exBy-Map).
+// Eine Override-Tabelle extra dorthin durchzureichen haette jede dieser
+// Funktionen angefasst; hier direkt am Objekt zu ueberschreiben aendert
+// nichts an ihnen.
+//
+// hasOwnProperty statt eines truthy-Checks: Eine leere Override-Liste
+// ("alle Nebenmuskeln entfernt") ist ein gueltiger, von "kein Override"
+// verschiedener Zustand. Ein truthy-Check wuerde sie wie "kein Override"
+// behandeln, und beim naechsten Rendern kaeme die urspruengliche Liste zurueck
+// - genau der Fehler, der beim Test auffiel: "Alle entfernen" haette nach
+// einem Neuladen nichts mehr entfernt.
+export function withSecondaryOverride(exercise, secondaryOverrides) {
+  if (!secondaryOverrides || !Object.prototype.hasOwnProperty.call(secondaryOverrides, exercise?.id)) {
+    return exercise;
+  }
+  return { ...exercise, secondary: secondaryOverrides[exercise.id] };
+}
+
 // Alle Gruppen einer Uebung mit ihrem Anteil: die Hauptgruppe voll, jede
 // Nebengruppe halb. Eine Gruppe kommt nie doppelt vor.
 export function exerciseGroupShares(exercise) {
@@ -2927,6 +2949,7 @@ const BACKUP_KEYS = [
   "breathing-logs",
   "exercise-subgroup-overrides",
   "exercise-equipment-overrides",
+  "exercise-secondary-overrides",
   "training-programs",
   "active-program-id",
   "calendar-entries",
@@ -3204,6 +3227,13 @@ function TrainingAppInner() {
   const [exerciseNameOverrides, setExerciseNameOverrides] = useState({});
   const [exerciseSubgroupOverrides, setExerciseSubgroupOverrides] = useState({});
   const [exerciseEquipmentOverrides, setExerciseEquipmentOverrides] = useState({});
+  // Nebenmuskelgruppen je Übung - überschreibt die Grundangabe aus EXERCISES
+  // (bzw. bei einer eigenen Übung das, was beim Anlegen gewählt wurde).
+  // Eine leere Liste ist ein gültiger, ausdrücklich gewählter Zustand
+  // ("keine Nebenmuskeln") und wird deshalb nie geloescht, nur ueberschrieben
+  // - sonst kaeme bei der naechsten Anzeige wieder die urspruengliche Liste
+  // zum Vorschein, obwohl sie bewusst entfernt wurde.
+  const [exerciseSecondaryOverrides, setExerciseSecondaryOverrides] = useState({});
   const [timeBasedExercises, setTimeBasedExercises] = useState({});
   const [gymIndependentExercises, setGymIndependentExercises] = useState({});
   const [breathingExercises, setBreathingExercises] = useState([]);
@@ -3266,7 +3296,7 @@ function TrainingAppInner() {
 
   useEffect(() => {
     (async () => {
-      const [p, l, c, f, en, no, tb, gi, active, prog, activeProg, sg, ce, cc, eq, th, gy, activeGy, restEnd, brEx, brLogs, dw, di, dsh, bnd, snd, bw] = await Promise.all([
+      const [p, l, c, f, en, no, tb, gi, active, prog, activeProg, sg, ce, cc, eq, th, gy, activeGy, restEnd, brEx, brLogs, dw, di, dsh, bnd, snd, bw, sec] = await Promise.all([
         loadJSON("training-plans", []),
         loadJSON("workout-logs", []),
         loadJSON("custom-exercises", []),
@@ -3294,6 +3324,7 @@ function TrainingAppInner() {
         loadJSON("resistance-bands", []),
         loadJSON("rest-sound", true),
         loadJSON("body-weight", null),
+        loadJSON("exercise-secondary-overrides", {}),
       ]);
       // Migration: users who already had folders before "programs" existed
       // get one default program that all their existing folders are
@@ -3320,6 +3351,7 @@ function TrainingAppInner() {
       setExerciseNotes(en);
       setExerciseNameOverrides(no);
       setExerciseSubgroupOverrides(sg);
+      setExerciseSecondaryOverrides(sec && typeof sec === "object" ? sec : {});
       setTimeBasedExercises(tb);
       setGymIndependentExercises(gi);
       setBreathingExercises(Array.isArray(brEx) ? brEx : []);
@@ -3523,6 +3555,10 @@ function TrainingAppInner() {
     setExerciseEquipmentOverrides(next);
     await saveJSON("exercise-equipment-overrides", next);
   };
+  const persistExerciseSecondaryOverrides = async (next) => {
+    setExerciseSecondaryOverrides(next);
+    await saveJSON("exercise-secondary-overrides", next);
+  };
   const persistTimeBasedExercises = async (next) => {
     setTimeBasedExercises(next);
     await saveJSON("exercise-time-based", next);
@@ -3709,9 +3745,14 @@ function TrainingAppInner() {
   };
 
   const allPlans = plans;
-  const allExercises = [...EXERCISES, ...customExercises].map((e) =>
-    exerciseNameOverrides[e.id] ? { ...e, name: exerciseNameOverrides[e.id] } : e
-  );
+  // Der Name-Override ersetzt exercise.name direkt am Objekt, genau wie
+  // withSecondaryOverride es fuer exercise.secondary tut (siehe dort).
+  const allExercises = [...EXERCISES, ...customExercises].map((e) => {
+    let ex = e;
+    if (exerciseNameOverrides[e.id]) ex = { ...ex, name: exerciseNameOverrides[e.id] };
+    ex = withSecondaryOverride(ex, exerciseSecondaryOverrides);
+    return ex;
+  });
   const allExBy = Object.fromEntries(allExercises.map((e) => [e.id, e]));
 
   const handleUpdateExerciseNote = async (exerciseId, note) => {
@@ -3751,6 +3792,20 @@ function TrainingAppInner() {
   };
   const handleSetExerciseEquipment = async (exerciseId, equipment) => {
     await persistExerciseEquipmentOverrides({ ...exerciseEquipmentOverrides, [exerciseId]: equipment });
+  };
+  // groupId === null entfernt alle Nebenmuskeln dieser Übung. Sonst wird die
+  // gegebene Gruppe umgeschaltet - dazu oder weg -, damit sich mehrere nach-
+  // einander waehlen lassen. allExBy[exerciseId] traegt bereits den aktuellen
+  // Stand (Override oder Grundangabe), das Umschalten braucht also keinen
+  // eigenen Blick auf exercise.secondary.
+  const handleSetExerciseSecondary = async (exerciseId, groupId) => {
+    const current = allExBy[exerciseId]?.secondary || [];
+    const updated = !groupId
+      ? []
+      : current.includes(groupId)
+      ? current.filter((g) => g !== groupId)
+      : [...current, groupId];
+    await persistExerciseSecondaryOverrides({ ...exerciseSecondaryOverrides, [exerciseId]: updated });
   };
   const handleToggleTimeBased = async (exerciseId, enabled) => {
     await persistTimeBasedExercises({ ...timeBasedExercises, [exerciseId]: enabled });
@@ -6780,6 +6835,7 @@ function TrainingAppInner() {
               onSetExerciseSubgroups={handleSetExerciseSubgroups}
               exerciseEquipmentOverrides={exerciseEquipmentOverrides}
               onSetExerciseEquipment={handleSetExerciseEquipment}
+              onSetExerciseSecondary={handleSetExerciseSecondary}
               timeBasedExercises={timeBasedExercises}
               gymIndependentExercises={gymIndependentExercises}
               onUpdateExerciseNote={handleUpdateExerciseNote}
@@ -7076,6 +7132,7 @@ function TrainingAppInner() {
             onSetExerciseSubgroups={handleSetExerciseSubgroups}
             exerciseEquipmentOverrides={exerciseEquipmentOverrides}
             onSetExerciseEquipment={handleSetExerciseEquipment}
+            onSetExerciseSecondary={handleSetExerciseSecondary}
             onAddCustom={handleAddCustomExercise}
             onDeleteCustom={async (id) => {
               await persistCustomExercises(customExercises.filter((e) => e.id !== id));
@@ -7104,6 +7161,7 @@ function TrainingAppInner() {
               onSetExerciseSubgroups={handleSetExerciseSubgroups}
               exerciseEquipmentOverrides={exerciseEquipmentOverrides}
               onSetExerciseEquipment={handleSetExerciseEquipment}
+              onSetExerciseSecondary={handleSetExerciseSecondary}
               onAddCustom={handleAddCustomExercise}
               timeBasedExercises={timeBasedExercises}
               gymIndependentExercises={gymIndependentExercises}
@@ -7219,6 +7277,7 @@ function TrainingAppInner() {
             onSetExerciseSubgroup={handleSetExerciseSubgroup}
             exerciseEquipmentOverrides={exerciseEquipmentOverrides}
             onSetExerciseEquipment={handleSetExerciseEquipment}
+            onSetExerciseSecondary={handleSetExerciseSecondary}
             timeBasedExercises={timeBasedExercises}
             gymIndependentExercises={gymIndependentExercises}
             onUpdateExerciseNote={handleUpdateExerciseNote}
@@ -9953,6 +10012,11 @@ function NewExerciseForm({ exercises, onAddCustom, onSetExerciseSubgroups, onDon
   // beim Neuanlegen nur eine einzige wählen, obwohl das Datenmodell und der
   // Bearbeiten-Dialog längst mehrere erlauben.
   const [newSubgroups, setNewSubgroups] = useState([]);
+  // Nebenmuskelgruppen - dieselbe Mehrfachauswahl wie Untergruppen, nur aus
+  // der Liste der Hauptgruppen statt der Untergruppen der eigenen. Vorher
+  // konnte eine eigene Übung nie welche haben: exerciseGroupShares liest
+  // exercise.secondary, das beim Anlegen schlicht nie gesetzt wurde.
+  const [newSecondary, setNewSecondary] = useState([]);
   const [newEquipment, setNewEquipment] = useState("Körpergewicht");
   const [newDescription, setNewDescription] = useState("");
   const [newVideo, setNewVideo] = useState("");
@@ -9984,7 +10048,22 @@ function NewExerciseForm({ exercises, onAddCustom, onSetExerciseSubgroups, onDon
       setErrorMsg("Diese Übung gibt es schon.");
       return;
     }
-    const newExercise = { id, name: trimmed, group: newGroup, custom: true, meta: { equipment: newEquipment, primary: MUSCLE_GROUPS.find((g) => g.id === newGroup)?.label || newGroup, secondary: "–", description: newDescription.trim() || `${trimmed} – eigene Übung.`, video: newVideo.trim() } };
+    const newExercise = {
+      id,
+      name: trimmed,
+      group: newGroup,
+      // Direkt am Objekt gesetzt, nicht über die Override-Tabelle: Die
+      // Übung ist brandneu, es gibt noch nichts, das überschrieben würde.
+      secondary: newSecondary,
+      custom: true,
+      meta: {
+        equipment: newEquipment,
+        primary: MUSCLE_GROUPS.find((g) => g.id === newGroup)?.label || newGroup,
+        secondary: "–",
+        description: newDescription.trim() || `${trimmed} – eigene Übung.`,
+        video: newVideo.trim(),
+      },
+    };
     onAddCustom(newExercise);
     if (newSubgroups.length > 0) onSetExerciseSubgroups(id, newSubgroups);
     // The parent's exercise list hasn't re-rendered with the new entry yet
@@ -10015,7 +10094,38 @@ function NewExerciseForm({ exercises, onAddCustom, onSetExerciseSubgroups, onDon
             <span
               key={g.id}
               className={`chip ${newGroup === g.id ? "active" : ""}`}
-              onClick={() => { setNewGroup(g.id); setNewSubgroups([]); }}
+              onClick={() => {
+                setNewGroup(g.id);
+                setNewSubgroups([]);
+                // Nebenmuskeln beziehen sich auf die Hauptgruppe - wechselt
+                // die, muss man die Auswahl neu treffen. Sonst könnte die
+                // alte Hauptgruppe als eigene Nebengruppe stehen bleiben.
+                setNewSecondary([]);
+              }}
+            >
+              {g.label}
+            </span>
+          ))}
+        </div>
+      </div>
+      <div style={{ marginTop: 10 }}>
+        <label className="field-label">Nebenmuskelgruppen (optional)</label>
+        <div className="chip-row" style={{ marginTop: 6 }}>
+          <span
+            className={`chip chip-sm ${newSecondary.length === 0 ? "active" : ""}`}
+            onClick={() => setNewSecondary([])}
+          >
+            Keine
+          </span>
+          {MUSCLE_GROUPS.filter((g) => g.id !== newGroup).map((g) => (
+            <span
+              key={g.id}
+              className={`chip chip-sm ${newSecondary.includes(g.id) ? "active" : ""}`}
+              onClick={() =>
+                setNewSecondary((prev) =>
+                  prev.includes(g.id) ? prev.filter((id) => id !== g.id) : [...prev, g.id]
+                )
+              }
             >
               {g.label}
             </span>
@@ -10104,6 +10214,7 @@ function ExercisesView({
   onSetExerciseSubgroups,
   exerciseEquipmentOverrides,
   onSetExerciseEquipment,
+  onSetExerciseSecondary,
   onAddCustom,
   onDeleteCustom,
   onUpdateExerciseNote,
@@ -10315,6 +10426,7 @@ function ExercisesView({
           onSetExerciseSubgroup={onSetExerciseSubgroup}
           exerciseEquipmentOverrides={exerciseEquipmentOverrides}
           onSetExerciseEquipment={onSetExerciseEquipment}
+          onSetExerciseSecondary={onSetExerciseSecondary}
           timeBasedExercises={timeBasedExercises}
           gymIndependentExercises={gymIndependentExercises}
           onUpdateExerciseNote={onUpdateExerciseNote}
@@ -10342,6 +10454,7 @@ function ExerciseDetailSheet({
   onSetExerciseSubgroup,
   exerciseEquipmentOverrides,
   onSetExerciseEquipment,
+  onSetExerciseSecondary,
   timeBasedExercises,
   gymIndependentExercises,
   onUpdateExerciseNote,
@@ -10361,11 +10474,18 @@ function ExerciseDetailSheet({
   const [renameError, setRenameError] = useState("");
   const [editingSubgroup, setEditingSubgroup] = useState(false);
   const [editingEquipment, setEditingEquipment] = useState(false);
+  const [editingSecondary, setEditingSecondary] = useState(false);
   const availableSubgroups = SUBGROUPS[exercise.group] || [];
   const currentSubgroups = getExerciseSubgroups(exercise, exerciseSubgroupOverrides);
   const currentSubgroup = currentSubgroups[0] || null;
   const meta = getExerciseMeta(exercise);
   const currentEquipment = getExerciseEquipment(exercise, exerciseEquipmentOverrides);
+  // exercise.secondary trägt den Override bereits (siehe allExercises im
+  // Wurzel-Bauteil) - hier braucht es keinen eigenen Blick auf eine
+  // Override-Tabelle, anders als bei Untergruppe und Gerät.
+  const currentSecondary = exercise.secondary || [];
+  // Die eigene Hauptgruppe kann nicht zugleich Nebengruppe sein.
+  const availableSecondary = MUSCLE_GROUPS.filter((g) => g.id !== exercise.group);
 
   useEffect(() => {
     if (!editingSubgroup) return;
@@ -10391,12 +10511,18 @@ function ExerciseDetailSheet({
   useEffect(() => {
     const onKeyDown = (e) => {
       if (e.key !== "Escape") return;
-      if (editingName || editingSubgroup || editingEquipment) return;
+      if (editingName || editingSubgroup || editingEquipment || editingSecondary) return;
       onClose();
     };
     document.addEventListener("keydown", onKeyDown);
     return () => document.removeEventListener("keydown", onKeyDown);
-  }, [editingName, editingSubgroup, onClose]);
+    // editingEquipment und editingSecondary fehlten hier - der Haken lief
+    // dann mit einem veralteten Blick auf sie: Escape schloss beim Bearbeiten
+    // von Gerät oder Nebenmuskeln nicht nur den gerade offenen Dialog,
+    // sondern gleich das ganze Blatt mit, weil die Bedingung oben immer den
+    // Stand vom letzten Neuaufbau des Hakens sah (also "false"), nie den
+    // aktuellen.
+  }, [editingName, editingSubgroup, editingEquipment, editingSecondary, onClose]);
 
   const timeline = useMemo(
     () => getExerciseTimeline(logs, exercise.id),
@@ -10489,12 +10615,29 @@ function ExerciseDetailSheet({
                 {/* Die Nebengruppen. Sie waren bis Sept. 2026 nur in der
                     Rechnung sichtbar (halber Satz je Nebengruppe), nirgends
                     in der Bedienung - man konnte also nicht nachsehen, warum
-                    eine Übung bei den Armen mitzählt. */}
-                {(exercise.secondary || []).map((g) => (
-                  <span className="tag tag-secondary" key={g} title="Nebenmuskelgruppe – zählt mit einem halben Satz">
-                    {MUSCLE_GROUPS.find((m) => m.id === g)?.label || g}
+                    eine Übung bei den Armen mitzählt, und schon gar nicht das
+                    ändern. Jetzt oeffnet jede Nebenmuskel-Marke denselben
+                    Auswahl-Dialog wie das Gerät daneben. */}
+                {currentSecondary.length > 0 ? (
+                  currentSecondary.map((g) => (
+                    <span
+                      className="tag tag-secondary tag-clickable"
+                      key={g}
+                      onClick={() => setEditingSecondary(true)}
+                      title="Nebenmuskelgruppe – zählt mit einem halben Satz. Antippen: ändern."
+                    >
+                      {MUSCLE_GROUPS.find((m) => m.id === g)?.label || g}
+                    </span>
+                  ))
+                ) : (
+                  <span
+                    className="tag tag-secondary tag-clickable"
+                    onClick={() => setEditingSecondary(true)}
+                    title="Nebenmuskelgruppen hinzufügen"
+                  >
+                    <Plus size={11} style={{ verticalAlign: -1 }} /> Nebenmuskeln
                   </span>
-                ))}
+                )}
                 <span
                   className="tag tag-equipment tag-clickable"
                   onClick={() => setEditingEquipment(true)}
@@ -10807,6 +10950,49 @@ function ExerciseDetailSheet({
           </div>
         </Modal>
       )}
+
+      {editingSecondary && (
+        <Modal title="Nebenmuskelgruppen wählen" onClose={() => setEditingSecondary(false)}>
+          <p style={{ fontSize: 12.5, color: "var(--text-dim)", margin: "0 0 10px" }}>
+            Mehrere möglich – jede zählt mit einem halben Satz in „Sätze pro
+            Muskelgruppe“ und „Belastung pro Muskelgruppe“.
+          </p>
+          <div className="modal-list">
+            {/* Bleibt offen, waehrend man waehlt - mehrere nacheinander
+                antippen ist der ganze Zweck, wie bei den Untergruppen. */}
+            {availableSecondary.map((g) => {
+              const on = currentSecondary.includes(g.id);
+              return (
+                <button
+                  key={g.id}
+                  className={`modal-option ${on ? "active" : ""}`}
+                  onClick={() => onSetExerciseSecondary(exercise.id, g.id)}
+                >
+                  {g.label}
+                  {on && <Check size={15} />}
+                </button>
+              );
+            })}
+          </div>
+          <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
+            <button
+              className="btn btn-ghost btn-sm"
+              style={{ flex: 1 }}
+              disabled={currentSecondary.length === 0}
+              onClick={() => onSetExerciseSecondary(exercise.id, null)}
+            >
+              Alle entfernen
+            </button>
+            <button
+              className="btn btn-primary btn-sm"
+              style={{ flex: 1 }}
+              onClick={() => setEditingSecondary(false)}
+            >
+              <Check size={14} /> Fertig
+            </button>
+          </div>
+        </Modal>
+      )}
     </div>
   );
 }
@@ -10827,6 +11013,7 @@ function PlanBuilder({
   onSetExerciseSubgroups,
   exerciseEquipmentOverrides,
   onSetExerciseEquipment,
+  onSetExerciseSecondary,
   onAddCustom,
   timeBasedExercises,
   gymIndependentExercises,
@@ -11895,6 +12082,7 @@ function PlanBuilder({
           onSetExerciseSubgroup={onSetExerciseSubgroup}
           exerciseEquipmentOverrides={exerciseEquipmentOverrides}
           onSetExerciseEquipment={onSetExerciseEquipment}
+          onSetExerciseSecondary={onSetExerciseSecondary}
           timeBasedExercises={timeBasedExercises}
           gymIndependentExercises={gymIndependentExercises}
           onUpdateExerciseNote={onUpdateExerciseNote}
@@ -12539,6 +12727,7 @@ function LogView({
   onSetExerciseSubgroups,
   exerciseEquipmentOverrides,
   onSetExerciseEquipment,
+  onSetExerciseSecondary,
   timeBasedExercises,
   gymIndependentExercises,
   onUpdateExerciseNote,
@@ -14512,6 +14701,7 @@ function LogView({
           onSetExerciseSubgroup={onSetExerciseSubgroup}
           exerciseEquipmentOverrides={exerciseEquipmentOverrides}
           onSetExerciseEquipment={onSetExerciseEquipment}
+          onSetExerciseSecondary={onSetExerciseSecondary}
           timeBasedExercises={timeBasedExercises}
           gymIndependentExercises={gymIndependentExercises}
           onUpdateExerciseNote={onUpdateExerciseNote}
@@ -16105,6 +16295,7 @@ function ProgressView({
   onSetExerciseSubgroup,
   exerciseEquipmentOverrides,
   onSetExerciseEquipment,
+  onSetExerciseSecondary,
   timeBasedExercises,
   gymIndependentExercises,
   bodyWeights = [],
@@ -16521,6 +16712,7 @@ function ProgressView({
           onSetExerciseSubgroup={onSetExerciseSubgroup}
           exerciseEquipmentOverrides={exerciseEquipmentOverrides}
           onSetExerciseEquipment={onSetExerciseEquipment}
+          onSetExerciseSecondary={onSetExerciseSecondary}
           timeBasedExercises={timeBasedExercises}
           gymIndependentExercises={gymIndependentExercises}
           onUpdateExerciseNote={onUpdateExerciseNote}
@@ -17083,6 +17275,7 @@ function ProgressView({
           onSetExerciseSubgroup={onSetExerciseSubgroup}
           exerciseEquipmentOverrides={exerciseEquipmentOverrides}
           onSetExerciseEquipment={onSetExerciseEquipment}
+          onSetExerciseSecondary={onSetExerciseSecondary}
           timeBasedExercises={timeBasedExercises}
           gymIndependentExercises={gymIndependentExercises}
           onUpdateExerciseNote={onUpdateExerciseNote}
@@ -17591,6 +17784,7 @@ function HistoryView({
   onSetExerciseSubgroup,
   exerciseEquipmentOverrides,
   onSetExerciseEquipment,
+  onSetExerciseSecondary,
   timeBasedExercises,
   gymIndependentExercises,
   onUpdateExerciseNote,
@@ -17800,6 +17994,7 @@ function HistoryView({
           onSetExerciseSubgroup={onSetExerciseSubgroup}
           exerciseEquipmentOverrides={exerciseEquipmentOverrides}
           onSetExerciseEquipment={onSetExerciseEquipment}
+          onSetExerciseSecondary={onSetExerciseSecondary}
           timeBasedExercises={timeBasedExercises}
           gymIndependentExercises={gymIndependentExercises}
           onUpdateExerciseNote={onUpdateExerciseNote}

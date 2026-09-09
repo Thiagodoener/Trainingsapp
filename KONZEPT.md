@@ -563,6 +563,31 @@ trennt streng nach Adresse. Unter der neuen Adresse startet sie deshalb leer. Er
 (Zahnrad → Daten sichern), dann drüben wiederherstellen, dann das Symbol auf dem Homescreen neu
 anlegen.
 
+**Sekunden standen da, wo Wiederholungen hingehören.**
+Im Verlauf las man bei Ausfallschritten und RDLs „30s, 30s" statt der Wiederholungen. Drei Ursachen
+lagen übereinander, jede für sich harmlos, zusammen durchgehend falsch:
+
+1. **Jeder Satz bekam eine Dauer mit.** Die Plan-Vorgabe steht auf 30 Sekunden – auch bei reinen
+   Wiederholungs-Übungen, wo das Feld gar nicht sichtbar ist. Diese 30 wanderte ins Training, wurde
+   mitgespeichert und beim nächsten Mal wieder vorgetragen: Der Fehler hielt sich selbst am Leben.
+   Eine Dauer bekommt jetzt nur noch, was auch in Sekunden gemessen wird.
+2. **Die Anzeige entschied nach dem Satz statt nach der Übung.** `shortSet` zeigte eine vorhandene
+   Dauer *vor* Gewicht und Wiederholungen – und überstimmte damit sogar Aufrufer, die vorher
+   ausgerechnet hatten, dass die Übung gar keine Zeit-Übung ist. Jetzt entscheidet ausschließlich
+   die Übung; nur wenn ein Satz weder Gewicht noch Wiederholungen hat, bleiben die Sekunden als
+   Letztes übrig.
+3. **Der Automatik-Modus taktet, aber er maß auch.** Er schrieb für *jede* Übung eines getakteten
+   Trainings „wird in Sekunden gemessen" ins Protokoll. Weil diese Angabe über alle Trainings
+   gelesen wird, machte ein einziges getaktetes Training aus Ausfallschritten dauerhaft eine
+   Sekunden-Übung – rückwirkend auch in allen anderen Trainings, in Kalender, Verlauf und
+   Diagrammen. Und während des Trainings zeigte die Zeile nur ein Sekundenfeld, sodass sich
+   Wiederholungen gar nicht mehr eintragen ließen.
+
+Für **bereits aufgezeichnete** Trainings gilt: Die Zeit-Markierung aus einem getakteten Training
+zählt nicht mehr. Sie wurde von einem Fehler geschrieben, nicht von einer Entscheidung. Wer eine
+Übung wirklich in Sekunden misst, stellt das an der Übung ein – diese Angabe gewinnt gegen alles
+andere und ist der einzige Weg, der je gemeint war.
+
 ---
 
 ## Offene Punkte

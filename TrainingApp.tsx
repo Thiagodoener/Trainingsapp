@@ -699,13 +699,25 @@ function getMonthMatrix(year, month) {
 // has set this, old logs from before that choice must not override it.
 // Only an exercise that was never set at all falls back to guessing from
 // its log history.
-function isTimeBasedInLogs(logs, exerciseId, timeBasedExercises) {
+export function isTimeBasedInLogs(logs, exerciseId, timeBasedExercises) {
   if (timeBasedExercises && Object.prototype.hasOwnProperty.call(timeBasedExercises, exerciseId)) {
     return !!timeBasedExercises[exerciseId];
   }
-  return (logs || []).some((l) =>
-    logEntries(l).some((e) => e.exerciseId === exerciseId && e.targetUseTime)
-  );
+  return (logs || []).some((l) => {
+    // Trainings aus dem Automatik-Modus zaehlen hier nicht mit. Der Modus hat
+    // frueher JEDE Uebung eines solchen Trainings als Zeit-Uebung
+    // weggeschrieben, obwohl er nur taktet. Ein einziges getaktetes Training
+    // machte damit aus Ausfallschritten dauerhaft eine Sekunden-Uebung -
+    // rueckwirkend auch in allen anderen Trainings, weil diese Abfrage ueber
+    // alle Logs geht.
+    //
+    // Neue Trainings schreiben dieses Kennzeichen gar nicht mehr aus dem Takt
+    // heraus; diese Zeile gilt also nur den Aufzeichnungen von davor. Wer
+    // eine Uebung wirklich in Sekunden misst, stellt das an der Uebung ein -
+    // und diese Angabe gewinnt oben ohnehin gegen alles.
+    if (l?.autoRun) return false;
+    return logEntries(l).some((e) => e.exerciseId === exerciseId && e.targetUseTime);
+  });
 }
 
 // Übungen, die überall gleich sind - Liegestütze, Plank, alles mit Band.
@@ -3584,7 +3596,15 @@ function TrainingAppInner() {
           // Pre-filled the German way too, so a workout doesn't start showing
           // "62.5" and only switch to "62,5" once the field has been touched.
           weight: warmup ? 0 : fmtDecimal(weight),
-          duration,
+          // Eine Dauer bekommt nur, was auch in Sekunden gemessen wird.
+          //
+          // Vorher trug JEDER Satz eine Dauer mit sich - die Plan-Vorgabe
+          // steht auf 30 Sekunden, auch bei reinen Wiederholungs-Uebungen.
+          // Diese 30 landeten im Training, wurden mitgespeichert und tauchten
+          // ueberall als "30s" statt "60kg x 8" auf. Schlimmer noch: Beim
+          // naechsten Mal wurde die gespeicherte Dauer wieder vorgetragen
+          // (siehe ref oben), womit sich der Fehler selbst am Leben hielt.
+          duration: targetUseTime ? duration : 0,
           done: false,
           warmup,
         };
@@ -6798,13 +6818,15 @@ function TrainingAppInner() {
                     .filter((e) => e.sets.some((s) => s.done))
                     .map((e) => ({
                       ...e,
-                      // Record that this exercise ran on time. The automatic
-                      // mode is a property of the session, which is gone once
-                      // the workout is saved - without this flag the history,
-                      // records and charts would later read it as a weight
-                      // exercise with 0 kg.
-                      targetUseTime:
-                        (session.autoRun && e.autoRun !== false) || !!e.targetUseTime,
+                      // Nur die Einstellung an der Uebung entscheidet, ob
+                      // sie in Sekunden gemessen wird. Frueher setzte der
+                      // Automatik-Modus dieses Kennzeichen fuer JEDE Uebung
+                      // des Trainings - und weil isTimeBasedInLogs es fuer
+                      // alle Logs liest, war die Uebung damit dauerhaft eine
+                      // Zeit-Uebung: keine Kilogramm, kein 1RM, keine
+                      // Wiederholungen mehr, in Verlauf, Kalender und
+                      // Diagrammen.
+                      targetUseTime: !!e.targetUseTime,
                       // toNum, not Number: weights are held as typed ("62,5"),
                       // and Number("62,5") is NaN - which would silently store
                       // the set as 0 kg.
@@ -6826,12 +6848,9 @@ function TrainingAppInner() {
                   let doneSets = 0;
                   const records = [];
                   cleaned.entries.forEach((entry) => {
-                    // Same rule the workout screen uses. Checking only the
-                    // global setting missed every exercise that ran on time
-                    // because of the automatic mode - so no record was ever
-                    // recognised in a HIT workout.
+                    // Dieselbe Regel wie in der Trainingsansicht: allein die
+                    // Einstellung an der Uebung zaehlt, nicht der Takt.
                     const isTimeBased =
-                      (session.autoRun && entry.autoRun !== false) ||
                       isTimeBasedInLogs(logs, entry.exerciseId, timeBasedExercises) ||
                       !!entry.targetUseTime;
                     const best = getExerciseHistory(
@@ -7024,6 +7043,7 @@ function TrainingAppInner() {
             categories={calendarCategories}
             plans={allPlans}
             logs={logs}
+            timeBasedExercises={timeBasedExercises}
             exBy={allExBy}
             onAddAction={addCalendarAction}
             onScheduleWorkout={scheduleCalendarWorkout}
@@ -8572,6 +8592,7 @@ function CalendarView({
   plans,
   logs,
   exBy,
+  timeBasedExercises = {},
   onAddAction,
   onScheduleWorkout,
   onDeleteEntry,
@@ -9111,12 +9132,11 @@ function CalendarView({
                       {logEntries(log).map((e) => {
                         const ex = exBy[e.exerciseId];
                         const workingSets = performedWorkingSets(entrySets(e));
+                        // Die Uebung entscheidet, ob Sekunden oder kg x Wdh.
+                        // dastehen - nicht der einzelne Satz (siehe shortSet).
+                        const zeitUebung = isTimeBasedInLogs(logs, e.exerciseId, timeBasedExercises);
                         const summary = workingSets
-                          .map(
-                            (s) =>
-                              (s.dropset ? "↓" : "") +
-                              shortSet(s)
-                          )
+                          .map((s) => (s.dropset ? "↓" : "") + shortSet(s, zeitUebung))
                           .join(", ");
                         return (
                           <div key={e.id || e.exerciseId} className="history-exercise-row">
@@ -10600,9 +10620,7 @@ function ExerciseDetailSheet({
                       <span key={i} className="tag" style={s.warmup ? { opacity: 0.6 } : undefined}>
                         {s.warmup ? "W · " : ""}
                         {s.dropset ? "↓ " : ""}
-                        {timeBasedExercises[exercise.id]
-                          ? `${s.duration || 0}s`
-                          : shortSet(s)}
+                        {shortSet(s, isTimeBasedInLogs(logs, exercise.id, timeBasedExercises))}
                       </span>
                     ))}
                   </div>
@@ -13617,12 +13635,16 @@ function LogView({
         const isBandExercise =
           !!ex && getExerciseEquipment(ex, exerciseEquipmentOverrides) === "Band";
         const usesWeight = !ex || !isBandExercise || bands.length > 0;
-        // During an automatic run the set is measured in seconds, so the row
-        // must show a time field - unless this exercise was kept on reps.
+        // Der Automatik-Modus TAKTET das Training - er entscheidet nicht,
+        // WOMIT eine Uebung gemessen wird. Frueher stand hier "waehrend eines
+        // automatischen Laufs ist jeder Satz eine Zeitangabe": Damit zeigte
+        // die Zeile fuer jede Uebung ein Sekundenfeld, und Ausfallschritte
+        // oder RDLs liessen sich gar nicht mehr in Wiederholungen eintragen.
+        // Wer wirklich auf Zeit trainiert, stellt das an der Uebung ein
+        // (Plan: "Zeit statt Wiederholungen") - dann greift genau dieselbe
+        // Abfrage wie in jedem anderen Training auch.
         const isTimeBased =
-          entryAutoRuns(entry) && session.autoRun
-            ? true
-            : isTimeBasedInLogs(logs, entry.exerciseId, timeBasedExercises) || !!entry.targetUseTime;
+          isTimeBasedInLogs(logs, entry.exerciseId, timeBasedExercises) || !!entry.targetUseTime;
         // Comparing against the same gym only - a record set on a machine
         // that runs lighter elsewhere is not a record here.
         const history = getExerciseHistory(
@@ -13926,10 +13948,7 @@ function LogView({
                   .map((s) =>
                     // Ohne Pfeil saehe ein Dropsatz in dieser Zeile wie ein
                     // Leistungseinbruch aus.
-                    (s.dropset ? "↓" : "") +
-                    (isTimeBased
-                      ? `${s.duration || 0}s`
-                      : shortSet(s))
+                    (s.dropset ? "↓" : "") + shortSet(s, isTimeBased)
                   )
                   .join(", ")}
                 {fmtRir(history.lastRir) ? ` · ${fmtRir(history.lastRir)}` : ""}
@@ -14620,16 +14639,31 @@ export function buildPercentSeries(data, keys, compareWeeks, toleranceDays = PER
 // Klimmzug ist keine Information, sondern ein Formatierungsunfall - und er
 // fiel bisher nur nicht auf, weil Koerpergewichts-Uebungen gar keine
 // Historie hatten (siehe getExerciseHistory).
-function shortSet(s) {
+// Wie ein Satz in einer Zeile aussieht. isTimeBased sagt, WOMIT die Uebung
+// gemessen wird - und nur das entscheidet, ob Sekunden oder kg x Wdh.
+// dastehen.
+//
+// Frueher entschied das der Satz selbst: Stand irgendeine Dauer drin, wurden
+// Sekunden angezeigt - vor Gewicht und Wiederholungen. Das ging schief, weil
+// bis dahin JEDER Satz eine Dauer mitbekam, auch bei reinen
+// Wiederholungs-Uebungen (siehe makeSet). Aus "60kg x 8" wurde so "30s", und
+// das quer durch die App: im Verlauf, in der Tagesansicht des Kalenders, in
+// der Uebungs-Detailseite. Die Anzeige ueberstimmte damit sogar Aufrufer,
+// die vorher ausgerechnet hatten, dass die Uebung gar keine Zeit-Uebung ist.
+export function shortSet(s, isTimeBased = false) {
   if (!s) return "";
-  const dur = toNum(s.duration);
-  if (dur > 0) return `${dur}s`;
+  if (isTimeBased) return `${toNum(s.duration)}s`;
   const weight = toNum(s.weight);
   const reps = toNum(s.reps);
   // Bei einem Band sagt der Name mehr als die Kilogramm: "Rot ×15" ist die
   // Angabe, mit der man am Gerät wieder etwas anfangen kann.
   if (s.bandName) return `${s.bandName}×${reps}`;
-  return weight > 0 ? `${fmtDecimal(weight)}kg×${reps}` : `${reps} Wdh.`;
+  if (weight > 0) return `${fmtDecimal(weight)}kg×${reps}`;
+  // Weder Gewicht noch Wiederholungen, aber eine Dauer: Dann ist die Dauer
+  // das Einzige, was der Satz ueberhaupt hergibt. Das rettet Saetze aus der
+  // Zeit vor dieser Trennung, bei denen nur die Sekunden echt sind.
+  if (reps <= 0 && toNum(s.duration) > 0) return `${toNum(s.duration)}s`;
+  return `${reps} Wdh.`;
 }
 
 function describeSet(set) {
@@ -17076,7 +17110,8 @@ function ProgressView({
                   {r.previous ? ` · vorher ${r.previous}` : " · erster Wert"}
                 </div>
                 <div className="pr-list-detail" style={{ color: "var(--text-faint)" }}>
-                  Aus dem Satz {shortSet(r.set)}
+                  Aus dem Satz{" "}
+                  {shortSet(r.set, isTimeBasedInLogs(logs, r.exerciseId, timeBasedExercises))}
                 </div>
               </div>
             ))}
@@ -17684,10 +17719,7 @@ function HistoryView({
                   const summary = workingSets
                     .map(
                       (s) =>
-                        (s.dropset ? "↓" : "") +
-                        (isTimeBased && s.duration
-                          ? `${s.duration}s`
-                          : shortSet(s))
+                        (s.dropset ? "↓" : "") + shortSet(s, isTimeBased)
                     )
                     .join(", ");
                   const entryKey = entry.id || entry.exerciseId;

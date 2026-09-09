@@ -51,6 +51,8 @@ import {
   halfPeriodChange,
   strengthVolumeNote,
   plural,
+  shortSet,
+  isTimeBasedInLogs,
 } from "./TrainingApp";
 
 // Diese Tests sichern die Rechenfunktionen ab - also das, was die App
@@ -1689,5 +1691,84 @@ describe("Einzahl und Mehrzahl", () => {
     expect(plural(0.5, "Satz", "Sätze")).toBe("0,5 Sätze");
     expect(plural(12.5, "Satz", "Sätze")).toBe("12,5 Sätze");
     expect(plural(1, "Satz", "Sätze")).toBe("1 Satz");
+  });
+});
+
+
+describe("Sekunden nur da, wo in Sekunden gemessen wird", () => {
+  // Der Fehler auf dem Telefon: Im Verlauf stand bei Ausfallschritten und
+  // RDLs "30s, 30s" statt der Wiederholungen. Die 30 kam aus der
+  // Plan-Vorgabe und wurde jedem Satz mitgegeben - auch reinen
+  // Wiederholungs-Uebungen -, und die Anzeige zeigte die Dauer VOR Gewicht
+  // und Wiederholungen.
+
+  it("Regression: ein Kraftsatz mit uebrig gebliebener Dauer zeigt kg x Wdh.", () => {
+    const satzMitAltlast = satz({ weight: 60, reps: 8, duration: 30 });
+    expect(shortSet(satzMitAltlast, false)).toBe("60kg×8");
+  });
+
+  it("Regression: ein Wiederholungssatz ohne Gewicht zeigt Wiederholungen", () => {
+    expect(shortSet(satz({ weight: 0, reps: 12, duration: 30 }), false)).toBe("12 Wdh.");
+  });
+
+  it("eine echte Zeit-Uebung zeigt weiterhin Sekunden", () => {
+    // Auch dann, wenn Wiederholungen vorbelegt daneben stehen.
+    expect(shortSet(satz({ weight: 0, reps: 10, duration: 45 }), true)).toBe("45s");
+  });
+
+  it("Baender behalten ihren Namen", () => {
+    expect(shortSet(satz({ weight: 0, reps: 15, bandName: "Rot", duration: 30 }), false))
+      .toBe("Rot×15");
+  });
+
+  it("hat ein Satz nur eine Dauer, wird sie auch ohne Kennzeichen gezeigt", () => {
+    // Rettungsnetz fuer alte Saetze, bei denen nur die Sekunden echt sind.
+    expect(shortSet(satz({ weight: 0, reps: 0, duration: 40 }), false)).toBe("40s");
+  });
+});
+
+describe("Der Automatik-Modus taktet, er misst nicht", () => {
+  const zeitSatz = satz({ weight: 0, reps: 10, duration: 30 });
+
+  it("Regression: ein getaktetes Training macht keine Zeit-Uebung daraus", () => {
+    // Frueher schrieb der Automatik-Modus targetUseTime fuer JEDE Uebung des
+    // Trainings weg - und weil diese Abfrage ueber alle Logs geht, war die
+    // Uebung damit dauerhaft eine Sekunden-Uebung, auch in allen anderen
+    // Trainings.
+    const getaktet = [
+      training({
+        id: "auto",
+        date: new Date(Date.now() - TAG).toISOString(),
+        autoRun: true,
+        entries: [{ id: "e", exerciseId: "ausfallschritte", targetUseTime: true, sets: [zeitSatz] }],
+      }),
+    ];
+    expect(isTimeBasedInLogs(getaktet, "ausfallschritte", {})).toBe(false);
+  });
+
+  it("ein normales Training mit Zeit-Kennzeichen zaehlt weiterhin", () => {
+    const normal = [
+      training({
+        id: "plank",
+        date: new Date(Date.now() - TAG).toISOString(),
+        entries: [{ id: "e", exerciseId: "plank", targetUseTime: true, sets: [zeitSatz] }],
+      }),
+    ];
+    expect(isTimeBasedInLogs(normal, "plank", {})).toBe(true);
+  });
+
+  it("die Einstellung an der Uebung gewinnt gegen alles", () => {
+    const getaktet = [
+      training({
+        id: "auto",
+        date: new Date(Date.now() - TAG).toISOString(),
+        autoRun: true,
+        entries: [{ id: "e", exerciseId: "plank", targetUseTime: true, sets: [zeitSatz] }],
+      }),
+    ];
+    // Von Hand eingeschaltet: gilt, obwohl das Training getaktet war.
+    expect(isTimeBasedInLogs(getaktet, "plank", { plank: true })).toBe(true);
+    // Von Hand ausgeschaltet: gilt auch gegen ein normales Training.
+    expect(isTimeBasedInLogs(getaktet, "plank", { plank: false })).toBe(false);
   });
 });

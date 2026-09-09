@@ -36,7 +36,7 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '22'
           cache: npm
 
       # npm ci statt npm install: installiert exakt die Versionen aus
@@ -53,13 +53,13 @@ jobs:
       - name: App bauen
         run: npm run build
 
-      # enablement: true schaltet GitHub Pages beim ersten Lauf selbst ein,
-      # statt dass man es vorher von Hand unter Settings -> Pages einstellen
-      # muss. Schlaegt das fehl (z. B. weil die Einstellung gesperrt ist),
-      # bricht der Lauf mit einer klaren Meldung ab - dann geht es von Hand.
+      # Setzt voraus, dass GitHub Pages einmalig eingeschaltet wurde:
+      # Settings -> Pages -> Source: "GitHub Actions". Das automatische
+      # Einschalten von hier aus wurde versucht und geht nicht - der
+      # Arbeitsablauf hat dafuer keine Berechtigung ("Resource not accessible
+      # by integration"), die hat nur der Kontoinhaber. Ist Pages nicht
+      # eingeschaltet, bricht dieser Schritt mit "Get Pages site failed" ab.
       - uses: actions/configure-pages@v5
-        with:
-          enablement: true
 
       - uses: actions/upload-pages-artifact@v3
         with:

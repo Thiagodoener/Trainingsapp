@@ -45,6 +45,8 @@ import {
   getLogsPRIndex,
   entryPRs,
   set1RM,
+  bodyWeightEntries,
+  bodyWeightAt,
 } from "./TrainingApp";
 
 // Diese Tests sichern die Rechenfunktionen ab - also das, was die App
@@ -1487,3 +1489,82 @@ describe("Koerpergewichts-Uebungen mit Zusatzgewicht", () => {
       .toEqual(ohne.find((g: any) => g.id === "brust")!.values);
   });
 });
+
+
+describe("Koerpergewicht mit Datum", () => {
+  it("liest die alte einzelne Zahl weiter", () => {
+    const liste = bodyWeightEntries(80);
+    expect(liste).toHaveLength(1);
+    expect(liste[0].kg).toBe(80);
+    // Ohne Datum gilt der Wert von Anfang an.
+    expect(bodyWeightAt(liste, new Date("2020-01-01").getTime())).toBe(80);
+  });
+
+  it("nimmt den Wert, der zu diesem Zeitpunkt galt", () => {
+    const liste = bodyWeightEntries([
+      { id: "a", date: "2026-01-01", kg: 78 },
+      { id: "b", date: "2026-06-01", kg: 83 },
+    ]);
+    expect(bodyWeightAt(liste, new Date("2026-03-15").getTime())).toBe(78);
+    expect(bodyWeightAt(liste, new Date("2026-07-15").getTime())).toBe(83);
+    // Genau am Stichtag gilt schon der neue Wert.
+    expect(bodyWeightAt(liste, new Date("2026-06-01T12:00").getTime())).toBe(83);
+  });
+
+  it("rechnet vor der aeltesten Angabe mit der aeltesten", () => {
+    // Wer sein Gewicht heute eintraegt, hat es letztes Jahr nicht gewogen -
+    // die aelteste bekannte Zahl ist trotzdem naeher dran als gar keine.
+    const liste = bodyWeightEntries([{ id: "a", date: "2026-06-01", kg: 83 }]);
+    expect(bodyWeightAt(liste, new Date("2025-01-01").getTime())).toBe(83);
+  });
+
+  it("ohne Angabe gibt es nichts zu rechnen", () => {
+    expect(bodyWeightEntries(null)).toEqual([]);
+    expect(bodyWeightAt([], Date.now())).toBe(0);
+    expect(bodyWeightEntries([{ id: "x", date: "2026-01-01", kg: 0 }])).toEqual([]);
+  });
+
+  it("Regression: jede Woche rechnet mit dem Gewicht, das damals galt", () => {
+    // Mit einer einzigen Zahl waeren beide Wochen gleich schwer gewesen,
+    // obwohl im zweiten Training 10 kg mehr Koerper bewegt wurden. Eine
+    // Zunahme haette so die gesamte Historie rueckwirkend umgeschrieben.
+    const exBy: any = {
+      klimmzug: { id: "klimmzug", name: "Klimmzug", group: "ruecken", equipment: "Körpergewicht" },
+    };
+    const zug = () => satz({ weight: 0, reps: 10 });
+    const drei = (id: string, wochenHer: number) =>
+      training({
+        id,
+        date: new Date(Date.now() - wochenHer * WOCHE + TAG).toISOString(),
+        entries: [{ id: "e", exerciseId: "klimmzug", sets: [zug(), zug(), zug()] }],
+      });
+    const logs = [drei("alt", 3), drei("neu", 1)];
+    const reihe = (opts: any) =>
+      getMuscleLoadSeries(logs, exBy, {}, {}, 4, Date.now(), opts)
+        .find((g: any) => g.id === "ruecken")!.values;
+
+    // Die beiden Wochen mit Training heraussuchen, statt Indizes zu raten.
+    const gefuellt = (werte: number[]) => werte.filter((v) => v > 0);
+
+    const eineZahl = gefuellt(reihe({ bodyWeights: 88 }));
+    expect(eineZahl).toHaveLength(2);
+    // Beide Wochen identisch - die Zunahme gilt rueckwirkend fuer alles.
+    expect(eineZahl[0]).toBeCloseTo(eineZahl[1], 6);
+
+    const mitVerlauf = gefuellt(reihe({
+      bodyWeights: [
+        { id: "a", date: toDateKeyForTest(new Date(Date.now() - 10 * WOCHE)), kg: 78 },
+        { id: "b", date: toDateKeyForTest(new Date(Date.now() - 2 * WOCHE)), kg: 88 },
+      ],
+    }));
+    expect(mitVerlauf).toHaveLength(2);
+    // Die aeltere Woche wog weniger und zaehlt deshalb weniger.
+    expect(mitVerlauf[0]).toBeLessThan(mitVerlauf[1]);
+    expect(mitVerlauf[0] / mitVerlauf[1]).toBeCloseTo(78 / 88, 6);
+  });
+});
+
+function toDateKeyForTest(d: Date) {
+  const p = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+}

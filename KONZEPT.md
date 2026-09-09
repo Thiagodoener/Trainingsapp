@@ -467,6 +467,27 @@ Diese Zahl gab es an dem Tag aber schlicht nicht – die Linie bricht dort jetzt
 Er stand in einem lokalen Zustand der Trainingsansicht und war nach jedem Tab-Wechsel wieder an.
 Jetzt gespeichert und in der Sicherung mit dabei.
 
+**Das Körpergewicht ist keine feste Zahl.**
+Zuerst war es genau eine: Wer nach einem halben Jahr 5 kg mehr wiegt und den Wert korrigiert,
+hätte damit rückwirkend jede vergangene Woche neu gerechnet – ohne dass sich an einem einzigen
+Training etwas geändert hätte. Gespeichert wird deshalb eine Liste „ab wann galt welcher Wert",
+und jede Woche rechnet mit dem Gewicht, das damals galt. Für Trainings vor der ältesten Angabe
+wird mit der ältesten gerechnet: Wer heute zum ersten Mal wiegt, hat es letztes Jahr nicht getan,
+aber die älteste bekannte Zahl ist näher dran als gar keine. Der alte Speicherstand (eine blanke
+Zahl) wird als „gilt von Anfang an" gelesen – für ihn ändert sich nichts.
+
+Weiterhin bewusst *keine* Gewichtskurve mit Auswertung: Die Zahl ist eine Umrechnungsgröße für
+Körpergewichts-Übungen, kein Messwert, zu dem die App etwas zu sagen hätte (Regel 3).
+
+**„Verwerfen" beim Bearbeiten hat das Training gelöscht.**
+Ein altes Training zum Bearbeiten zu öffnen nahm es aus dem Verlauf und machte eine laufende
+Sitzung daraus. Wer danach auf „Verwerfen" tippte, verlor es endgültig – und die Rückfrage sagte
+dabei beruhigend „alle nicht gespeicherten Sätze gehen verloren", was den eigentlichen Verlust
+verschwieg. Das unveränderte Original wandert jetzt mit in die Sitzung (gespeichert, nicht nur im
+Arbeitsspeicher, damit es auch einen Neustart übersteht) und kommt beim Verwerfen zurück in den
+Verlauf. Die Rückfrage sagt jetzt, was wirklich passiert: „Das Training vom 05.09. bleibt so, wie
+es war."
+
 ---
 
 ## Offene Punkte

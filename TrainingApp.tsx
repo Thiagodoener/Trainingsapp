@@ -1043,9 +1043,12 @@ export function getFeelingPerformance(logs, timeBasedExercises, deloadWeeks = nu
   // Womit die Arbeit eines Satzes gemessen wird, hängt an der Übungsart -
   // einmal je Übung bestimmt statt in jeder Schleifenrunde neu.
   const modeCache = {};
-  // opts.exBy nennt die Uebungen, opts.bodyWeight das Koerpergewicht - ohne
+  // opts.exBy nennt die Uebungen, opts.bodyWeights das Koerpergewicht - ohne
   // beides rechnet es wie vorher (siehe loadModeFor).
-  const bodyLoadOf = (exerciseId) => bodyLoadFor(opts?.exBy?.[exerciseId], opts);
+  // Das Koerpergewicht galt nicht immer gleich - deshalb pro Training, nicht
+  // pro Uebung (siehe bodyWeightAt).
+  const bodyLoadOf = (exerciseId, ts) => bodyLoadAt(opts?.exBy?.[exerciseId], opts, ts);
+  const usesBodyWeight = bodyWeightKnown(opts);
   const modeFor = (exerciseId) => {
     if (modeCache[exerciseId]) return modeCache[exerciseId];
     const isTime = isTimeBasedInLogs(safeLogs, exerciseId, timeBasedExercises);
@@ -1053,7 +1056,7 @@ export function getFeelingPerformance(logs, timeBasedExercises, deloadWeeks = nu
       performedWorkingSets(logSetsFor(l, exerciseId)).some((s) => toNum(s.weight) > 0)
     );
     modeCache[exerciseId] = loadModeFor(opts?.exBy?.[exerciseId], {
-      isTime, hasWeight, bodyLoad: bodyLoadOf(exerciseId),
+      isTime, hasWeight, usesBodyWeight,
       equipmentOverrides: opts?.equipmentOverrides,
     });
     return modeCache[exerciseId];
@@ -1069,6 +1072,7 @@ export function getFeelingPerformance(logs, timeBasedExercises, deloadWeeks = nu
     const feeling = Number.isFinite(Number(log.feeling)) ? Number(log.feeling) : null;
     if (feeling != null) sessionsWithFeeling += 1;
 
+    const logTs = new Date(log?.date).getTime();
     // Eine Übung kann mehrfach im selben Training stehen (Zirkel: A, B, A).
     // Alle Plätze gehören zusammen, sonst zählte derselbe Tag doppelt.
     const exerciseIds = [...new Set(logEntries(log).map((e) => e.exerciseId).filter(Boolean))];
@@ -1078,7 +1082,8 @@ export function getFeelingPerformance(logs, timeBasedExercises, deloadWeeks = nu
       if (sets.length === 0) return;
       const mode = modeFor(exerciseId);
       const perSet =
-        sets.reduce((sum, s) => sum + loadSetWork(s, mode, bodyLoadOf(exerciseId)), 0) / sets.length;
+        sets.reduce((sum, s) => sum + loadSetWork(s, mode, bodyLoadOf(exerciseId, logTs)), 0) /
+        sets.length;
       if (!(perSet > 0)) return;
       const series = seriesByExercise[exerciseId] || (seriesByExercise[exerciseId] = []);
       series.push({ logId: log.id, feeling, perSet });
@@ -1821,14 +1826,61 @@ function isBodyweightExercise(exercise, equipmentOverrides) {
   return getExerciseEquipment(exercise, equipmentOverrides) === "Körpergewicht";
 }
 
-// Wie viel Koerpergewicht bei dieser Uebung als Last zaehlt: das eingetragene
-// Koerpergewicht, wenn der Koerper die Last ist - sonst 0. Ohne eingetragenes
-// Koerpergewicht bleibt es bei 0, und die Uebung wird wie eh und je ueber die
-// Wiederholungen gemessen.
-function bodyLoadFor(exercise, opts) {
-  const bw = toNum(opts?.bodyWeight);
-  if (!(bw > 0)) return 0;
-  return isBodyweightExercise(exercise, opts?.equipmentOverrides) ? bw : 0;
+// Das Koerpergewicht ist keine feste Zahl - es aendert sich ueber Monate.
+// Gespeichert wird deshalb eine Liste "ab wann galt welcher Wert", und jede
+// Woche rechnet mit dem Gewicht, das DAMALS galt. Mit einer einzigen Zahl
+// wuerde eine Zunahme von 5 kg rueckwirkend die gesamte Klimmzug-Historie
+// umschreiben, ohne dass sich an einem einzigen Training etwas geaendert
+// haette.
+//
+// date === null heisst "gilt von Anfang an" - so wird die eine Zahl gelesen,
+// die frueher gespeichert wurde, und so bleibt fuer sie alles beim Alten.
+// Bewusst KEINE Gewichtskurve mit Auswertung: Die Zahl ist eine
+// Umrechnungsgroesse, kein Messwert, den die App beurteilen wuerde (Regel 3).
+export function bodyWeightEntries(raw) {
+  // Eine blanke Zahl ist der alte Speicherstand.
+  if (typeof raw === "number" || typeof raw === "string") {
+    const kg = toNum(raw);
+    return kg > 0 ? [{ id: "alt", date: null, kg, ts: -Infinity }] : [];
+  }
+  return (Array.isArray(raw) ? raw : [])
+    .map((e) => {
+      const kg = toNum(e?.kg);
+      if (!(kg > 0)) return null;
+      const ts = e?.date ? dateFromKey(e.date)?.getTime() : -Infinity;
+      if (e?.date && !Number.isFinite(ts)) return null;
+      return { id: e?.id || `${e?.date || "alt"}-${kg}`, date: e?.date || null, kg, ts };
+    })
+    .filter(Boolean)
+    .sort((a, b) => a.ts - b.ts);
+}
+
+// Das Gewicht, das zu diesem Zeitpunkt galt. Liegt der Zeitpunkt vor der
+// aeltesten Angabe, wird die aelteste genommen: Wer sein Gewicht heute
+// eintraegt, hat es letztes Jahr nicht gewogen - aber mit dem heutigen Wert
+// zu rechnen ist immer noch naeher dran als mit gar keinem.
+export function bodyWeightAt(entries, ts) {
+  const liste = Array.isArray(entries) ? entries : [];
+  if (liste.length === 0) return 0;
+  let treffer = null;
+  for (const e of liste) {
+    if (e.ts <= ts) treffer = e;
+  }
+  return (treffer || liste[0]).kg;
+}
+
+// Gibt es ueberhaupt eine Angabe? Davon haengt ab, ob eine
+// Koerpergewichts-Uebung in Kilogramm oder in Wiederholungen gemessen wird -
+// und das muss fuer die ganze Reihe gleich bleiben, sonst mischen sich
+// Einheiten.
+function bodyWeightKnown(opts) {
+  return bodyWeightEntries(opts?.bodyWeights ?? opts?.bodyWeight).length > 0;
+}
+
+// Wie viel Koerpergewicht bei dieser Uebung an diesem Tag als Last zaehlt.
+function bodyLoadAt(exercise, opts, ts) {
+  if (!isBodyweightExercise(exercise, opts?.equipmentOverrides)) return 0;
+  return bodyWeightAt(bodyWeightEntries(opts?.bodyWeights ?? opts?.bodyWeight), ts);
 }
 
 // Womit eine Uebung gemessen wird. Der Sonderfall steht hier an einer Stelle,
@@ -1841,10 +1893,11 @@ function bodyLoadFor(exercise, opts) {
 // null Kilogramm, und die ganze Historie dieser Uebung fiel auf null.
 // Mit eingetragenem Koerpergewicht wird stattdessen in Kilogramm gerechnet
 // (Koerper + Zusatz), und beides zaehlt richtig.
-function loadModeFor(exercise, { isTime, hasWeight, bodyLoad, equipmentOverrides }) {
+function loadModeFor(exercise, { isTime, hasWeight, usesBodyWeight, equipmentOverrides }) {
   if (isTime) return "time";
-  if (bodyLoad > 0) return "weight";
-  if (isBodyweightExercise(exercise, equipmentOverrides)) return "reps";
+  if (isBodyweightExercise(exercise, equipmentOverrides)) {
+    return usesBodyWeight ? "weight" : "reps";
+  }
   return hasWeight ? "weight" : "reps";
 }
 
@@ -1858,7 +1911,7 @@ export function getMuscleLoadSeries(
   timeBasedExercises,
   weekCount = 12,
   nowTs = Date.now(),
-  // { equipmentOverrides, bodyWeight } - siehe loadModeFor. Ohne diese
+  // { equipmentOverrides, bodyWeights } - siehe loadModeFor. Ohne diese
   // Angaben rechnet alles wie vorher.
   opts = {}
 ) {
@@ -1880,13 +1933,8 @@ export function getMuscleLoadSeries(
       });
     });
   });
-  const bodyLoadCache = {};
-  const bodyLoadOf = (exerciseId) => {
-    if (!(exerciseId in bodyLoadCache)) {
-      bodyLoadCache[exerciseId] = bodyLoadFor(exBy[exerciseId], opts);
-    }
-    return bodyLoadCache[exerciseId];
-  };
+  const usesBodyWeight = bodyWeightKnown(opts);
+  const bodyLoadOf = (exerciseId, ts) => bodyLoadAt(exBy[exerciseId], opts, ts);
   const modeOf = (exerciseId) => {
     if (!(exerciseId in timeCache)) {
       timeCache[exerciseId] = isTimeBasedInLogs(safeLogs, exerciseId, timeBasedExercises);
@@ -1894,7 +1942,7 @@ export function getMuscleLoadSeries(
     return loadModeFor(exBy[exerciseId], {
       isTime: timeCache[exerciseId],
       hasWeight: !!hasWeight[exerciseId],
-      bodyLoad: bodyLoadOf(exerciseId),
+      usesBodyWeight,
       equipmentOverrides: opts?.equipmentOverrides,
     });
   };
@@ -1903,11 +1951,12 @@ export function getMuscleLoadSeries(
   // dem später jeder Satz gemessen wird.
   const best = {};
   safeLogs.forEach((l) => {
+    const bestTs = new Date(l?.date).getTime();
     logEntries(l).forEach((e) => {
       const mode = modeOf(e.exerciseId);
       entrySets(e).forEach((s) => {
         if (!s.done || s.warmup) return;
-        const work = loadSetWork(s, mode, bodyLoadOf(e.exerciseId));
+        const work = loadSetWork(s, mode, bodyLoadOf(e.exerciseId, bestTs));
         if (work > (best[e.exerciseId] || 0)) best[e.exerciseId] = work;
       });
     });
@@ -1943,7 +1992,7 @@ export function getMuscleLoadSeries(
       const rirFactor = rirLoadFactor(e.rir, typicalRirs[e.exerciseId]);
       let score = 0;
       performed.forEach((s) => {
-        const work = loadSetWork(s, mode, bodyLoadOf(e.exerciseId)) / reference;
+        const work = loadSetWork(s, mode, bodyLoadOf(e.exerciseId, ts)) / reference;
         score += s === lastPerformed ? work * rirFactor : work;
       });
       if (score === 0) return;
@@ -2270,18 +2319,20 @@ function getExerciseLoadSeries(logs, exerciseId, timeBasedExercises, weekCount =
   );
   // opts.exercise ist die Uebung selbst - ohne sie waere hier nicht zu
   // erkennen, dass der Koerper die Last ist (siehe loadModeFor).
-  const bodyLoad = bodyLoadFor(opts?.exercise, opts);
+  const bodyLoadOf = (ts) => bodyLoadAt(opts?.exercise, opts, ts);
   const mode = loadModeFor(opts?.exercise, {
-    isTime, hasWeight, bodyLoad, equipmentOverrides: opts?.equipmentOverrides,
+    isTime, hasWeight, usesBodyWeight: bodyWeightKnown(opts),
+    equipmentOverrides: opts?.equipmentOverrides,
   });
 
   let best = 0;
   safeLogs.forEach((l) => {
+    const bestTs = new Date(l?.date).getTime();
     logEntries(l).forEach((e) => {
       if (e.exerciseId !== exerciseId) return;
       entrySets(e).forEach((s) => {
         if (!s.done || s.warmup) return;
-        const work = loadSetWork(s, mode, bodyLoad);
+        const work = loadSetWork(s, mode, bodyLoadOf(bestTs));
         if (work > best) best = work;
       });
     });
@@ -2304,7 +2355,7 @@ function getExerciseLoadSeries(logs, exerciseId, timeBasedExercises, weekCount =
       const lastPerformed = performed[performed.length - 1] || null;
       const rirFactor = rirLoadFactor(e.rir, typicalHere);
       performed.forEach((s) => {
-        const work = loadSetWork(s, mode, bodyLoad) / best;
+        const work = loadSetWork(s, mode, bodyLoadOf(ts)) / best;
         weeks[idx] += s === lastPerformed ? work * rirFactor : work;
       });
     });
@@ -2535,9 +2586,12 @@ export function getDeloadEffect(logs, range, timeBasedExercises, nowTs = Date.no
   if (before.length < DELOAD_EFFECT_MIN_SESSIONS || after.length < DELOAD_EFFECT_MIN_SESSIONS) return null;
 
   const modeCache = {};
-  // opts.exBy nennt die Uebungen, opts.bodyWeight das Koerpergewicht - ohne
+  // opts.exBy nennt die Uebungen, opts.bodyWeights das Koerpergewicht - ohne
   // beides rechnet es wie vorher (siehe loadModeFor).
-  const bodyLoadOf = (exerciseId) => bodyLoadFor(opts?.exBy?.[exerciseId], opts);
+  // Das Koerpergewicht galt nicht immer gleich - deshalb pro Training, nicht
+  // pro Uebung (siehe bodyWeightAt).
+  const bodyLoadOf = (exerciseId, ts) => bodyLoadAt(opts?.exBy?.[exerciseId], opts, ts);
+  const usesBodyWeight = bodyWeightKnown(opts);
   const modeFor = (exerciseId) => {
     if (modeCache[exerciseId]) return modeCache[exerciseId];
     const isTime = isTimeBasedInLogs(safeLogs, exerciseId, timeBasedExercises);
@@ -2545,7 +2599,7 @@ export function getDeloadEffect(logs, range, timeBasedExercises, nowTs = Date.no
       performedWorkingSets(logSetsFor(l, exerciseId)).some((s) => toNum(s.weight) > 0)
     );
     modeCache[exerciseId] = loadModeFor(opts?.exBy?.[exerciseId], {
-      isTime, hasWeight, bodyLoad: bodyLoadOf(exerciseId),
+      isTime, hasWeight, usesBodyWeight,
       equipmentOverrides: opts?.equipmentOverrides,
     });
     return modeCache[exerciseId];
@@ -2556,12 +2610,14 @@ export function getDeloadEffect(logs, range, timeBasedExercises, nowTs = Date.no
   const perExercise = (group) => {
     const acc = {};
     group.forEach((log) => {
+      const logTs = new Date(log?.date).getTime();
       const ids = [...new Set(logEntries(log).map((e) => e.exerciseId).filter(Boolean))];
       ids.forEach((id) => {
         const sets = performedWorkingSets(logSetsFor(log, id));
         if (sets.length === 0) return;
         const perSet =
-          sets.reduce((sum, s) => sum + loadSetWork(s, modeFor(id), bodyLoadOf(id)), 0) / sets.length;
+          sets.reduce((sum, s) => sum + loadSetWork(s, modeFor(id), bodyLoadOf(id, logTs)), 0) /
+          sets.length;
         if (!(perSet > 0)) return;
         const row = acc[id] || (acc[id] = { sum: 0, n: 0 });
         row.sum += perSet;
@@ -3013,10 +3069,10 @@ function TrainingAppInner() {
   // deshalb hier oben und gespeichert: Wer ihn ausschaltet, weil er im Buero
   // trainiert, will ihn nicht beim naechsten Training wieder anhaben.
   const [soundOn, setSoundOn] = useState(true);
-  // Das eigene Koerpergewicht - freiwillig. Nur eine Zahl, keine Verlaufskurve:
-  // Sie ist eine Umrechnungseinheit fuer Koerpergewichts-Uebungen (siehe
-  // loadModeFor), kein Messwert, den die App auswerten wuerde.
-  const [bodyWeight, setBodyWeight] = useState(null);
+  // Das eigene Koerpergewicht - freiwillig, als Liste "ab wann galt was"
+  // (siehe bodyWeightEntries). Eine Umrechnungseinheit fuer
+  // Koerpergewichts-Uebungen, kein Messwert, den die App auswerten wuerde.
+  const [bodyWeights, setBodyWeights] = useState([]);
 
   // Native window.confirm()/alert() are unreliable inside a sandboxed
   // artifact preview — they can silently no-op, which made every delete
@@ -3124,7 +3180,7 @@ function TrainingAppInner() {
       setDeloadSuggestionHiddenAt(typeof dsh === "string" ? dsh : null);
       setBands(Array.isArray(bnd) ? bnd : []);
       setSoundOn(snd !== false);
-      setBodyWeight(Number.isFinite(Number(bw)) && Number(bw) > 0 ? Number(bw) : null);
+      setBodyWeights(bodyWeightEntries(bw));
       setGyms(gy);
       setActiveGymId(activeGy && gy.some((g) => g.id === activeGy) ? activeGy : gy[0]?.id || null);
       setExerciseEquipmentOverrides(eq);
@@ -3439,11 +3495,24 @@ function TrainingAppInner() {
     await saveJSON("rest-timer", value);
   };
 
-  const persistBodyWeight = async (value) => {
-    const n = toNum(value);
-    const next = n > 0 ? n : null;
-    setBodyWeight(next);
-    await saveJSON("body-weight", next);
+  const persistBodyWeights = async (next) => {
+    const sauber = bodyWeightEntries(next).map(({ id, date, kg }) => ({ id, date, kg }));
+    setBodyWeights(bodyWeightEntries(sauber));
+    await saveJSON("body-weight", sauber);
+  };
+  // Ein neuer Wert ersetzt einen zum selben Datum - sonst stapeln sich
+  // Korrekturen desselben Tages.
+  const addBodyWeight = async (kg, dateKey) => {
+    const n = toNum(kg);
+    if (!(n > 0)) return;
+    const datum = dateKey || toDateKey(new Date());
+    await persistBodyWeights([
+      ...bodyWeights.filter((e) => e.date !== datum),
+      { id: uid(), date: datum, kg: n },
+    ]);
+  };
+  const removeBodyWeight = async (id) => {
+    await persistBodyWeights(bodyWeights.filter((e) => e.id !== id));
   };
 
   const updateSoundOn = async (value) => {
@@ -3451,7 +3520,17 @@ function TrainingAppInner() {
     await saveJSON("rest-sound", !!value);
   };
 
-  const clearActiveSession = async () => {
+  // restoreOriginal nur beim VERWERFEN: Beim Beenden ist das bearbeitete
+  // Training gerade eben gespeichert worden, und das Original noch einmal
+  // dazuzulegen ergaebe es doppelt.
+  const clearActiveSession = async ({ restoreOriginal = false } = {}) => {
+    // Ein bearbeitetes Training verwerfen heisst: die Aenderungen verwerfen,
+    // nicht das Training. Das Original kommt zurueck in den Verlauf.
+    const original = restoreOriginal ? session?.resumedFromLog : null;
+    if (original?.id && !logs.some((l) => l.id === original.id)) {
+      await persistLogs([...logs, original]);
+      showToast(`Änderungen verworfen – Training vom ${fmtDate(original.date)} unverändert`);
+    }
     setSession(null);
     // Der Reiter "Training" hat ohne Sitzung nichts mehr zu zeigen - wer nach
     // dem Beenden dort stehen bliebe, sähe eine leere Seite.
@@ -3730,6 +3809,14 @@ function TrainingAppInner() {
         : new Date(Date.now() - minutes * 60000).toISOString(),
       frozenDurationMinutes: mode === "edit" ? minutes : null,
       resumedFrom: log.id,
+      // Das unveraenderte Original wandert mit in die Sitzung. Ohne das war
+      // "Verwerfen" beim Bearbeiten eines alten Trainings ein endgueltiges
+      // Loeschen: Der Eintrag wurde hier aus dem Verlauf genommen, und wer
+      // danach abbrach, hatte ihn fuer immer verloren - waehrend die
+      // Rueckfrage beruhigend "alle nicht gespeicherten Saetze" sagte.
+      // In der Sitzung gespeichert und nicht nur im Arbeitsspeicher, damit es
+      // auch einen Neustart des Handys ueberlebt.
+      resumedFromLog: log,
     };
     await persistLogs(logs.filter((l) => l.id !== log.id));
     const withIds = withEntryIds(restored);
@@ -3828,6 +3915,9 @@ function TrainingAppInner() {
   const [bandManagerOpen, setBandManagerOpen] = useState(false);
   const [bodyWeightOpen, setBodyWeightOpen] = useState(false);
   const [bodyWeightDraft, setBodyWeightDraft] = useState("");
+  const [bodyWeightDate, setBodyWeightDate] = useState("");
+  // Der Wert, der heute gilt - fuer die Anzeige im Menue.
+  const bodyWeightNow = useMemo(() => bodyWeightAt(bodyWeights, Date.now()), [bodyWeights]);
   const [bandDraft, setBandDraft] = useState({ name: "", kg: "" });
   const [renamingBandId, setRenamingBandId] = useState(null);
   const [gymDraftName, setGymDraftName] = useState("");
@@ -6503,8 +6593,13 @@ function TrainingAppInner() {
                     : session.startedAt
                     ? Math.max(1, Math.round((Date.now() - new Date(session.startedAt).getTime()) / 60000))
                     : null;
+                // Die Felder, die nur zur laufenden Sitzung gehoeren, gehen
+                // nicht mit in den Verlauf - resumedFromLog waere sonst ein
+                // komplettes Training im Training.
+                const { resumedFromLog: _original, resumedFrom: _von,
+                        frozenDurationMinutes: _eingefroren, ...sessionData } = session;
                 const cleaned = {
-                  ...session,
+                  ...sessionData,
                   // Sets now start pre-filled from the plan's targets, so an
                   // exercise the user never actually touched would otherwise
                   // still have "sets" and slip into the saved log. Only keep
@@ -6679,7 +6774,14 @@ function TrainingAppInner() {
                 }
                 await clearActiveSession();
               }}
-              onDiscard={() => askConfirm("Aktives Training wirklich verwerfen? Alle nicht gespeicherten Sätze gehen verloren.", clearActiveSession)}
+              onDiscard={() =>
+                askConfirm(
+                  session?.resumedFromLog
+                    ? `Änderungen verwerfen? Das Training vom ${fmtDate(session.resumedFromLog.date)} bleibt so, wie es war.`
+                    : "Aktives Training wirklich verwerfen? Alle nicht gespeicherten Sätze gehen verloren.",
+                  () => clearActiveSession({ restoreOriginal: true })
+                )
+              }
               restEndsAt={restEndsAt}
               onSetRestEndsAt={updateRestEndsAt}
               soundOn={soundOn}
@@ -6697,7 +6799,8 @@ function TrainingAppInner() {
         ) : tab === "dashboard" ? (
           <DashboardView
             exerciseEquipmentOverrides={exerciseEquipmentOverrides}
-            bodyWeight={bodyWeight}
+            bodyWeights={bodyWeights}
+            bodyWeightNow={bodyWeightNow}
             plans={allPlans}
             logs={logs}
             exBy={allExBy}
@@ -6713,9 +6816,9 @@ function TrainingAppInner() {
             onToggleTheme={toggleTheme}
             onManageGyms={() => setGymManagerOpen(true)}
             onManageBands={() => setBandManagerOpen(true)}
-            bodyWeight={bodyWeight}
             onEditBodyWeight={() => {
-              setBodyWeightDraft(bodyWeight > 0 ? fmtDecimal(bodyWeight) : "");
+              setBodyWeightDraft("");
+              setBodyWeightDate(toDateKey(new Date()));
               setBodyWeightOpen(true);
             }}
             onManageBreathing={() => { setBreathingEditing(null); setBreathingManagerOpen(true); }}
@@ -6893,7 +6996,7 @@ function TrainingAppInner() {
           null
         ) : (
           <ProgressView
-            bodyWeight={bodyWeight}
+            bodyWeights={bodyWeights}
             focusLogId={historyFocusLogId}
             onFocusHandled={() => setHistoryFocusLogId(null)}
             onResumeLog={resumeLog}
@@ -7193,35 +7296,79 @@ function TrainingAppInner() {
             Freiwillig. Die Zahl wird nirgends ausgewertet und nirgends
             beurteilt – sie ist nur eine Umrechnungsgröße.
           </p>
-          <label className="field-label" style={{ marginTop: 10 }}>Gewicht in kg</label>
-          <input
-            type="text"
-            inputMode="decimal"
-            placeholder="z. B. 78,5"
-            value={bodyWeightDraft}
-            onChange={(e) => setBodyWeightDraft(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter") {
-                persistBodyWeight(bodyWeightDraft);
-                setBodyWeightOpen(false);
-              }
-            }}
-          />
+          <p className="deload-basis">
+            Trag den Wert neu ein, wenn er sich geändert hat – jede Woche
+            rechnet dann mit dem Gewicht, das damals galt. Ohne das würde eine
+            Zunahme von 5 kg deine ganze Klimmzug-Historie rückwirkend
+            umschreiben.
+          </p>
+
+          <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
+            <div style={{ flex: 1 }}>
+              <label className="field-label">Gewicht in kg</label>
+              <input
+                type="text"
+                inputMode="decimal"
+                placeholder="z. B. 78,5"
+                value={bodyWeightDraft}
+                onChange={(e) => setBodyWeightDraft(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") {
+                    addBodyWeight(bodyWeightDraft, bodyWeightDate);
+                    setBodyWeightDraft("");
+                  }
+                }}
+              />
+            </div>
+            <div style={{ flex: 1 }}>
+              <label className="field-label">gültig ab</label>
+              <input
+                type="date"
+                value={bodyWeightDate}
+                onChange={(e) => setBodyWeightDate(e.target.value)}
+              />
+            </div>
+          </div>
           <button
             className="btn btn-primary btn-block btn-sm"
             style={{ marginTop: 10 }}
-            onClick={() => { persistBodyWeight(bodyWeightDraft); setBodyWeightOpen(false); }}
+            disabled={!(toNum(bodyWeightDraft) > 0)}
+            onClick={() => {
+              addBodyWeight(bodyWeightDraft, bodyWeightDate);
+              setBodyWeightDraft("");
+            }}
           >
-            <Check size={14} /> Speichern
+            <Plus size={14} /> Eintragen
           </button>
-          {bodyWeight > 0 && (
-            <button
-              className="btn btn-ghost btn-block btn-sm"
-              style={{ marginTop: 8 }}
-              onClick={() => { persistBodyWeight(null); setBodyWeightOpen(false); }}
-            >
-              Angabe entfernen
-            </button>
+
+          {bodyWeights.length > 0 && (
+            <div style={{ marginTop: 16 }}>
+              <label className="field-label">Eingetragen</label>
+              {/* Neueste zuerst - das ist der Wert, der gerade gilt. */}
+              <div className="modal-list">
+                {[...bodyWeights].reverse().map((e) => (
+                  <div className="modal-option" key={e.id}>
+                    <span style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                      {fmtDecimal(e.kg)} kg
+                      <span className="tag">
+                        {e.date ? `ab ${fmtDate(e.date)}` : "von Anfang an"}
+                      </span>
+                    </span>
+                    <button
+                      className="btn-icon"
+                      onClick={() => removeBodyWeight(e.id)}
+                      title="Diesen Wert entfernen"
+                    >
+                      <Trash2 size={15} />
+                    </button>
+                  </div>
+                ))}
+              </div>
+              <p className="deload-basis">
+                Für Trainings vor der ältesten Angabe rechnet die App mit
+                dieser ältesten – näher dran als mit gar keiner.
+              </p>
+            </div>
           )}
         </Modal>
       )}
@@ -7822,7 +7969,8 @@ function DashboardView({
   exerciseEquipmentOverrides,
   timeBasedExercises,
   gymIndependentExercises,
-  bodyWeight = null,
+  bodyWeights = [],
+  bodyWeightNow = 0,
   deloadWeeks = [],
   deloadStatusInfo = null,
   theme,
@@ -7866,10 +8014,10 @@ function DashboardView({
     () => getMuscleLoadSeries(
       logs, exBy, exerciseSubgroupOverrides, timeBasedExercises,
       muscleSeriesWeekCount(loadHistoryWeeks), Date.now(),
-      { equipmentOverrides: exerciseEquipmentOverrides, bodyWeight }
+      { equipmentOverrides: exerciseEquipmentOverrides, bodyWeights }
     ),
     [logs, exBy, exerciseSubgroupOverrides, timeBasedExercises, loadHistoryWeeks,
-     exerciseEquipmentOverrides, bodyWeight]
+     exerciseEquipmentOverrides, bodyWeights]
   );
 
   // Entlastungswochen zählen in den Warnungen als Lücke, nicht als Tief -
@@ -8042,9 +8190,9 @@ function DashboardView({
               onClick={() => { setSettingsOpen(false); onEditBodyWeight(); }}
             >
               <User size={14} /> Körpergewicht
-              {bodyWeight > 0 && (
+              {bodyWeightNow > 0 && (
                 <span style={{ marginLeft: "auto", color: "var(--text-dim)" }}>
-                  {fmtDecimal(bodyWeight)} kg
+                  {fmtDecimal(bodyWeightNow)} kg
                 </span>
               )}
             </button>
@@ -15724,7 +15872,7 @@ function ProgressView({
   onSetExerciseEquipment,
   timeBasedExercises,
   gymIndependentExercises,
-  bodyWeight = null,
+  bodyWeights = [],
   onUpdateExerciseNote,
   onRenameExercise,
   onToggleTimeBased,
@@ -15799,9 +15947,9 @@ function ProgressView({
   const stats = useMemo(() => getBest1RMOverall(logs, exBy, timeBasedExercises), [logs, exBy, timeBasedExercises]);
   const feelingPerformance = useMemo(
     () => getFeelingPerformance(logs, timeBasedExercises, deloadWeeks, {
-      exBy, equipmentOverrides: exerciseEquipmentOverrides, bodyWeight,
+      exBy, equipmentOverrides: exerciseEquipmentOverrides, bodyWeights,
     }),
-    [logs, timeBasedExercises, deloadWeeks, exBy, exerciseEquipmentOverrides, bodyWeight]
+    [logs, timeBasedExercises, deloadWeeks, exBy, exerciseEquipmentOverrides, bodyWeights]
   );
   const calibration = useMemo(() => getCalibration(logs), [logs]);
   // Rekorde der letzten 7 Tage statt eines Lebenszeit-Zaehlers. Gezaehlt wird
@@ -15820,9 +15968,9 @@ function ProgressView({
   );
   const deloadEffects = useMemo(
     () => getDeloadEffects(logs, deloadWeeks, timeBasedExercises, Date.now(), {
-      exBy, equipmentOverrides: exerciseEquipmentOverrides, bodyWeight,
+      exBy, equipmentOverrides: exerciseEquipmentOverrides, bodyWeights,
     }),
-    [logs, deloadWeeks, timeBasedExercises, exBy, exerciseEquipmentOverrides, bodyWeight]
+    [logs, deloadWeeks, timeBasedExercises, exBy, exerciseEquipmentOverrides, bodyWeights]
   );
   const deloadGuessOf = (start) =>
     deloadRanges(deloadWeeks).find((r) => r.start === start)?.guess || null;
@@ -15917,10 +16065,10 @@ function ProgressView({
     () => getMuscleLoadSeries(
       logs, exBy, exerciseSubgroupOverrides, timeBasedExercises,
       muscleSeriesWeekCount(loadHistoryWeeks), Date.now(),
-      { equipmentOverrides: exerciseEquipmentOverrides, bodyWeight }
+      { equipmentOverrides: exerciseEquipmentOverrides, bodyWeights }
     ),
     [logs, exBy, exerciseSubgroupOverrides, timeBasedExercises, loadHistoryWeeks,
-     exerciseEquipmentOverrides, bodyWeight]
+     exerciseEquipmentOverrides, bodyWeights]
   );
   // Entlastungswochen als Lücke behandeln - aber nur in den Warnzeichen,
   // nicht in den frei gewählten Zeitraum-Vergleichen (siehe muscleLoadChange).
@@ -16015,10 +16163,10 @@ function ProgressView({
         ? getExerciseLoadSeries(logs, selected, timeBasedExercises, 12, Date.now(), {
             exercise: exBy[selected],
             equipmentOverrides: exerciseEquipmentOverrides,
-            bodyWeight,
+            bodyWeights,
           })
         : [],
-    [selected, logs, timeBasedExercises, exBy, exerciseEquipmentOverrides, bodyWeight]
+    [selected, logs, timeBasedExercises, exBy, exerciseEquipmentOverrides, bodyWeights]
   );
   const selectedExerciseHistoryWeeks = useMemo(() => {
     if (!selected) return 0;

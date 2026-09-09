@@ -661,6 +661,33 @@ export function withSecondaryOverride(exercise, secondaryOverrides) {
   return { ...exercise, secondary: secondaryOverrides[exercise.id] };
 }
 
+// Gleiches Muster wie withSecondaryOverride, nur fuer die Untergruppe
+// innerhalb einer Nebenmuskelgruppe (z.B. "bei Nebenmuskel Arme: Trizeps").
+// exercise.secondarySubgroups hat die Form { [groupId]: [subgroupId, ...] }
+// und wird, anders als exercise.secondary, nie mit erfundenen Werten
+// vorbelegt - ohne ausdrueckliche Wahl bleibt eine Nebenmuskelgruppe ohne
+// Untergruppe (siehe getExerciseSecondarySubgroups).
+export function withSecondarySubgroupOverride(exercise, secondarySubgroupOverrides) {
+  if (
+    !secondarySubgroupOverrides ||
+    !Object.prototype.hasOwnProperty.call(secondarySubgroupOverrides, exercise?.id)
+  ) {
+    return exercise;
+  }
+  return { ...exercise, secondarySubgroups: secondarySubgroupOverrides[exercise.id] };
+}
+
+// Untergruppe(n) einer bestimmten Nebenmuskelgruppe dieser Uebung. Anders als
+// bei getExerciseSubgroups (Hauptgruppe) gibt es hier keinen Fallback: Welche
+// Untergruppe einer Nebenmuskelgruppe mitarbeitet, weiss die App nur, wenn es
+// beim Anlegen oder Bearbeiten der Uebung ausdruecklich gewaehlt wurde - eine
+// erfundene Antwort waere schlechter als keine (siehe getMuscleLoadSeries).
+export function getExerciseSecondarySubgroups(exercise, groupId) {
+  const raw = exercise?.secondarySubgroups?.[groupId];
+  if (!raw) return [];
+  return Array.isArray(raw) ? raw.filter(Boolean) : [raw];
+}
+
 // Alle Gruppen einer Uebung mit ihrem Anteil: die Hauptgruppe voll, jede
 // Nebengruppe halb. Eine Gruppe kommt nie doppelt vor.
 export function exerciseGroupShares(exercise) {
@@ -1739,7 +1766,7 @@ const STAT_EXPLANATIONS = {
       "Zeigt, wie viele Arbeitssätze jede Muskelgruppe in den letzten 7 Tagen abbekommen hat - und ob das mehr oder weniger ist als sonst.",
       "Eine Übung zählt nicht nur auf eine Gruppe: Bankdrücken trainiert die Brust, aber Schultern und Trizeps arbeiten deutlich mit. Deshalb zählt jeder Satz voll auf die Hauptgruppe und mit einem halben Satz auf jede beteiligte Nebengruppe. Bankdrücken heißt also 1 Satz Brust, ein halber Satz Schultern, ein halber Satz Arme - daher auch die krummen Zahlen wie 12,5.",
       "Der halbe Satz ist eine grobe, in der Trainingsplanung übliche Verrechnung, keine Messung. Wie stark ein Muskel wirklich mitarbeitet, hängt von Ausführung, Griffweite und Körperbau ab - das weiß die App nicht. Sie stellt damit die Größenordnung richtig, nicht mehr.",
-      "Die Untergruppen darunter bekommen nur die Hauptgruppe ab. Welcher Teil der Schulter beim Bankdrücken mitarbeitet, kann diese Zuordnung nicht beantworten, und eine erfundene Antwort wäre schlechter als keine.",
+      "Die Untergruppen darunter bekommen nur die Hauptgruppe ab. Welcher Teil der Schulter beim Bankdrücken mitarbeitet, kann diese Zuordnung nicht beantworten, und eine erfundene Antwort wäre schlechter als keine. Ausnahme: Hast du bei einer Übung selbst eine Untergruppe für eine Nebenmuskelgruppe gewählt (im Übungs-Detail unter \"Nebenmuskelgruppen\"), zählt genau diese Wahl mit - weil sie dann von dir stammt, nicht erraten ist.",
       "Gezählt wird nur, was du auch abgehakt hast. Ein vorbelegter, aber nie ausgeführter Satz zählt nicht mit, sonst würde die Statistik Trainings behaupten, die nie stattgefunden haben. Aufwärmsätze zählen ebenfalls nicht.",
       "Dropsätze zählen hier bewusst nicht als eigener Satz: Die Zahl bildet Trainingsreize mit Erholung dazwischen ab, und zwischen einem Satz und seinen Drops gibt es keine Erholung. In der Belastungs-Karte darunter zählen sie dagegen voll mit - die Arbeit wurde ja geleistet.",
       "Die Prozentzahl vergleicht die aktuelle Woche gegen den Durchschnitt der Wochen davor - wie viele, bestimmst du mit den Feldern oben. Die Linie daneben zeigt genau diesen Zeitraum.",
@@ -2061,6 +2088,22 @@ export function getMuscleLoadSeries(
       exerciseGroupShares(ex).forEach(([gruppe, anteil]) => {
         if (!groupWeeks[gruppe]) groupWeeks[gruppe] = emptyWeeks();
         groupWeeks[gruppe][idx] += score * anteil;
+        // Nebenmuskel-Untergruppe: nur, wenn beim Anlegen oder Bearbeiten der
+        // Übung ausdrücklich eine gewählt wurde (siehe
+        // getExerciseSecondarySubgroups). Ohne Wahl bleibt die Nebengruppe
+        // wie bisher ohne Untergruppen-Zuordnung - kein "Sonstige"-Fallback,
+        // sonst würde jede bestehende Nebenmuskel-Zuweisung nachträglich in
+        // die Statistik einer Untergruppe rutschen, die niemand gewählt hat.
+        if (gruppe !== ex.group) {
+          const secSubs = getExerciseSecondarySubgroups(ex, gruppe);
+          if (secSubs.length > 0) {
+            if (!subWeeks[gruppe]) subWeeks[gruppe] = {};
+            secSubs.forEach((key) => {
+              if (!subWeeks[gruppe][key]) subWeeks[gruppe][key] = emptyWeeks();
+              subWeeks[gruppe][key][idx] += score * anteil;
+            });
+          }
+        }
       });
       // Die Gesamtbelastung (für die Frühwarnung) zählt jede Arbeit GENAU
       // EINMAL - über die Hauptgruppen. Mit den Nebengruppen aufsummiert
@@ -2131,11 +2174,22 @@ function getWeeklySetSeries(logs, exBy, subgroupOverrides, weekCount = 21, nowTs
       exerciseGroupShares(ex).forEach(([gruppe, anteil]) => {
         if (!groupWeeks[gruppe]) groupWeeks[gruppe] = emptyWeeks();
         groupWeeks[gruppe][idx] += done * anteil;
+        // Nebenmuskel-Untergruppe: wie in getMuscleLoadSeries nur, wenn
+        // ausdrücklich gewählt - sonst kein Fallback auf "Sonstige".
+        if (gruppe !== ex.group) {
+          const secSubs = getExerciseSecondarySubgroups(ex, gruppe);
+          if (secSubs.length > 0) {
+            if (!subWeeks[gruppe]) subWeeks[gruppe] = {};
+            secSubs.forEach((key) => {
+              if (!subWeeks[gruppe][key]) subWeeks[gruppe][key] = emptyWeeks();
+              subWeeks[gruppe][key][idx] += done * anteil;
+            });
+          }
+        }
       });
-      // Untergruppen bekommen nur die Hauptgruppe ab: Welcher Teil der
-      // Schulter beim Bankdruecken mitarbeitet, ist eine Frage, die diese
-      // Zuordnung nicht beantworten kann - und eine erfundene Antwort waere
-      // schlechter als keine.
+      // Untergruppen der Hauptgruppe bekommen die volle Zahl ab, ohne
+      // Wahl faellt die Arbeit unter "Sonstige" (siehe getMuscleLoadSeries
+      // fuer die gleiche Regel und die Begruendung).
       const subs = getExerciseSubgroups(ex, subgroupOverrides);
       if (!subWeeks[ex.group]) subWeeks[ex.group] = {};
       (subs.length > 0 ? subs : ["sonstige"]).forEach((key) => {
@@ -2950,6 +3004,7 @@ const BACKUP_KEYS = [
   "exercise-subgroup-overrides",
   "exercise-equipment-overrides",
   "exercise-secondary-overrides",
+  "exercise-secondary-subgroup-overrides",
   "training-programs",
   "active-program-id",
   "calendar-entries",
@@ -3234,6 +3289,12 @@ function TrainingAppInner() {
   // - sonst kaeme bei der naechsten Anzeige wieder die urspruengliche Liste
   // zum Vorschein, obwohl sie bewusst entfernt wurde.
   const [exerciseSecondaryOverrides, setExerciseSecondaryOverrides] = useState({});
+  // Untergruppe je Nebenmuskelgruppe, z.B. bei "Nebenmuskel Arme": Trizeps.
+  // Form: { [exerciseId]: { [groupId]: [subgroupId, ...] } }. Anders als bei
+  // exerciseSubgroupOverrides (Hauptgruppe) gibt es hier keinen erratenen
+  // Ausgangswert - eine Nebenmuskelgruppe hat erst dann eine Untergruppe,
+  // wenn sie ausdrücklich gewählt wurde (siehe getExerciseSecondarySubgroups).
+  const [exerciseSecondarySubgroupOverrides, setExerciseSecondarySubgroupOverrides] = useState({});
   const [timeBasedExercises, setTimeBasedExercises] = useState({});
   const [gymIndependentExercises, setGymIndependentExercises] = useState({});
   const [breathingExercises, setBreathingExercises] = useState([]);
@@ -3296,7 +3357,7 @@ function TrainingAppInner() {
 
   useEffect(() => {
     (async () => {
-      const [p, l, c, f, en, no, tb, gi, active, prog, activeProg, sg, ce, cc, eq, th, gy, activeGy, restEnd, brEx, brLogs, dw, di, dsh, bnd, snd, bw, sec] = await Promise.all([
+      const [p, l, c, f, en, no, tb, gi, active, prog, activeProg, sg, ce, cc, eq, th, gy, activeGy, restEnd, brEx, brLogs, dw, di, dsh, bnd, snd, bw, sec, secSub] = await Promise.all([
         loadJSON("training-plans", []),
         loadJSON("workout-logs", []),
         loadJSON("custom-exercises", []),
@@ -3325,6 +3386,7 @@ function TrainingAppInner() {
         loadJSON("rest-sound", true),
         loadJSON("body-weight", null),
         loadJSON("exercise-secondary-overrides", {}),
+        loadJSON("exercise-secondary-subgroup-overrides", {}),
       ]);
       // Migration: users who already had folders before "programs" existed
       // get one default program that all their existing folders are
@@ -3352,6 +3414,7 @@ function TrainingAppInner() {
       setExerciseNameOverrides(no);
       setExerciseSubgroupOverrides(sg);
       setExerciseSecondaryOverrides(sec && typeof sec === "object" ? sec : {});
+      setExerciseSecondarySubgroupOverrides(secSub && typeof secSub === "object" ? secSub : {});
       setTimeBasedExercises(tb);
       setGymIndependentExercises(gi);
       setBreathingExercises(Array.isArray(brEx) ? brEx : []);
@@ -3559,6 +3622,10 @@ function TrainingAppInner() {
     setExerciseSecondaryOverrides(next);
     await saveJSON("exercise-secondary-overrides", next);
   };
+  const persistExerciseSecondarySubgroupOverrides = async (next) => {
+    setExerciseSecondarySubgroupOverrides(next);
+    await saveJSON("exercise-secondary-subgroup-overrides", next);
+  };
   const persistTimeBasedExercises = async (next) => {
     setTimeBasedExercises(next);
     await saveJSON("exercise-time-based", next);
@@ -3751,6 +3818,7 @@ function TrainingAppInner() {
     let ex = e;
     if (exerciseNameOverrides[e.id]) ex = { ...ex, name: exerciseNameOverrides[e.id] };
     ex = withSecondaryOverride(ex, exerciseSecondaryOverrides);
+    ex = withSecondarySubgroupOverride(ex, exerciseSecondarySubgroupOverrides);
     return ex;
   });
   const allExBy = Object.fromEntries(allExercises.map((e) => [e.id, e]));
@@ -3806,6 +3874,27 @@ function TrainingAppInner() {
       ? current.filter((g) => g !== groupId)
       : [...current, groupId];
     await persistExerciseSecondaryOverrides({ ...exerciseSecondaryOverrides, [exerciseId]: updated });
+  };
+  // Untergruppe innerhalb einer Nebenmuskelgruppe umschalten (dazu oder weg),
+  // subgroupId === null entfernt jede Wahl fuer diese Nebenmuskelgruppe.
+  // Welche Nebenmuskelgruppen es ueberhaupt gibt, entscheidet weiterhin
+  // handleSetExerciseSecondary - hier wird nur die Untergruppe darunter
+  // verwaltet.
+  const handleSetExerciseSecondarySubgroup = async (exerciseId, groupId, subgroupId) => {
+    const currentAll = allExBy[exerciseId]?.secondarySubgroups || {};
+    const currentForGroup = currentAll[groupId] || [];
+    const updatedForGroup = !subgroupId
+      ? []
+      : currentForGroup.includes(subgroupId)
+      ? currentForGroup.filter((id) => id !== subgroupId)
+      : [...currentForGroup, subgroupId];
+    const nextForExercise = { ...currentAll };
+    if (updatedForGroup.length === 0) delete nextForExercise[groupId];
+    else nextForExercise[groupId] = updatedForGroup;
+    await persistExerciseSecondarySubgroupOverrides({
+      ...exerciseSecondarySubgroupOverrides,
+      [exerciseId]: nextForExercise,
+    });
   };
   const handleToggleTimeBased = async (exerciseId, enabled) => {
     await persistTimeBasedExercises({ ...timeBasedExercises, [exerciseId]: enabled });
@@ -6836,6 +6925,7 @@ function TrainingAppInner() {
               exerciseEquipmentOverrides={exerciseEquipmentOverrides}
               onSetExerciseEquipment={handleSetExerciseEquipment}
               onSetExerciseSecondary={handleSetExerciseSecondary}
+              onSetExerciseSecondarySubgroup={handleSetExerciseSecondarySubgroup}
               timeBasedExercises={timeBasedExercises}
               gymIndependentExercises={gymIndependentExercises}
               onUpdateExerciseNote={handleUpdateExerciseNote}
@@ -7133,6 +7223,7 @@ function TrainingAppInner() {
             exerciseEquipmentOverrides={exerciseEquipmentOverrides}
             onSetExerciseEquipment={handleSetExerciseEquipment}
             onSetExerciseSecondary={handleSetExerciseSecondary}
+            onSetExerciseSecondarySubgroup={handleSetExerciseSecondarySubgroup}
             onAddCustom={handleAddCustomExercise}
             onDeleteCustom={async (id) => {
               await persistCustomExercises(customExercises.filter((e) => e.id !== id));
@@ -7162,6 +7253,7 @@ function TrainingAppInner() {
               exerciseEquipmentOverrides={exerciseEquipmentOverrides}
               onSetExerciseEquipment={handleSetExerciseEquipment}
               onSetExerciseSecondary={handleSetExerciseSecondary}
+              onSetExerciseSecondarySubgroup={handleSetExerciseSecondarySubgroup}
               onAddCustom={handleAddCustomExercise}
               timeBasedExercises={timeBasedExercises}
               gymIndependentExercises={gymIndependentExercises}
@@ -7278,6 +7370,7 @@ function TrainingAppInner() {
             exerciseEquipmentOverrides={exerciseEquipmentOverrides}
             onSetExerciseEquipment={handleSetExerciseEquipment}
             onSetExerciseSecondary={handleSetExerciseSecondary}
+            onSetExerciseSecondarySubgroup={handleSetExerciseSecondarySubgroup}
             timeBasedExercises={timeBasedExercises}
             gymIndependentExercises={gymIndependentExercises}
             onUpdateExerciseNote={handleUpdateExerciseNote}
@@ -10017,6 +10110,9 @@ function NewExerciseForm({ exercises, onAddCustom, onSetExerciseSubgroups, onDon
   // konnte eine eigene Übung nie welche haben: exerciseGroupShares liest
   // exercise.secondary, das beim Anlegen schlicht nie gesetzt wurde.
   const [newSecondary, setNewSecondary] = useState([]);
+  // Untergruppe je Nebenmuskelgruppe, z.B. bei "Nebenmuskel Arme": Trizeps.
+  // Form wie exercise.secondarySubgroups: { [groupId]: [subgroupId, ...] }.
+  const [newSecondarySubgroups, setNewSecondarySubgroups] = useState({});
   const [newEquipment, setNewEquipment] = useState("Körpergewicht");
   const [newDescription, setNewDescription] = useState("");
   const [newVideo, setNewVideo] = useState("");
@@ -10055,6 +10151,7 @@ function NewExerciseForm({ exercises, onAddCustom, onSetExerciseSubgroups, onDon
       // Direkt am Objekt gesetzt, nicht über die Override-Tabelle: Die
       // Übung ist brandneu, es gibt noch nichts, das überschrieben würde.
       secondary: newSecondary,
+      secondarySubgroups: newSecondarySubgroups,
       custom: true,
       meta: {
         equipment: newEquipment,
@@ -10101,6 +10198,7 @@ function NewExerciseForm({ exercises, onAddCustom, onSetExerciseSubgroups, onDon
                 // die, muss man die Auswahl neu treffen. Sonst könnte die
                 // alte Hauptgruppe als eigene Nebengruppe stehen bleiben.
                 setNewSecondary([]);
+                setNewSecondarySubgroups({});
               }}
             >
               {g.label}
@@ -10113,7 +10211,10 @@ function NewExerciseForm({ exercises, onAddCustom, onSetExerciseSubgroups, onDon
         <div className="chip-row" style={{ marginTop: 6 }}>
           <span
             className={`chip chip-sm ${newSecondary.length === 0 ? "active" : ""}`}
-            onClick={() => setNewSecondary([])}
+            onClick={() => {
+              setNewSecondary([]);
+              setNewSecondarySubgroups({});
+            }}
           >
             Keine
           </span>
@@ -10131,6 +10232,43 @@ function NewExerciseForm({ exercises, onAddCustom, onSetExerciseSubgroups, onDon
             </span>
           ))}
         </div>
+        {/* Untergruppe je aktiver Nebenmuskelgruppe - nur dort anbieten, wo
+            es ueberhaupt Untergruppen gibt (siehe SUBGROUPS). */}
+        {newSecondary
+          .filter((g) => (SUBGROUPS[g] || []).length > 0)
+          .map((g) => {
+            const groupLabel = MUSCLE_GROUPS.find((m) => m.id === g)?.label || g;
+            const current = newSecondarySubgroups[g] || [];
+            return (
+              <div key={g} style={{ marginTop: 6 }}>
+                <label className="field-label" style={{ fontSize: 11.5 }}>
+                  Untergruppe bei {groupLabel} (optional)
+                </label>
+                <div className="chip-row" style={{ marginTop: 4 }}>
+                  {SUBGROUPS[g].map((sg) => (
+                    <span
+                      key={sg.id}
+                      className={`chip chip-sm ${current.includes(sg.id) ? "active" : ""}`}
+                      onClick={() =>
+                        setNewSecondarySubgroups((prev) => {
+                          const prevForGroup = prev[g] || [];
+                          const updated = prevForGroup.includes(sg.id)
+                            ? prevForGroup.filter((id) => id !== sg.id)
+                            : [...prevForGroup, sg.id];
+                          const next = { ...prev };
+                          if (updated.length === 0) delete next[g];
+                          else next[g] = updated;
+                          return next;
+                        })
+                      }
+                    >
+                      {sg.label}
+                    </span>
+                  ))}
+                </div>
+              </div>
+            );
+          })}
       </div>
       {(SUBGROUPS[newGroup] || []).length > 0 && (
         <div style={{ marginTop: 10 }}>
@@ -10215,6 +10353,7 @@ function ExercisesView({
   exerciseEquipmentOverrides,
   onSetExerciseEquipment,
   onSetExerciseSecondary,
+  onSetExerciseSecondarySubgroup,
   onAddCustom,
   onDeleteCustom,
   onUpdateExerciseNote,
@@ -10427,6 +10566,7 @@ function ExercisesView({
           exerciseEquipmentOverrides={exerciseEquipmentOverrides}
           onSetExerciseEquipment={onSetExerciseEquipment}
           onSetExerciseSecondary={onSetExerciseSecondary}
+          onSetExerciseSecondarySubgroup={onSetExerciseSecondarySubgroup}
           timeBasedExercises={timeBasedExercises}
           gymIndependentExercises={gymIndependentExercises}
           onUpdateExerciseNote={onUpdateExerciseNote}
@@ -10455,6 +10595,7 @@ function ExerciseDetailSheet({
   exerciseEquipmentOverrides,
   onSetExerciseEquipment,
   onSetExerciseSecondary,
+  onSetExerciseSecondarySubgroup,
   timeBasedExercises,
   gymIndependentExercises,
   onUpdateExerciseNote,
@@ -10619,16 +10760,22 @@ function ExerciseDetailSheet({
                     ändern. Jetzt oeffnet jede Nebenmuskel-Marke denselben
                     Auswahl-Dialog wie das Gerät daneben. */}
                 {currentSecondary.length > 0 ? (
-                  currentSecondary.map((g) => (
-                    <span
-                      className="tag tag-secondary tag-clickable"
-                      key={g}
-                      onClick={() => setEditingSecondary(true)}
-                      title="Nebenmuskelgruppe – zählt mit einem halben Satz. Antippen: ändern."
-                    >
-                      {MUSCLE_GROUPS.find((m) => m.id === g)?.label || g}
-                    </span>
-                  ))
+                  currentSecondary.map((g) => {
+                    const groupLabel = MUSCLE_GROUPS.find((m) => m.id === g)?.label || g;
+                    const secSubLabels = getExerciseSecondarySubgroups(exercise, g)
+                      .map((id) => (SUBGROUPS[g] || []).find((s) => s.id === id)?.label)
+                      .filter(Boolean);
+                    return (
+                      <span
+                        className="tag tag-secondary tag-clickable"
+                        key={g}
+                        onClick={() => setEditingSecondary(true)}
+                        title="Nebenmuskelgruppe – zählt mit einem halben Satz. Antippen: ändern."
+                      >
+                        {secSubLabels.length > 0 ? `${groupLabel} (${secSubLabels.join(", ")})` : groupLabel}
+                      </span>
+                    );
+                  })
                 ) : (
                   <span
                     className="tag tag-secondary tag-clickable"
@@ -10955,22 +11102,44 @@ function ExerciseDetailSheet({
         <Modal title="Nebenmuskelgruppen wählen" onClose={() => setEditingSecondary(false)}>
           <p style={{ fontSize: 12.5, color: "var(--text-dim)", margin: "0 0 10px" }}>
             Mehrere möglich – jede zählt mit einem halben Satz in „Sätze pro
-            Muskelgruppe“ und „Belastung pro Muskelgruppe“.
+            Muskelgruppe“ und „Belastung pro Muskelgruppe“. Bei aktiven
+            Gruppen mit Untergruppen kannst du zusätzlich eine davon wählen,
+            damit genau diese in der Statistik mitzählt.
           </p>
           <div className="modal-list">
             {/* Bleibt offen, waehrend man waehlt - mehrere nacheinander
                 antippen ist der ganze Zweck, wie bei den Untergruppen. */}
             {availableSecondary.map((g) => {
               const on = currentSecondary.includes(g.id);
+              const secSubDefs = SUBGROUPS[g.id] || [];
+              const currentSecSubs = getExerciseSecondarySubgroups(exercise, g.id);
               return (
-                <button
-                  key={g.id}
-                  className={`modal-option ${on ? "active" : ""}`}
-                  onClick={() => onSetExerciseSecondary(exercise.id, g.id)}
-                >
-                  {g.label}
-                  {on && <Check size={15} />}
-                </button>
+                <div key={g.id}>
+                  <button
+                    className={`modal-option ${on ? "active" : ""}`}
+                    onClick={() => onSetExerciseSecondary(exercise.id, g.id)}
+                  >
+                    {g.label}
+                    {on && <Check size={15} />}
+                  </button>
+                  {/* Untergruppe nur anzeigen, wenn diese Nebenmuskelgruppe
+                      aktiv ist und ueberhaupt Untergruppen hat. Ohne Wahl
+                      hier bleibt die Nebengruppe wie bisher ohne Untergruppen-
+                      Zuordnung - siehe getExerciseSecondarySubgroups. */}
+                  {on && secSubDefs.length > 0 && (
+                    <div className="chip-row" style={{ margin: "4px 0 8px 6px" }}>
+                      {secSubDefs.map((sg) => (
+                        <span
+                          key={sg.id}
+                          className={`chip chip-sm ${currentSecSubs.includes(sg.id) ? "active" : ""}`}
+                          onClick={() => onSetExerciseSecondarySubgroup(exercise.id, g.id, sg.id)}
+                        >
+                          {sg.label}
+                        </span>
+                      ))}
+                    </div>
+                  )}
+                </div>
               );
             })}
           </div>
@@ -11014,6 +11183,7 @@ function PlanBuilder({
   exerciseEquipmentOverrides,
   onSetExerciseEquipment,
   onSetExerciseSecondary,
+  onSetExerciseSecondarySubgroup,
   onAddCustom,
   timeBasedExercises,
   gymIndependentExercises,
@@ -12083,6 +12253,7 @@ function PlanBuilder({
           exerciseEquipmentOverrides={exerciseEquipmentOverrides}
           onSetExerciseEquipment={onSetExerciseEquipment}
           onSetExerciseSecondary={onSetExerciseSecondary}
+          onSetExerciseSecondarySubgroup={onSetExerciseSecondarySubgroup}
           timeBasedExercises={timeBasedExercises}
           gymIndependentExercises={gymIndependentExercises}
           onUpdateExerciseNote={onUpdateExerciseNote}
@@ -12728,6 +12899,7 @@ function LogView({
   exerciseEquipmentOverrides,
   onSetExerciseEquipment,
   onSetExerciseSecondary,
+  onSetExerciseSecondarySubgroup,
   timeBasedExercises,
   gymIndependentExercises,
   onUpdateExerciseNote,
@@ -14702,6 +14874,7 @@ function LogView({
           exerciseEquipmentOverrides={exerciseEquipmentOverrides}
           onSetExerciseEquipment={onSetExerciseEquipment}
           onSetExerciseSecondary={onSetExerciseSecondary}
+          onSetExerciseSecondarySubgroup={onSetExerciseSecondarySubgroup}
           timeBasedExercises={timeBasedExercises}
           gymIndependentExercises={gymIndependentExercises}
           onUpdateExerciseNote={onUpdateExerciseNote}
@@ -16296,6 +16469,7 @@ function ProgressView({
   exerciseEquipmentOverrides,
   onSetExerciseEquipment,
   onSetExerciseSecondary,
+  onSetExerciseSecondarySubgroup,
   timeBasedExercises,
   gymIndependentExercises,
   bodyWeights = [],
@@ -16713,6 +16887,7 @@ function ProgressView({
           exerciseEquipmentOverrides={exerciseEquipmentOverrides}
           onSetExerciseEquipment={onSetExerciseEquipment}
           onSetExerciseSecondary={onSetExerciseSecondary}
+          onSetExerciseSecondarySubgroup={onSetExerciseSecondarySubgroup}
           timeBasedExercises={timeBasedExercises}
           gymIndependentExercises={gymIndependentExercises}
           onUpdateExerciseNote={onUpdateExerciseNote}
@@ -17276,6 +17451,7 @@ function ProgressView({
           exerciseEquipmentOverrides={exerciseEquipmentOverrides}
           onSetExerciseEquipment={onSetExerciseEquipment}
           onSetExerciseSecondary={onSetExerciseSecondary}
+          onSetExerciseSecondarySubgroup={onSetExerciseSecondarySubgroup}
           timeBasedExercises={timeBasedExercises}
           gymIndependentExercises={gymIndependentExercises}
           onUpdateExerciseNote={onUpdateExerciseNote}
@@ -17785,6 +17961,7 @@ function HistoryView({
   exerciseEquipmentOverrides,
   onSetExerciseEquipment,
   onSetExerciseSecondary,
+  onSetExerciseSecondarySubgroup,
   timeBasedExercises,
   gymIndependentExercises,
   onUpdateExerciseNote,
@@ -17995,6 +18172,7 @@ function HistoryView({
           exerciseEquipmentOverrides={exerciseEquipmentOverrides}
           onSetExerciseEquipment={onSetExerciseEquipment}
           onSetExerciseSecondary={onSetExerciseSecondary}
+          onSetExerciseSecondarySubgroup={onSetExerciseSecondarySubgroup}
           timeBasedExercises={timeBasedExercises}
           gymIndependentExercises={gymIndependentExercises}
           onUpdateExerciseNote={onUpdateExerciseNote}

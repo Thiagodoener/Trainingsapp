@@ -631,6 +631,36 @@ Dialog, sondern gleich das ganze Blatt. Beim Bauen des gleichen Dialogs für Neb
 auf, weil dort exakt derselbe Fehler sofort einen echten Absturz-nahen Bedienfehler zeigte, nicht
 nur ein theoretisches Risiko.
 
+**Untergruppe einer Nebenmuskelgruppe – eine bewusste Ausnahme von der Regel oben.**
+Weiter oben (Karte „Sätze pro Muskelgruppe") steht die Regel: *Untergruppen bekommen nur die
+Hauptgruppe ab, weil die App nicht weiß, welcher Teil einer Nebengruppe wirklich mitarbeitet, und
+eine erfundene Antwort schlechter wäre als keine.* Max wollte trotzdem auch bei Nebenmuskelgruppen
+eine Untergruppe wählen können – und zwar so, dass sie in der Statistik mitzählt, nicht nur als
+Beschriftung. Das ist kein Widerspruch zur Regel, sondern deren Voraussetzung wörtlich erfüllt:
+Die Regel verbietet eine *erfundene* Zuordnung, nicht eine, die man selbst ausdrücklich gewählt hat.
+Wählt Max bei „Bankdrücken → Nebenmuskel Arme" die Untergruppe „Trizeps", stammt diese Information
+von ihm, nicht von der App.
+
+Datenmodell und Verdrahtung folgen exakt dem Muster von `exercise.secondary`/`withSecondaryOverride`
+oben, nur eine Ebene tiefer: `exercise.secondarySubgroups` hat die Form
+`{ [nebenGruppeId]: [untergruppeId, ...] }` und wird über `withSecondarySubgroupOverride` und die
+Override-Tabelle `exercise-secondary-subgroup-overrides` an `allExercises` gesetzt, bevor irgendeine
+Rechnung die Übung sieht. `getExerciseSecondarySubgroups(exercise, gruppeId)` liest sie ab – **ohne**
+den „Sonstige"-Fallback, den die Hauptgruppe hat: Eine Nebengruppe ohne gewählte Untergruppe bleibt
+schlicht ohne Untergruppen-Zuordnung, genau wie vor dieser Änderung. Nur wer ausdrücklich wählt,
+bekommt eine Untergruppen-Zuordnung – jede bestehende Nebenmuskel-Zuweisung, für die niemand das
+getan hat, liefert unveränderte Zahlen (siehe Test „ohne gewaehlte Untergruppe bleiben alle
+Untergruppen von 'arme' bei 0").
+
+In `getMuscleLoadSeries`/`getWeeklySetSeries` läuft die Zurechnung direkt neben der bestehenden
+Nebengruppen-Verrechnung: Die gewählte Untergruppe bekommt denselben Anteil (`SECONDARY_SHARE =
+0,5`), den auch die Nebengruppe selbst bekommt – nicht den vollen Satz wie eine Untergruppe der
+Hauptgruppe. Wählbar ist die Untergruppe an zwei Stellen, wie bei den Nebenmuskelgruppen selbst:
+beim Anlegen einer eigenen Übung (direkt am neuen Objekt, verschachtelt unter der gerade gewählten
+Nebenmuskelgruppe) und nachträglich im „Nebenmuskelgruppen wählen"-Dialog jeder Übung (verschachtelt
+unter der jeweils aktiven Nebengruppe, nur wenn diese überhaupt Untergruppen hat). Die Nebenmuskel-
+Marke im Kopf des Übungs-Fensters zeigt die Wahl gleich mit an, z. B. „Arme (Trizeps)".
+
 ---
 
 ## Offene Punkte

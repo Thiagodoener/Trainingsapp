@@ -37,6 +37,8 @@ import {
   getExerciseMeta,
   exerciseGroupShares,
   withSecondaryOverride,
+  withSecondarySubgroupOverride,
+  getExerciseSecondarySubgroups,
   set1RM,
   getRecentPRs,
   getExerciseBestStats,
@@ -1816,5 +1818,88 @@ describe("Nebenmuskelgruppen sind änderbar", () => {
     // ueberschreiben gibt.
     const eigene = { id: "custom-x", group: "arme", secondary: ["rumpf"] };
     expect(exerciseGroupShares(eigene)).toEqual([["arme", 1], ["rumpf", 0.5]]);
+  });
+});
+
+describe("Untergruppe einer Nebenmuskelgruppe (bewusste Ausnahme von 'nur die Hauptgruppe')", () => {
+  const bankdruecken = { id: "bankdruecken", group: "brust", secondary: ["schultern", "arme"] };
+
+  it("ohne Override bleibt die Übung unveraendert", () => {
+    const ex = withSecondarySubgroupOverride(bankdruecken, {});
+    expect(ex).toBe(bankdruecken);
+    expect(getExerciseSecondarySubgroups(ex, "arme")).toEqual([]);
+  });
+
+  it("ein Override setzt die Untergruppe fuer genau die gewaehlte Nebengruppe", () => {
+    const ex = withSecondarySubgroupOverride(bankdruecken, {
+      bankdruecken: { arme: ["trizeps"] },
+    });
+    expect(getExerciseSecondarySubgroups(ex, "arme")).toEqual(["trizeps"]);
+    // Fuer "schultern" wurde nichts gewaehlt - kein erratener Wert.
+    expect(getExerciseSecondarySubgroups(ex, "schultern")).toEqual([]);
+  });
+
+  it("betrifft nur die Übung, für die der Override gilt", () => {
+    const andere = { id: "kniebeuge", group: "beine", secondary: ["rumpf"] };
+    const ex = withSecondarySubgroupOverride(andere, { bankdruecken: { arme: ["trizeps"] } });
+    expect(ex).toBe(andere);
+  });
+
+  it("ohne Übung oder ohne secondarySubgroups gibt es keine Untergruppe", () => {
+    expect(getExerciseSecondarySubgroups(bankdruecken, "arme")).toEqual([]);
+    expect(getExerciseSecondarySubgroups(null, "arme")).toEqual([]);
+  });
+});
+
+describe("Nebenmuskel-Untergruppe fliesst in die Statistik ein (auf Max' ausdrücklichen Wunsch)", () => {
+  // Eine Übung, deren Hauptgruppe "brust" ist und die "arme" als
+  // Nebenmuskelgruppe mit 0,5 Anteil bekommt (siehe SECONDARY_SHARE).
+  const exBy: any = {
+    bankdruecken: { id: "bankdruecken", name: "Bankdrücken", group: "brust", secondary: ["arme"] },
+  };
+  const log = () =>
+    training({
+      id: "l1",
+      date: new Date().toISOString(),
+      entries: [{ id: "e", exerciseId: "bankdruecken", sets: [satz({ weight: 100, reps: 5 })] }],
+    });
+
+  it("ohne gewaehlte Untergruppe bleiben alle Untergruppen von 'arme' bei 0 (bestehendes Verhalten unveraendert)", () => {
+    const reihe = getMuscleLoadSeries([log()], exBy, {}, {}, 1).find((g: any) => g.id === "arme")!;
+    // Die Nebengruppe selbst bekommt weiterhin ihren halben Satz.
+    expect(reihe.current).toBeGreaterThan(0);
+    // Aber keine ihrer Untergruppen - auch "Sonstige" nicht, denn diese
+    // Übung ist fuer "arme" keine Hauptgruppen-Zuweisung, sondern nur eine
+    // ungewaehlte Nebengruppe.
+    reihe.subs.forEach((sg: any) => expect(sg.current).toBe(0));
+  });
+
+  it("mit gewaehlter Untergruppe zaehlt genau diese mit, in derselben Hoehe wie die Nebengruppe", () => {
+    const exMitUntergruppe = {
+      ...exBy,
+      bankdruecken: { ...exBy.bankdruecken, secondarySubgroups: { arme: ["trizeps"] } },
+    };
+    const reihe = getMuscleLoadSeries([log()], exMitUntergruppe, {}, {}, 1).find(
+      (g: any) => g.id === "arme"
+    )!;
+    const trizeps = reihe.subs.find((sg: any) => sg.id === "trizeps")!;
+    expect(trizeps.current).toBeCloseTo(reihe.current, 6);
+    // Nicht gewaehlte Untergruppen von "arme" bleiben bei 0.
+    const bizeps = reihe.subs.find((sg: any) => sg.id === "bizeps")!;
+    expect(bizeps.current).toBe(0);
+  });
+
+  it("eine Untergruppen-Wahl fuer die Nebengruppe aendert nichts an der Hauptgruppe der Übung", () => {
+    const exMitUntergruppe = {
+      ...exBy,
+      bankdruecken: { ...exBy.bankdruecken, secondarySubgroups: { arme: ["trizeps"] } },
+    };
+    const brust = getMuscleLoadSeries([log()], exMitUntergruppe, {}, {}, 1).find(
+      (g: any) => g.id === "brust"
+    )!;
+    // "Sonstige" bei Brust ist unveraendert, weil bankdruecken dort keine
+    // Untergruppe hat - die Aenderung betraf nur die Nebengruppe "arme".
+    const sonstige = brust.subs.find((sg: any) => sg.id === "sonstige")!;
+    expect(sonstige.current).toBeCloseTo(brust.current, 6);
   });
 });

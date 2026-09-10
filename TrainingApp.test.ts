@@ -37,6 +37,10 @@ import {
   getExerciseMeta,
   exerciseGroupShares,
   withSecondaryOverride,
+  trimpWert,
+  pulsProfilVollstaendig,
+  getEnduranceLoadSeries,
+  TRIMP_KONSTANTEN,
   withSecondarySubgroupOverride,
   getExerciseSecondarySubgroups,
   set1RM,
@@ -1901,5 +1905,123 @@ describe("Nebenmuskel-Untergruppe fliesst in die Statistik ein (auf Max' ausdrü
     // Untergruppe hat - die Aenderung betraf nur die Nebengruppe "arme".
     const sonstige = brust.subs.find((sg: any) => sg.id === "sonstige")!;
     expect(sonstige.current).toBeCloseTo(brust.current, 6);
+  });
+});
+
+describe("Ausdauer-Belastung aus dem Puls (TRIMP)", () => {
+  const profil = { ruhepuls: 50, maxpuls: 190, formel: "mann" };
+
+  it("rechnet nichts ohne vollstaendiges Puls-Profil", () => {
+    expect(pulsProfilVollstaendig(null)).toBe(false);
+    expect(pulsProfilVollstaendig({ ruhepuls: 50, maxpuls: 190 })).toBe(false); // Formel fehlt
+    expect(pulsProfilVollstaendig({ ruhepuls: 50, formel: "mann" })).toBe(false); // Maximalpuls fehlt
+    expect(pulsProfilVollstaendig({ maxpuls: 190, formel: "mann" })).toBe(false); // Ruhepuls fehlt
+    // Maximalpuls unter Ruhepuls ist ein Tippfehler, kein gueltiges Profil.
+    expect(pulsProfilVollstaendig({ ruhepuls: 190, maxpuls: 50, formel: "mann" })).toBe(false);
+    expect(pulsProfilVollstaendig(profil)).toBe(true);
+    // Und ohne gueltiges Profil kommt 0 heraus, nicht etwa ein geschaetzter Wert.
+    expect(trimpWert(3600, 150, { ruhepuls: 50, maxpuls: 190 })).toBe(0);
+  });
+
+  it("trifft den von Hand gerechneten Wert", () => {
+    // 60 Min bei 150 Puls, Reserve = (150-50)/(190-50) = 0,7143
+    // 60 x 0,7143 x 0,64 x e^(1,92 x 0,7143) = rund 108,1
+    expect(trimpWert(3600, 150, profil)).toBeCloseTo(108.1, 1);
+  });
+
+  it("gewichtet Haerte staerker als Dauer - genau das ist der Sinn der e-Funktion", () => {
+    // Doppelte Dauer = doppelte Belastung (die Dauer geht linear ein).
+    expect(trimpWert(7200, 150, profil)).toBeCloseTo(2 * trimpWert(3600, 150, profil), 6);
+    // Doppelte Reserve = MEHR als doppelte Belastung.
+    // Puls 120 -> Reserve 0,5; Puls 190 -> Reserve 1,0.
+    const locker = trimpWert(3600, 120, profil);
+    const hart = trimpWert(3600, 190, profil);
+    expect(hart).toBeGreaterThan(2 * locker);
+  });
+
+  it("rechnet fuer Frauen mit anderen Konstanten", () => {
+    const weiblich = { ...profil, formel: "frau" };
+    expect(TRIMP_KONSTANTEN.frau).not.toEqual(TRIMP_KONSTANTEN.mann);
+    expect(trimpWert(3600, 150, weiblich)).not.toBeCloseTo(trimpWert(3600, 150, profil), 3);
+  });
+
+  it("begrenzt einen Puls ausserhalb des Profils, statt ins Absurde zu laufen", () => {
+    // Unter dem Ruhepuls: keine negative Belastung.
+    expect(trimpWert(3600, 40, profil)).toBe(0);
+    // Ueber dem Maximalpuls: gedeckelt auf denselben Wert wie genau am Maximum.
+    expect(trimpWert(3600, 210, profil)).toBeCloseTo(trimpWert(3600, 190, profil), 6);
+  });
+
+  it("braucht Dauer UND Puls - eine Einheit ohne Pulsaufzeichnung ergibt 0", () => {
+    expect(trimpWert(3600, 0, profil)).toBe(0);
+    expect(trimpWert(0, 150, profil)).toBe(0);
+  });
+});
+
+describe("Ausdauer-Wochenreihe", () => {
+  const profil = { ruhepuls: 50, maxpuls: 190, formel: "mann" };
+  const einheit = (tageZurueck: number, over: Record<string, unknown> = {}) => ({
+    id: "a" + tageZurueck + (over.sport || ""),
+    date: new Date(Date.now() - tageZurueck * TAG).toISOString(),
+    sport: "laufen",
+    durationSeconds: 3600,
+    avgHr: 150,
+    ...over,
+  });
+
+  it("sortiert die Einheiten in die richtige Woche, von alt nach neu", () => {
+    const reihe = getEnduranceLoadSeries([einheit(1), einheit(9)], profil, 3);
+    // Reihe ist alt -> neu: Index 2 ist die laufende Woche.
+    expect(reihe.values).toHaveLength(3);
+    expect(reihe.values[2]).toBeCloseTo(108.1, 1);
+    expect(reihe.values[1]).toBeCloseTo(108.1, 1);
+    expect(reihe.values[0]).toBe(0);
+    expect(reihe.current).toBeCloseTo(108.1, 1);
+  });
+
+  it("zaehlt die Minuten mit, auch wenn kein Puls aufgezeichnet wurde", () => {
+    const reihe = getEnduranceLoadSeries([einheit(1, { avgHr: null })], profil, 2);
+    // Ohne Puls keine Belastungszahl ...
+    expect(reihe.current).toBe(0);
+    // ... aber die Einheit hat trotzdem stattgefunden, und das sagt die App.
+    expect(reihe.minutes[1]).toBeCloseTo(60, 6);
+    expect(reihe.ohnePuls).toBe(1);
+  });
+
+  it("meldet ohne Puls-Profil jede Einheit als unberechenbar, statt still 0 zu liefern", () => {
+    const reihe = getEnduranceLoadSeries([einheit(1), einheit(2)], null, 2);
+    expect(reihe.current).toBe(0);
+    expect(reihe.ohnePuls).toBe(2);
+    expect(reihe.minutes[1]).toBeCloseTo(120, 6);
+  });
+
+  it("schluesselt nach Sportart auf, Summe bleibt die Gesamtbelastung", () => {
+    const reihe = getEnduranceLoadSeries(
+      [einheit(1, { sport: "laufen" }), einheit(2, { sport: "rad" })],
+      profil,
+      2
+    );
+    const laufen = reihe.sports.find((s: any) => s.id === "laufen")!;
+    const rad = reihe.sports.find((s: any) => s.id === "rad")!;
+    expect(laufen.current).toBeCloseTo(108.1, 1);
+    expect(rad.current).toBeCloseTo(108.1, 1);
+    expect(laufen.current + rad.current).toBeCloseTo(reihe.current, 6);
+    // Nicht genutzte Sportarten stehen mit 0 da, nicht mit undefined.
+    expect(reihe.sports.find((s: any) => s.id === "schwimmen")!.current).toBe(0);
+  });
+
+  it("bucht eine unbekannte Sportart unter Sonstige, statt sie zu verlieren", () => {
+    const reihe = getEnduranceLoadSeries([einheit(1, { sport: "einradfahren" })], profil, 2);
+    expect(reihe.sports.find((s: any) => s.id === "sonstige")!.current).toBeCloseTo(108.1, 1);
+    expect(reihe.current).toBeCloseTo(108.1, 1);
+  });
+
+  it("ignoriert kaputte Daten, statt die ganze Reihe zu verlieren", () => {
+    const reihe = getEnduranceLoadSeries(
+      [{ id: "x", date: "keinDatum", durationSeconds: 3600, avgHr: 150 }, einheit(1)],
+      profil,
+      2
+    );
+    expect(reihe.current).toBeCloseTo(108.1, 1);
   });
 });

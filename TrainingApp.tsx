@@ -39,6 +39,8 @@ import {
   BatteryLow,
   Settings,
   User,
+  HeartPulse,
+  Activity,
 } from "lucide-react";
 import {
   LineChart,
@@ -100,6 +102,9 @@ const CATEGORY_COLORS = SWATCH_COLORS;
 // oben, unten oder waagerecht.
 // ---------------------------------------------------------------------------
 const BREATHING_COLOR = "#6ea8d8"; // Himmelblau, auch im Kalender
+// Grün für Ausdauer - deutlich getrennt vom Himmelblau der Atemübungen und
+// vom Akzentton der Kraft-Trainings, damit ein Blick auf den Monat reicht.
+const ENDURANCE_COLOR = "#5aa86e";
 const BREATHING_DIRECTIONS = [
   { id: "in", label: "Einatmen" },
   { id: "hold", label: "Halten" },
@@ -1796,6 +1801,23 @@ const STAT_EXPLANATIONS = {
       "Änderung = (diese Woche − Schnitt der gewählten Wochen davor) ÷ Schnitt × 100.",
     ],
   },
+  enduranceLoad: {
+    title: "Ausdauer-Belastung",
+    paragraphs: [
+      "Eine Stunde locker traben und eine Stunde am Limit sind nicht dieselbe Belastung – die Dauer allein sagt also wenig. Gemessen wird deshalb, wie hoch dein Puls dabei lag, im Verhältnis zu deinem eigenen Bereich zwischen Ruhe und Maximum.",
+      "Die Rechnung dahinter heißt TRIMP (nach Banister) und ist der etablierte Weg, Ausdauerbelastung aus Pulsdaten zu bestimmen. Die Härte geht dabei nicht einfach mal der Zeit ein, sondern stärker gewichtet: Doppelt so hart ist mehr als doppelt so belastend. Das bildet nach, dass der Körper im oberen Bereich überproportional mehr wegstecken muss.",
+      "Ohne Ruhe- und Maximalpuls rechnet die App hier gar nichts. Eine Faustformel wie „220 minus Alter“ liegt je nach Mensch um 10 bis 20 Schläge daneben, und weil dieser Wert die gesamte Rechnung skaliert, wäre jede Zahl darüber wertlos. Dieselbe Haltung wie beim Körpergewicht: lieber keine Zahl als eine erfundene.",
+      "Einheiten ohne Pulsaufzeichnung fehlen in dieser Zahl. Das steht unter der Karte, statt die Woche stillschweigend zu niedrig auszuweisen.",
+      "Diese Zahl wird bewusst NICHT mit „Belastung pro Muskelgruppe“ verrechnet. Die eine misst jeden Satz an deinem eigenen Bestwert derselben Übung, die andere Minuten an deinem eigenen Puls – das sind zwei verschiedene Währungen. Sie zu addieren ergäbe eine Zahl, die zwar existiert, aber nichts bedeutet.",
+      "Beim Krafttraining wird der Puls aus demselben Grund nicht zur Belastung verrechnet: Er steigt dort durch Pressatmung und kurze Spitzen, nicht im Verhältnis zur geleisteten Arbeit. Was die Uhr dazu aufgezeichnet hat, steht am Training als Zusatzinfo dabei – als Beobachtung, nicht als Bewertung.",
+    ],
+    formula: [
+      "Herzfrequenz-Reserve = (Ø-Puls − Ruhepuls) ÷ (Maximalpuls − Ruhepuls), begrenzt auf 0 bis 1.",
+      "Belastung einer Einheit = Dauer in Minuten × Reserve × a × e^(b × Reserve). a und b sind die Banister-Konstanten: 0,64 und 1,92 für Männer, 0,86 und 1,67 für Frauen.",
+      "Wochenwert = Summe aller Einheiten in einem 7-Tage-Fenster, dieselbe Fenster-Logik wie bei den Muskelgruppen.",
+      "Änderung = (diese Woche − Schnitt der gewählten Wochen davor) ÷ Schnitt × 100.",
+    ],
+  },
   strengthVolume: {
     title: "Kraft und Volumen",
     paragraphs: [
@@ -2212,6 +2234,116 @@ function getWeeklySetSeries(logs, exBy, subgroupOverrides, weekCount = 21, nowTs
     subs.push({ ...sonstige, current: sonstige.values[sonstige.values.length - 1] || 0 });
     return { id: g.id, label: g.label, values, current: values[values.length - 1] || 0, subs };
   }).sort((a, b) => b.current - a.current);
+}
+
+// ---------------------------------------------------------------------------
+// Ausdauer: Belastung aus dem Puls
+//
+// Kraft und Ausdauer werden hier bewusst NICHT in eine gemeinsame Zahl
+// gegossen. Die Kraft-Belastung misst jeden Satz am eigenen Bestwert derselben
+// Übung; für einen Dauerlauf gibt es dazu kein Gegenstück, und eine erfundene
+// Umrechnung zwischen beiden wäre genau die Scheingenauigkeit, vor der dieses
+// Konzept an mehreren Stellen warnt. Beide Karten stehen deshalb nebeneinander,
+// jede mit ihrer eigenen Währung.
+//
+// Gerechnet wird nach Banister (TRIMP): Die Dauer wird mit der relativen
+// Herzfrequenz-Reserve gewichtet, und zwar exponentiell. Genau das unterscheidet
+// TRIMP von "Minuten mal Anstrengung" - die Belastung steigt mit der Intensität
+// schneller als linear, der Laktatkurve nachempfunden. Eine harte halbe Stunde
+// zählt damit deutlich mehr als eine lockere.
+//
+//   HFr   = (Ø-Puls − Ruhepuls) / (Maximalpuls − Ruhepuls)
+//   TRIMP = Dauer in Minuten × HFr × a × e^(b × HFr)
+// ---------------------------------------------------------------------------
+
+// a und b unterscheiden sich messbar zwischen Männern und Frauen. Die App
+// fragt deshalb danach, statt einen der beiden Sätze stillschweigend
+// anzunehmen - eine falsche Konstante verzerrt jede Zahl darüber.
+export const TRIMP_KONSTANTEN = {
+  mann: { a: 0.64, b: 1.92 },
+  frau: { a: 0.86, b: 1.67 },
+};
+
+export const AUSDAUER_SPORTARTEN = [
+  { id: "laufen", label: "Laufen" },
+  { id: "rad", label: "Rad" },
+  { id: "schwimmen", label: "Schwimmen" },
+  { id: "rudern", label: "Rudern" },
+  { id: "airbike", label: "Airbike" },
+  { id: "wandern", label: "Wandern" },
+  { id: "sonstige", label: "Sonstige" },
+];
+
+// Ohne vollständiges Puls-Profil wird nicht gerechnet. Ein geschätzter Ruhe-
+// oder Maximalpuls (etwa aus "220 minus Alter") liegt regelmäßig um mehr als
+// 10 Schläge daneben, und weil der Wert im Nenner der Reserve steht, schlägt
+// dieser Fehler voll auf jede Belastungszahl durch. Dieselbe Haltung wie beim
+// Körpergewicht: lieber keine Zahl als eine erfundene.
+export function pulsProfilVollstaendig(profil) {
+  const ruhe = toNum(profil?.ruhepuls);
+  const max = toNum(profil?.maxpuls);
+  return ruhe > 0 && max > ruhe && !!TRIMP_KONSTANTEN[profil?.formel];
+}
+
+export function trimpWert(durationSeconds, avgHr, profil) {
+  if (!pulsProfilVollstaendig(profil)) return 0;
+  const minuten = toNum(durationSeconds) / 60;
+  const puls = toNum(avgHr);
+  if (!(minuten > 0) || !(puls > 0)) return 0;
+  const ruhe = toNum(profil.ruhepuls);
+  const max = toNum(profil.maxpuls);
+  // Nach unten und oben begrenzt: Ein Ø-Puls unter dem Ruhepuls ergäbe eine
+  // negative Belastung, einer über dem Maximalpuls würde durch die
+  // e-Funktion sofort ins Absurde laufen. Beides heißt in Wahrheit "das
+  // eingetragene Profil passt nicht zu dieser Einheit", nicht "diese Einheit
+  // war unendlich hart".
+  const reserve = Math.min(1, Math.max(0, (puls - ruhe) / (max - ruhe)));
+  const { a, b } = TRIMP_KONSTANTEN[profil.formel];
+  return minuten * reserve * a * Math.exp(b * reserve);
+}
+
+// Wochenreihe der Ausdauer-Belastung, im selben rollierenden 7-Tage-Fenster
+// wie die Muskelgruppen - damit Sparkline, Prozentvergleich und Warnsignale
+// unverändert weiterverwendet werden können.
+//
+// `ohnePuls` zählt die Einheiten, für die keine Belastung berechnet werden
+// konnte (kein Puls aufgezeichnet oder Profil unvollständig). Die Karte sagt
+// das offen, statt eine zu niedrige Wochensumme als vollständig auszugeben -
+// eine stillschweigend fehlende Einheit wäre schlimmer als ein Hinweis.
+export function getEnduranceLoadSeries(enduranceLogs, profil, weekCount = 21, nowTs = Date.now()) {
+  const leer = () => new Array(weekCount).fill(0);
+  const weeks = leer();
+  const minutenWochen = leer();
+  const sportWochen = {};
+  let ohnePuls = 0;
+  (Array.isArray(enduranceLogs) ? enduranceLogs : []).forEach((l) => {
+    const ts = new Date(l?.date).getTime();
+    if (!Number.isFinite(ts)) return;
+    const idx = Math.max(0, Math.floor((nowTs - ts) / LOAD_WEEK_MS));
+    if (idx >= weekCount) return;
+    minutenWochen[idx] += toNum(l?.durationSeconds) / 60;
+    const wert = trimpWert(l?.durationSeconds, l?.avgHr, profil);
+    if (!(wert > 0)) {
+      ohnePuls += 1;
+      return;
+    }
+    weeks[idx] += wert;
+    const sport = AUSDAUER_SPORTARTEN.some((s) => s.id === l?.sport) ? l.sport : "sonstige";
+    if (!sportWochen[sport]) sportWochen[sport] = leer();
+    sportWochen[sport][idx] += wert;
+  });
+  const dreh = (reihe) => [...reihe].reverse();
+  const values = dreh(weeks);
+  return {
+    values,
+    current: values[values.length - 1] || 0,
+    minutes: dreh(minutenWochen),
+    ohnePuls,
+    sports: AUSDAUER_SPORTARTEN.map((s) => {
+      const reihe = sportWochen[s.id] ? dreh(sportWochen[s.id]) : dreh(leer());
+      return { id: s.id, label: s.label, values: reihe, current: reihe[reihe.length - 1] || 0 };
+    }),
+  };
 }
 
 // Wochenweise Anzahl absolvierter Atemübungs-Sitzungen - keine Gruppen wie
@@ -3001,6 +3133,8 @@ const BACKUP_KEYS = [
   "exercise-gym-independent",
   "breathing-exercises",
   "breathing-logs",
+  "endurance-logs",
+  "puls-profil",
   "exercise-subgroup-overrides",
   "exercise-equipment-overrides",
   "exercise-secondary-overrides",
@@ -3299,6 +3433,14 @@ function TrainingAppInner() {
   const [gymIndependentExercises, setGymIndependentExercises] = useState({});
   const [breathingExercises, setBreathingExercises] = useState([]);
   const [breathingLogs, setBreathingLogs] = useState([]);
+  // Ausdauer-Einheiten (Laufen, Rad, ...) - eigene Datenart neben den
+  // Kraft-Trainings, weil sie in einer anderen Währung gemessen werden
+  // (siehe getEnduranceLoadSeries). Später füllt der Strava-Abgleich
+  // dieselbe Liste, deshalb trägt jede Einheit ihre Herkunft mit.
+  const [enduranceLogs, setEnduranceLogs] = useState([]);
+  // Ruhepuls, Maximalpuls und die Formel-Konstanten. Ohne diese drei Angaben
+  // wird keine Ausdauer-Belastung gerechnet - erfunden wird hier nichts.
+  const [pulsProfil, setPulsProfil] = useState({ ruhepuls: null, maxpuls: null, formel: null });
   const [breathingManagerOpen, setBreathingManagerOpen] = useState(false);
   // null = Liste, sonst die gerade bearbeitete Übung (ohne id = neu).
   const [breathingEditing, setBreathingEditing] = useState(null);
@@ -3357,7 +3499,7 @@ function TrainingAppInner() {
 
   useEffect(() => {
     (async () => {
-      const [p, l, c, f, en, no, tb, gi, active, prog, activeProg, sg, ce, cc, eq, th, gy, activeGy, restEnd, brEx, brLogs, dw, di, dsh, bnd, snd, bw, sec, secSub] = await Promise.all([
+      const [p, l, c, f, en, no, tb, gi, active, prog, activeProg, sg, ce, cc, eq, th, gy, activeGy, restEnd, brEx, brLogs, dw, di, dsh, bnd, snd, bw, sec, secSub, ausdauer, puls] = await Promise.all([
         loadJSON("training-plans", []),
         loadJSON("workout-logs", []),
         loadJSON("custom-exercises", []),
@@ -3387,6 +3529,8 @@ function TrainingAppInner() {
         loadJSON("body-weight", null),
         loadJSON("exercise-secondary-overrides", {}),
         loadJSON("exercise-secondary-subgroup-overrides", {}),
+        loadJSON("endurance-logs", []),
+        loadJSON("puls-profil", null),
       ]);
       // Migration: users who already had folders before "programs" existed
       // get one default program that all their existing folders are
@@ -3419,6 +3563,8 @@ function TrainingAppInner() {
       setGymIndependentExercises(gi);
       setBreathingExercises(Array.isArray(brEx) ? brEx : []);
       setBreathingLogs(Array.isArray(brLogs) ? brLogs : []);
+      setEnduranceLogs(Array.isArray(ausdauer) ? ausdauer : []);
+      if (puls && typeof puls === "object") setPulsProfil(puls);
       setSession(active ? withEntryIds(active) : null);
       // A rest that already expired while the app was closed is not restored -
       // it would show a dead "0:00" bar with nothing to count down to.
@@ -3641,6 +3787,14 @@ function TrainingAppInner() {
   const persistBreathingLogs = async (next) => {
     setBreathingLogs(next);
     await saveJSON("breathing-logs", next);
+  };
+  const persistEnduranceLogs = async (next) => {
+    setEnduranceLogs(next);
+    await saveJSON("endurance-logs", next);
+  };
+  const persistPulsProfil = async (next) => {
+    setPulsProfil(next);
+    await saveJSON("puls-profil", next);
   };
 
   const createSessionFromPlan = (plan, gymId = null) => ({
@@ -4047,6 +4201,46 @@ function TrainingAppInner() {
     ]);
     showToast("Atemübung nachgetragen");
   };
+  // Eine Ausdauer-Einheit ablegen. Wie bei den Atemübungen bekommt sie einen
+  // Kalendereintrag - anders als ein geplantes Workout ist der von Anfang an
+  // erledigt, denn die Einheit hat ja bereits stattgefunden.
+  //
+  // Der Strava-Abgleich wird später über genau diesen Weg gehen, statt einen
+  // zweiten daneben zu bauen: `quelle` und `stravaId` sind die einzigen
+  // Felder, an denen man einer Einheit ansieht, woher sie kommt. Die stravaId
+  // ist zugleich der Schutz gegen Dopplungen, wenn derselbe Lauf ein zweites
+  // Mal abgeholt wird.
+  const saveEnduranceLog = async (eintrag) => {
+    const log = {
+      id: uid(),
+      quelle: "hand",
+      stravaId: null,
+      sport: "sonstige",
+      durationSeconds: 0,
+      distanceMeters: null,
+      avgHr: null,
+      maxHr: null,
+      calories: null,
+      notiz: "",
+      ...eintrag,
+    };
+    await persistEnduranceLogs([...enduranceLogs, log]);
+    await persistCalendarEntries([
+      ...calendarEntries,
+      { id: uid(), date: toDateKey(new Date(log.date)), type: "endurance", enduranceId: log.id },
+    ]);
+    return log;
+  };
+  // Löscht die Einheit und den Kalendereintrag, der auf sie zeigt - sonst
+  // bliebe im Kalender ein Eintrag stehen, hinter dem nichts mehr steckt.
+  const deleteEnduranceLog = (id) => {
+    const log = enduranceLogs.find((e) => e.id === id);
+    const label = AUSDAUER_SPORTARTEN.find((s) => s.id === log?.sport)?.label || "Einheit";
+    askConfirm(`Diese Ausdauer-Einheit (${label}) wirklich löschen?`, async () => {
+      await persistEnduranceLogs(enduranceLogs.filter((e) => e.id !== id));
+      await persistCalendarEntries(calendarEntries.filter((ce) => ce.enduranceId !== id));
+    });
+  };
   // Moving an entry to another day, swapping its linked plan/exercise, or
   // editing an action's category/text/duration all go through this one
   // patch-merge - only entries that have not happened yet ever reach it
@@ -4065,9 +4259,18 @@ function TrainingAppInner() {
         ? `Diesen Workout-Termin wirklich aus dem Kalender entfernen?`
         : entry?.type === "breathing"
         ? `Diese Atemübung wirklich aus dem Kalender entfernen?`
+        : entry?.type === "endurance"
+        ? // Deutlicher als bei den anderen Arten, weil hier mehr verschwindet
+          // als ein Termin: Der Kalendereintrag IST die Ausdauer-Einheit, und
+          // eine Einheit ohne Kalendereintrag stehen zu lassen hieße, sie in
+          // der Statistik zu behalten und im Kalender zu verstecken.
+          `Diese Ausdauer-Einheit wirklich löschen? Sie verschwindet damit auch aus der Belastungs-Statistik.`
         : `Eintrag „${entry?.text || ""}“ wirklich löschen?`;
     askConfirm(label, async () => {
       await persistCalendarEntries(calendarEntries.filter((ce) => ce.id !== id));
+      if (entry?.type === "endurance" && entry.enduranceId) {
+        await persistEnduranceLogs(enduranceLogs.filter((e) => e.id !== entry.enduranceId));
+      }
     });
   };
   const createCalendarCategory = async (name, color) => {
@@ -4229,6 +4432,18 @@ function TrainingAppInner() {
   const [bodyWeightOpen, setBodyWeightOpen] = useState(false);
   const [bodyWeightDraft, setBodyWeightDraft] = useState("");
   const [bodyWeightDate, setBodyWeightDate] = useState("");
+  const [pulsProfilOpen, setPulsProfilOpen] = useState(false);
+  const [pulsDraft, setPulsDraft] = useState({ ruhepuls: "", maxpuls: "", formel: null });
+  // Der höchste je aufgezeichnete Puls aus den eigenen Einheiten. Als Hilfe
+  // beim Eintragen des Maximalpulses - aus eigenen Daten, nicht aus einer
+  // Faustformel wie "220 minus Alter", die je nach Mensch um 10 bis 20
+  // Schläge danebenliegt. Vorgeschlagen wird er, ausgewählt nicht: Der
+  // höchste gemessene Puls ist nicht zwangsläufig der maximale.
+  const hoechsterGemessenerPuls = useMemo(
+    () =>
+      enduranceLogs.reduce((max, e) => Math.max(max, toNum(e?.maxHr), toNum(e?.avgHr)), 0),
+    [enduranceLogs]
+  );
   // Der Wert, der heute gilt - fuer die Anzeige im Menue.
   const bodyWeightNow = useMemo(() => bodyWeightAt(bodyWeights, Date.now()), [bodyWeights]);
   const [bandDraft, setBandDraft] = useState({ name: "", kg: "" });
@@ -5673,6 +5888,22 @@ function TrainingAppInner() {
         .muscle-load-row-clickable {
           cursor: pointer;
         }
+        /* Ausdauer: wie die Muskel-Belastung, aber mit der Zahl selbst in der
+           Zeile. Bei den Muskelgruppen ist der Wert ein Verhältnis zum eigenen
+           Bestwert und für sich genommen kaum lesbar; der TRIMP-Wert einer
+           Woche ist dagegen eine Größe, die man wiedererkennt. Deshalb eine
+           Spalte mehr - und dafür etwas schmalere Beschriftung. */
+        .endurance-row {
+          display: grid;
+          grid-template-columns: 72px 1fr 46px 40px 18px 14px;
+          align-items: center;
+          gap: 7px;
+          margin-bottom: 9px;
+        }
+        .endurance-row-sub {
+          grid-template-columns: 72px 1fr 46px 40px;
+          margin-bottom: 7px;
+        }
         /* Kraft und Volumen: zwei Zahlen nebeneinander, damit man sie
            gegeneinander lesen kann - das ist der ganze Zweck der Karte. */
         .sv-row {
@@ -6733,6 +6964,10 @@ function TrainingAppInner() {
           background: color-mix(in srgb, ${BREATHING_COLOR} 42%, transparent);
           color: var(--text);
         }
+        .cal-entry-endurance {
+          background: color-mix(in srgb, ${ENDURANCE_COLOR} 42%, transparent);
+          color: var(--text);
+        }
         .cal-entry-more {
           font-size: 8.5px;
           color: var(--text-dim);
@@ -7173,6 +7408,15 @@ function TrainingAppInner() {
               setBodyWeightDate(toDateKey(new Date()));
               setBodyWeightOpen(true);
             }}
+            pulsProfil={pulsProfil}
+            onEditPulsProfil={() => {
+              setPulsDraft({
+                ruhepuls: pulsProfil?.ruhepuls ? String(pulsProfil.ruhepuls) : "",
+                maxpuls: pulsProfil?.maxpuls ? String(pulsProfil.maxpuls) : "",
+                formel: pulsProfil?.formel || null,
+              });
+              setPulsProfilOpen(true);
+            }}
             onManageBreathing={() => { setBreathingEditing(null); setBreathingManagerOpen(true); }}
             onOpenBackup={() => setBackupOpen(true)}
             onStartWorkout={(plan, entryId) => startScheduledWorkout(plan, entryId)}
@@ -7204,6 +7448,21 @@ function TrainingAppInner() {
             onScheduleBreathing={scheduleCalendarBreathing}
             onLogBreathing={addBreathingLogManually}
             onStartScheduledBreathing={startBreathingSession}
+            enduranceLogs={enduranceLogs}
+            pulsProfil={pulsProfil}
+            onLogEndurance={async (dateKey, daten) => {
+              const tag = dateFromKey(dateKey) || new Date();
+              const [std, min] = String(daten.uhrzeit || "12:00").split(":").map(Number);
+              const { uhrzeit, ...rest } = daten;
+              await saveEnduranceLog({
+                ...rest,
+                date: new Date(
+                  tag.getFullYear(), tag.getMonth(), tag.getDate(),
+                  Number.isFinite(std) ? std : 12, Number.isFinite(min) ? min : 0, 0
+                ).toISOString(),
+              });
+              showToast("Ausdauer-Einheit eingetragen");
+            }}
             deloadWeeks={deloadWeeks}
             onAddDeloadRange={addDeloadRange}
             onRemoveDeloadAt={removeDeloadAt}
@@ -7371,6 +7630,8 @@ function TrainingAppInner() {
             onSetExerciseEquipment={handleSetExerciseEquipment}
             onSetExerciseSecondary={handleSetExerciseSecondary}
             onSetExerciseSecondarySubgroup={handleSetExerciseSecondarySubgroup}
+            enduranceLogs={enduranceLogs}
+            pulsProfil={pulsProfil}
             timeBasedExercises={timeBasedExercises}
             gymIndependentExercises={gymIndependentExercises}
             onUpdateExerciseNote={handleUpdateExerciseNote}
@@ -7637,6 +7898,113 @@ function TrainingAppInner() {
           onFinish={finishBreathingSession}
           onCancel={() => setBreathingSession(null)}
         />
+      )}
+
+      {pulsProfilOpen && (
+        <Modal title="Puls-Profil" onClose={() => setPulsProfilOpen(false)}>
+          {/* Wie beim Körpergewicht: Wozu die Zahlen da sind, steht daneben -
+              und was ohne sie passiert, ebenfalls (Regel 4 aus KONZEPT.md). */}
+          <p className="deload-basis" style={{ marginTop: 0 }}>
+            Für Ausdauer-Einheiten rechnet die App die Belastung aus deinem
+            Puls: Eine Stunde locker ist weniger als eine Stunde am Limit.
+            Dafür muss sie wissen, wo bei dir „locker“ und „am Limit“ liegen.
+          </p>
+          <p className="deload-basis">
+            Ohne diese Angaben rechnet die App gar nichts – sie schätzt deinen
+            Puls nicht. Eine Faustformel wie „220 minus Alter“ liegt je nach
+            Mensch um 10 bis 20 Schläge daneben, und weil der Wert die ganze
+            Rechnung skaliert, wäre jede Zahl darüber wertlos.
+          </p>
+
+          <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
+            <div style={{ flex: 1 }}>
+              <label className="field-label">Ruhepuls</label>
+              <input
+                type="text"
+                inputMode="numeric"
+                placeholder="z. B. 52"
+                value={pulsDraft.ruhepuls}
+                onChange={(e) => setPulsDraft((d) => ({ ...d, ruhepuls: e.target.value }))}
+              />
+            </div>
+            <div style={{ flex: 1 }}>
+              <label className="field-label">Maximalpuls</label>
+              <input
+                type="text"
+                inputMode="numeric"
+                placeholder="z. B. 190"
+                value={pulsDraft.maxpuls}
+                onChange={(e) => setPulsDraft((d) => ({ ...d, maxpuls: e.target.value }))}
+              />
+            </div>
+          </div>
+          <p className="deload-basis" style={{ marginTop: 8 }}>
+            Den Ruhepuls misst du morgens direkt nach dem Aufwachen, im Liegen.
+            {hoechsterGemessenerPuls > 0 ? (
+              <>
+                {" "}Höchster Wert, den deine Uhr bisher aufgezeichnet hat:{" "}
+                <b>{hoechsterGemessenerPuls}</b>. Das ist ein Anhaltspunkt für
+                den Maximalpuls, keine Messung davon – dein echtes Maximum
+                erreichst du nur bei einer Ausbelastung.
+              </>
+            ) : (
+              " Der Maximalpuls ist der höchste Wert, den du bei einer harten Ausbelastung erreichst."
+            )}
+          </p>
+
+          {/* Warum die App danach fragt, steht dabei - sonst wirkt es wie
+              beiläufig eingesammelte Angabe ohne Zweck. */}
+          <div style={{ marginTop: 12 }}>
+            <label className="field-label">Formel</label>
+            <p className="deload-basis" style={{ marginTop: 4 }}>
+              Die Belastungsformel (Banister) verwendet für Männer und Frauen
+              unterschiedliche Konstanten. Nur dafür ist die Angabe da.
+            </p>
+            <div className="chip-row" style={{ marginTop: 6 }}>
+              {[["mann", "Männer"], ["frau", "Frauen"]].map(([id, label]) => (
+                <span
+                  key={id}
+                  className={`chip chip-sm ${pulsDraft.formel === id ? "active" : ""}`}
+                  onClick={() => setPulsDraft((d) => ({ ...d, formel: id }))}
+                >
+                  {label}
+                </span>
+              ))}
+            </div>
+          </div>
+
+          <div style={{ display: "flex", gap: 8, marginTop: 14 }}>
+            <button
+              className="btn btn-ghost btn-sm"
+              style={{ flex: 1 }}
+              onClick={() => setPulsProfilOpen(false)}
+            >
+              Abbrechen
+            </button>
+            <button
+              className="btn btn-primary btn-sm"
+              style={{ flex: 1 }}
+              disabled={
+                !pulsProfilVollstaendig({
+                  ruhepuls: toNum(pulsDraft.ruhepuls),
+                  maxpuls: toNum(pulsDraft.maxpuls),
+                  formel: pulsDraft.formel,
+                })
+              }
+              onClick={async () => {
+                await persistPulsProfil({
+                  ruhepuls: Math.round(toNum(pulsDraft.ruhepuls)),
+                  maxpuls: Math.round(toNum(pulsDraft.maxpuls)),
+                  formel: pulsDraft.formel,
+                });
+                setPulsProfilOpen(false);
+                showToast("Puls-Profil gespeichert");
+              }}
+            >
+              <Check size={14} /> Speichern
+            </button>
+          </div>
+        </Modal>
       )}
 
       {bodyWeightOpen && (
@@ -8331,6 +8699,8 @@ function DashboardView({
   gymIndependentExercises,
   bodyWeights = [],
   bodyWeightNow = 0,
+  pulsProfil = null,
+  onEditPulsProfil = () => {},
   deloadWeeks = [],
   deloadStatusInfo = null,
   theme,
@@ -8558,6 +8928,17 @@ function DashboardView({
             </button>
             <button
               className="program-menu-item"
+              onClick={() => { setSettingsOpen(false); onEditPulsProfil(); }}
+            >
+              <HeartPulse size={14} /> Puls-Profil
+              <span style={{ marginLeft: "auto", color: "var(--text-dim)" }}>
+                {pulsProfilVollstaendig(pulsProfil)
+                  ? `${pulsProfil.ruhepuls}–${pulsProfil.maxpuls}`
+                  : "fehlt"}
+              </span>
+            </button>
+            <button
+              className="program-menu-item"
               onClick={() => { setSettingsOpen(false); onOpenBackup(); }}
             >
               <Save size={14} /> Daten sichern
@@ -8759,6 +9140,9 @@ function CalendarView({
   onScheduleBreathing,
   onLogBreathing,
   onStartScheduledBreathing,
+  enduranceLogs = [],
+  pulsProfil = null,
+  onLogEndurance,
   deloadWeeks = [],
   onAddDeloadRange,
   onRemoveDeloadAt,
@@ -8839,6 +9223,10 @@ function CalendarView({
   const breathingLogById = useMemo(
     () => Object.fromEntries(breathingLogs.map((l) => [l.id, l])),
     [breathingLogs]
+  );
+  const enduranceById = useMemo(
+    () => Object.fromEntries(enduranceLogs.map((e) => [e.id, e])),
+    [enduranceLogs]
   );
 
   const goPrevMonth = () => {
@@ -9120,6 +9508,15 @@ function CalendarView({
                             </span>
                           );
                         }
+                        if (entry.type === "endurance") {
+                          const einheit = enduranceById[entry.enduranceId];
+                          return (
+                            <span key={entry.id} className="cal-entry-chip cal-entry-endurance">
+                              <Check size={9} />
+                              {AUSDAUER_SPORTARTEN.find((s) => s.id === einheit?.sport)?.label || "Ausdauer"}
+                            </span>
+                          );
+                        }
                         const cat = categoryById[entry.categoryId];
                         // Same visual language as workouts: a tick means it
                         // happened, no tick means it is still ahead.
@@ -9365,6 +9762,44 @@ function CalendarView({
                 </div>
               );
             }
+            if (entry.type === "endurance") {
+              const einheit = enduranceById[entry.enduranceId];
+              // Anders als ein Workout-Termin ist eine Ausdauer-Einheit nie
+              // "offen": Sie wird eingetragen, weil sie stattgefunden hat.
+              // Deshalb gibt es hier keinen Start-Knopf und kein Bearbeiten
+              // des Termins, nur das Entfernen.
+              const belastung = einheit
+                ? trimpWert(einheit.durationSeconds, einheit.avgHr, pulsProfil)
+                : 0;
+              return (
+                <div key={entry.id} className="cal-detail-item cal-detail-done">
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                    <span className="ex-name">
+                      <Activity size={13} style={{ marginRight: 6, verticalAlign: -2, color: ENDURANCE_COLOR }} />
+                      {AUSDAUER_SPORTARTEN.find((s) => s.id === einheit?.sport)?.label || "Ausdauer"}
+                    </span>
+                    <button className="btn-icon" onClick={() => onDeleteEntry(entry.id)} title="Einheit entfernen">
+                      <Trash2 size={13} />
+                    </button>
+                  </div>
+                  {einheit ? (
+                    <div style={{ fontSize: 12.5, color: "var(--text-dim)", marginTop: 6 }}>
+                      {[
+                        `${Math.max(1, Math.round(einheit.durationSeconds / 60))} Min.`,
+                        einheit.distanceMeters ? `${fmtDecimal(einheit.distanceMeters / 1000)} km` : null,
+                        einheit.avgHr ? `Ø ${einheit.avgHr}` : null,
+                        belastung > 0 ? `Belastung ${fmtDecimal(belastung)}` : null,
+                        einheit.quelle === "strava" ? "aus Strava" : null,
+                      ].filter(Boolean).join(" · ")}
+                    </div>
+                  ) : (
+                    <p style={{ fontSize: 12.5, color: "var(--text-dim)", marginTop: 6 }}>
+                      Diese Einheit wurde gelöscht.
+                    </p>
+                  )}
+                </div>
+              );
+            }
             const cat = categoryById[entry.categoryId];
             const isDone = !!entry.doneAt;
             return (
@@ -9436,6 +9871,12 @@ function CalendarView({
                 onClick={() => setAddMode("breathing")}
               >
                 <Wind size={13} /> Atem
+              </button>
+              <button
+                className={`sub-tab ${addMode === "endurance" ? "active" : ""}`}
+                onClick={() => setAddMode("endurance")}
+              >
+                <Activity size={13} /> Ausdauer
               </button>
             </div>
 
@@ -9533,6 +9974,12 @@ function CalendarView({
                   </div>
                 )}
               </>
+            ) : addMode === "endurance" ? (
+              <EnduranceLogForm
+                dateLabel={fmtDate(dateFromKey(selectedDate))}
+                pulsProfil={pulsProfil}
+                onSave={(daten) => { onLogEndurance?.(selectedDate, daten); closeAddDialog(); }}
+              />
             ) : (
               <>
                 <div className="search-box" style={{ marginBottom: 10 }}>
@@ -15998,6 +16445,129 @@ function BreathingSessionView({ session, onFinish, onCancel }) {
 
 // Editor für eine Atemübung: Phasen frei zusammenstellbar, jede mit Name,
 // Richtung und Dauer - oder "offen", wenn die Dauer nicht vorher feststeht.
+// Formular für eine Ausdauer-Einheit von Hand. Auch wenn der Strava-Abgleich
+// die Einheiten später von selbst holt, bleibt dieser Weg wichtig: Die Uhr
+// war nicht mit, der Akku war leer, oder Strava klemmt. Ohne ihn hinge eine
+// ganze Trainingsart an einem fremden Dienst.
+//
+// Die Uhrzeit ist Pflicht und nicht bloß Zierde: Über sie wird die Einheit
+// später der Garmin-Aufzeichnung zugeordnet (Zeitfenster von ±5 Minuten).
+function EnduranceLogForm({ dateLabel, pulsProfil, onSave }) {
+  const [sport, setSport] = useState("laufen");
+  const [uhrzeit, setUhrzeit] = useState("18:00");
+  const [minuten, setMinuten] = useState("");
+  const [km, setKm] = useState("");
+  const [avgHr, setAvgHr] = useState("");
+  const [maxHr, setMaxHr] = useState("");
+
+  const sekunden = Math.round(toNum(minuten) * 60);
+  const gueltig = sekunden > 0;
+  // Sofort sichtbar, was aus der Eingabe wird - eine Zahl, die erst zwei
+  // Bildschirme später auftaucht, kann man beim Eintragen nicht einordnen.
+  const vorschau = trimpWert(sekunden, toNum(avgHr), pulsProfil);
+
+  return (
+    <>
+      <p style={{ fontSize: 12.5, color: "var(--text-dim)", margin: "0 0 12px" }}>
+        Wird als absolvierte Einheit für {dateLabel} gespeichert.
+      </p>
+      <label className="field-label">Sportart</label>
+      <div className="chip-row chip-row-wrap" style={{ marginTop: 6, marginBottom: 10 }}>
+        {AUSDAUER_SPORTARTEN.map((s) => (
+          <span
+            key={s.id}
+            className={`chip chip-sm ${sport === s.id ? "active" : ""}`}
+            onClick={() => setSport(s.id)}
+          >
+            {s.label}
+          </span>
+        ))}
+      </div>
+
+      <div style={{ display: "flex", gap: 8 }}>
+        <div style={{ flex: 1 }}>
+          <label className="field-label">Startzeit</label>
+          <input type="time" value={uhrzeit} onChange={(e) => setUhrzeit(e.target.value)} />
+        </div>
+        <div style={{ flex: 1 }}>
+          <label className="field-label">Dauer in Minuten</label>
+          <input
+            type="text"
+            inputMode="numeric"
+            placeholder="z. B. 45"
+            value={minuten}
+            onChange={(e) => setMinuten(e.target.value)}
+          />
+        </div>
+      </div>
+
+      <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
+        <div style={{ flex: 1 }}>
+          <label className="field-label">Ø-Puls</label>
+          <input
+            type="text"
+            inputMode="numeric"
+            placeholder="optional"
+            value={avgHr}
+            onChange={(e) => setAvgHr(e.target.value)}
+          />
+        </div>
+        <div style={{ flex: 1 }}>
+          <label className="field-label">Max-Puls</label>
+          <input
+            type="text"
+            inputMode="numeric"
+            placeholder="optional"
+            value={maxHr}
+            onChange={(e) => setMaxHr(e.target.value)}
+          />
+        </div>
+        <div style={{ flex: 1 }}>
+          <label className="field-label">Strecke in km</label>
+          <input
+            type="text"
+            inputMode="decimal"
+            placeholder="optional"
+            value={km}
+            onChange={(e) => setKm(e.target.value)}
+          />
+        </div>
+      </div>
+
+      {/* Sagt offen, warum eine Belastungszahl fehlt, statt stumm 0 zu
+          zeigen - der Unterschied zwischen "kein Puls da" und "kein Profil
+          eingetragen" ist für die Behebung entscheidend. */}
+      <p className="deload-basis" style={{ marginTop: 10 }}>
+        {vorschau > 0 ? (
+          <>Belastung dieser Einheit: <b>{fmtDecimal(vorschau)}</b></>
+        ) : !pulsProfilVollstaendig(pulsProfil) ? (
+          "Ohne Puls-Profil (Zahnrad-Menü auf der Startseite) wird für diese Einheit keine Belastung berechnet. Die Einheit selbst wird trotzdem gespeichert."
+        ) : (
+          "Ohne Ø-Puls gibt es für diese Einheit keine Belastungszahl. Dauer und Strecke werden trotzdem gespeichert."
+        )}
+      </p>
+
+      <button
+        className="btn btn-primary btn-block btn-sm"
+        style={{ marginTop: 10 }}
+        disabled={!gueltig}
+        onClick={() =>
+          onSave({
+            sport,
+            uhrzeit,
+            durationSeconds: sekunden,
+            distanceMeters: toNum(km) > 0 ? Math.round(toNum(km) * 1000) : null,
+            avgHr: toNum(avgHr) > 0 ? Math.round(toNum(avgHr)) : null,
+            maxHr: toNum(maxHr) > 0 ? Math.round(toNum(maxHr)) : null,
+          })
+        }
+      >
+        <Save size={14} /> Speichern
+      </button>
+    </>
+  );
+}
+
 // Formular zum NACHTRAGEN einer Atemübung. Wird an zwei Stellen benutzt: im
 // Kalender für einen beliebigen Tag und direkt nach dem Speichern eines
 // Trainings für heute.
@@ -16470,6 +17040,8 @@ function ProgressView({
   onSetExerciseEquipment,
   onSetExerciseSecondary,
   onSetExerciseSecondarySubgroup,
+  enduranceLogs = [],
+  pulsProfil = null,
   timeBasedExercises,
   gymIndependentExercises,
   bodyWeights = [],
@@ -16669,6 +17241,17 @@ function ProgressView({
     ),
     [logs, exBy, exerciseSubgroupOverrides, timeBasedExercises, loadHistoryWeeks,
      exerciseEquipmentOverrides, bodyWeights]
+  );
+  // Ausdauer-Belastung. Bewusst eine eigene Reihe neben der Muskel-Belastung
+  // und nie mit ihr verrechnet: Die eine misst Sätze am eigenen Bestwert, die
+  // andere Minuten am eigenen Puls. Eine gemeinsame Zahl daraus wäre erfunden.
+  const [enduranceCompareWeeks, setEnduranceCompareWeeks] = useState(1);
+  const [enduranceExpanded, setEnduranceExpanded] = useState(false);
+  const enduranceSeries = useMemo(
+    () => getEnduranceLoadSeries(
+      enduranceLogs, pulsProfil, muscleSeriesWeekCount(loadHistoryWeeks), Date.now()
+    ),
+    [enduranceLogs, pulsProfil, loadHistoryWeeks]
   );
   // Kraft gegen Volumen (siehe getStrengthVolumeSeries). Je Muskelgruppe
   // zusammengefasst, mit den Übungen darunter beim Aufklappen.
@@ -17075,6 +17658,91 @@ function ProgressView({
               );
             })}
           </div>
+        )}
+      </div>
+
+      {/* Ausdauer-Belastung. Steht bewusst als eigene Karte neben der
+          Muskel-Belastung, statt in sie hineingerechnet zu werden - siehe
+          getEnduranceLoadSeries. */}
+      <div className="card">
+        <ExplainableTitle onExplain={() => setExplain(STAT_EXPLANATIONS.enduranceLoad)}>
+          Ausdauer-Belastung
+        </ExplainableTitle>
+        {!pulsProfilVollstaendig(pulsProfil) ? (
+          // Kein stilles Nichts: Ohne Profil kann die App nicht rechnen, und
+          // der Weg zur Behebung steht gleich dabei.
+          <div className="empty-state" style={{ padding: "14px 0" }}>
+            Dafür braucht die App dein Puls-Profil – Ruhepuls, Maximalpuls und
+            die Formel. Einzutragen auf der Startseite unter dem Zahnrad links
+            oben. Geschätzt wird hier nichts.
+          </div>
+        ) : enduranceSeries.values.every((v) => v === 0) ? (
+          <div className="empty-state" style={{ padding: "14px 0" }}>
+            Noch keine Ausdauer-Einheit mit Puls aufgezeichnet. Eintragen kannst
+            du sie im Kalender unter „Ausdauer“.
+          </div>
+        ) : (
+          <>
+            <div className="chip-row" style={{ marginTop: 10, marginBottom: 4 }}>
+              {MUSCLE_COMPARE_OPTIONS.map(([weeks, label]) => (
+                <span
+                  key={weeks}
+                  className={`chip chip-sm ${enduranceCompareWeeks === weeks ? "active" : ""}`}
+                  onClick={() => setEnduranceCompareWeeks(weeks)}
+                >
+                  {label}
+                </span>
+              ))}
+            </div>
+            <div style={{ marginTop: 8 }}>
+              <div className="endurance-row">
+                <span className="muscle-week-label">Gesamt</span>
+                <Sparkline values={compareWindowSeries(enduranceSeries.values, enduranceCompareWeeks)} />
+                <span className="muscle-week-value">{fmtDecimal(enduranceSeries.current)}</span>
+                <LoadChangeBadge
+                  change={muscleLoadChange(enduranceSeries.values, enduranceCompareWeeks, loadHistoryWeeks)}
+                />
+                <LoadSignalBadge signal={detectLoadSignal(enduranceSeries.values, loadHistoryWeeks)} />
+                <span
+                  className="muscle-week-chevron"
+                  onClick={(e) => { e.stopPropagation(); setEnduranceExpanded((o) => !o); }}
+                >
+                  {enduranceExpanded ? (
+                    <ChevronDown size={14} color="var(--text-dim)" />
+                  ) : (
+                    <ChevronRight size={14} color="var(--text-dim)" />
+                  )}
+                </span>
+              </div>
+              {enduranceExpanded && (
+                <div className="muscle-week-subs">
+                  {/* Nur Sportarten, in denen tatsächlich etwas passiert ist -
+                      eine Liste aus sieben Nullen sagt nichts. */}
+                  {enduranceSeries.sports
+                    .filter((s) => s.values.some((v) => v > 0))
+                    .map((s) => (
+                      <div className="endurance-row endurance-row-sub" key={s.id}>
+                        <span className="muscle-week-label">{s.label}</span>
+                        <Sparkline values={compareWindowSeries(s.values, enduranceCompareWeeks)} />
+                        <span className="muscle-week-value">{fmtDecimal(s.current)}</span>
+                        <LoadChangeBadge
+                          change={muscleLoadChange(s.values, enduranceCompareWeeks, loadHistoryWeeks)}
+                        />
+                      </div>
+                    ))}
+                </div>
+              )}
+            </div>
+            {/* Eine zu niedrige Wochensumme als vollständig auszugeben wäre
+                schlimmer als dieser Hinweis. */}
+            {enduranceSeries.ohnePuls > 0 && (
+              <p className="deload-basis" style={{ marginTop: 10 }}>
+                {enduranceSeries.ohnePuls === 1
+                  ? "Eine Einheit hat keine Pulsaufzeichnung und fehlt deshalb in dieser Zahl."
+                  : `${enduranceSeries.ohnePuls} Einheiten haben keine Pulsaufzeichnung und fehlen deshalb in dieser Zahl.`}
+              </p>
+            )}
+          </>
         )}
       </div>
 

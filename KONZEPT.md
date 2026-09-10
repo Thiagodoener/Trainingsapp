@@ -661,6 +661,48 @@ Nebenmuskelgruppe) und nachträglich im „Nebenmuskelgruppen wählen"-Dialog je
 unter der jeweils aktiven Nebengruppe, nur wenn diese überhaupt Untergruppen hat). Die Nebenmuskel-
 Marke im Kopf des Übungs-Fensters zeigt die Wahl gleich mit an, z. B. „Arme (Trizeps)".
 
+**Ausdauer als eigene Trainingsart – gemessen am Puls, nicht am Gefühl.**
+Bis dahin kannte die App nur Kraft-Trainings und Atemübungen. Ein Lauf ließ sich allenfalls als
+„Aktion" im Kalender vermerken und tauchte in keiner Auswertung auf. Ausdauer-Einheiten sind jetzt
+eine eigene Datenart (`endurance-logs`) mit Sportart, Startzeit, Dauer, Strecke und Puls, sichtbar
+im Kalender wie die Atemübungen und mit einer eigenen Karte im Fortschritt.
+
+Gerechnet wird nach **Banister (TRIMP)**: Die Dauer wird mit der Herzfrequenz-Reserve gewichtet, und
+zwar exponentiell. Das unterscheidet TRIMP von „Minuten mal Anstrengung" – die Belastung steigt mit
+der Intensität schneller als linear, der Laktatkurve nachempfunden. Die Konstanten unterscheiden
+sich zwischen Männern und Frauen, deshalb fragt die App danach, statt einen der beiden Sätze
+stillschweigend anzunehmen.
+
+**Die Wahl gegen Session-RPE ist eine bewusste Abweichung vom Leitprinzip.** Der Vorschlag war
+Session-RPE (Dauer × selbst eingeschätzte Anstrengung) als Hauptmaß, mit dem Puls als Gegenprobe –
+das hätte Regel 1 („erst schätzen lassen, dann Zahlen zeigen") auch für die Ausdauer eingelöst und
+Kraft und Ausdauer über eine gemeinsame Währung vergleichbar gemacht. Max hat sich nach Darlegung
+genau dieser Begründung für den Puls als Hauptmaß entschieden: keine Abfrage nach jeder Einheit.
+Zwei Folgen, die dazugehören und hier festgehalten werden, damit sie nicht später als Versehen
+gelesen werden:
+
+1. Die Ausdauer fragt das eigene Gefühl nicht ab. Für diese Trainingsart schärft die App das
+   Körpergefühl also nicht, sie misst nur.
+2. Kraft- und Ausdauer-Belastung werden **nie** zu einer Zahl addiert. Die eine misst jeden Satz am
+   eigenen Bestwert derselben Übung, die andere Minuten am eigenen Puls – zwei verschiedene
+   Währungen. Eine Summe daraus gäbe es zwar, sie bedeutete aber nichts. Beide Karten stehen
+   deshalb nebeneinander, jede mit ihrer eigenen Einheit.
+
+Ohne Ruhepuls, Maximalpuls und Formel rechnet die App hier **gar nichts** und sagt das offen –
+dieselbe Haltung wie beim Körpergewicht. „220 minus Alter" liegt je nach Mensch um 10 bis 20
+Schläge daneben, und weil dieser Wert die ganze Rechnung skaliert, wäre jede Zahl darüber wertlos.
+Als Hilfe beim Eintragen nennt die App den höchsten je aufgezeichneten Puls aus den eigenen
+Einheiten – aus eigenen Daten, nicht aus einer Faustformel, und ausdrücklich als Anhaltspunkt, nicht
+als Messung des Maximums. Einheiten ohne Pulsaufzeichnung fehlen zwangsläufig in der Wochensumme;
+die Karte zählt sie und sagt es dazu, statt die Woche stillschweigend zu niedrig auszuweisen.
+
+**Beim Krafttraining zählt der Puls bewusst nicht mit.** Was die Uhr während eines Kraft-Trainings
+aufgezeichnet hat, wird später als Zusatzinfo am Training stehen – Dauer, Ø-Puls, Kalorien –, aber
+nicht in „Belastung pro Muskelgruppe" einfließen. Beim Heben steigt der Puls durch Pressatmung und
+kurze Spitzen, nicht im Verhältnis zur geleisteten Arbeit, und die Kalorienschätzung der Uhr ist
+dort bekanntermaßen ungenau. Der Bezug zum eigenen Bestwert ist die ehrlichere Größe; die Pulsdaten
+taugen daneben als Beobachtung, nicht als Bewertung.
+
 ---
 
 ## Offene Punkte
@@ -669,8 +711,13 @@ Marke im Kopf des Übungs-Fensters zeigt die Wahl gleich mit an, z. B. „Arme (
   drei Zielsetzungen. Braucht das Fortschritts-Signal darunter als zweites Standbein.
 - **Antworten auf Warnungen justieren die Schwellen** (Regel 2). Die Warnungen stellen derzeit
   etwas fest und hören auf; die Rückfrage und das Merken der Antwort fehlen.
-- **Ausdauer** (Laufen, Rad, Schwimmen, Airbike) als eigene Einheiten mit Session-RPE als
-  gemeinsamer Belastungswährung.
+- **Ausdauer** – als eigene Einheiten gebaut (siehe oben), aber mit dem Puls statt Session-RPE als
+  Maß. Die „gemeinsame Belastungswährung" für Kraft und Ausdauer ist damit bewusst **nicht**
+  entstanden und bleibt offen, falls sie je gewollt ist.
+- **Strava-Anbindung** für Ausdauer-Einheiten und die Zuordnung der Garmin-Aufzeichnung zu einem
+  Kraft-Training über das Zeitfenster (±5 Min.). Vorbereitet ist beides: `quelle` und `stravaId`
+  liegen an jeder Einheit, die Startzeit ist Pflichtfeld. Braucht einen kleinen Helfer im Netz,
+  weil das Strava-Passwort nicht in eine reine Browser-App darf.
 
 ### Bewusst verworfen
 

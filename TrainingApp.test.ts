@@ -41,11 +41,12 @@ import {
   pulsProfilVollstaendig,
   getEnduranceLoadSeries,
   TRIMP_KONSTANTEN,
-  stravaZuEinheit,
-  stravaSportart,
-  stravaIstKraft,
-  neueStravaEinheiten,
-  stravaTokenAbgelaufen,
+  externZuEinheit,
+  externeSportart,
+  istKraftEinheit,
+  neueExterneEinheiten,
+  intervalsAuthKopf,
+  abgleichZeitraum,
   withSecondarySubgroupOverride,
   getExerciseSecondarySubgroups,
   set1RM,
@@ -2031,12 +2032,13 @@ describe("Ausdauer-Wochenreihe", () => {
   });
 });
 
-describe("Strava-Einheiten uebernehmen", () => {
+describe("Einheiten von der Uhr uebernehmen (intervals.icu)", () => {
   const lauf = {
-    id: 998877,
+    id: "i998877",
     name: "Runde am Fluss",
-    sport_type: "Run",
-    start_date: "2026-09-10T16:30:00Z",
+    type: "Run",
+    // intervals.icu liefert die Ortszeit OHNE Zeitzonen-Anhang.
+    start_date_local: "2026-09-10T16:30:00",
     moving_time: 2700,
     elapsed_time: 2880,
     distance: 8123.4,
@@ -2044,41 +2046,54 @@ describe("Strava-Einheiten uebernehmen", () => {
     max_heartrate: 172.8,
   };
 
-  it("uebersetzt eine Aktivitaet in eine Ausdauer-Einheit", () => {
-    const e = stravaZuEinheit(lauf)!;
-    expect(e.stravaId).toBe("998877");
-    expect(e.quelle).toBe("strava");
+  it("uebersetzt eine Einheit", () => {
+    const e = externZuEinheit(lauf)!;
+    expect(e.externId).toBe("i998877");
+    expect(e.quelle).toBe("intervals");
     expect(e.sport).toBe("laufen");
     expect(e.durationSeconds).toBe(2700);
     expect(e.distanceMeters).toBe(8123);
     expect(e.avgHr).toBe(150);
     expect(e.maxHr).toBe(173);
-    expect(new Date(e.date).toISOString()).toBe("2026-09-10T16:30:00.000Z");
+  });
+
+  it("liest die Ortszeit als Ortszeit, nicht als Weltzeit", () => {
+    // Sonst rutscht eine Einheit am Abend im Kalender auf den falschen Tag.
+    const e = externZuEinheit(lauf)!;
+    const d = new Date(e.date);
+    expect(d.getHours()).toBe(16);
+    expect(d.getMinutes()).toBe(30);
+    expect(d.getDate()).toBe(10);
   });
 
   it("rechnet mit der Zeit in Bewegung, merkt sich aber die Gesamtdauer", () => {
-    // moving_time fuer die Belastung (der Ø-Puls bezieht sich darauf),
-    // elapsed_time fuer die spaetere Zuordnung zu einem Krafttraining.
-    const e = stravaZuEinheit(lauf)!;
+    const e = externZuEinheit(lauf)!;
     expect(e.durationSeconds).toBe(2700);
     expect(e.elapsedSeconds).toBe(2880);
   });
 
-  it("erfindet keine Kalorien - die Uebersichtsabfrage liefert keine", () => {
-    expect(stravaZuEinheit(lauf)!.calories).toBe(null);
+  it("findet den Puls auch unter den icu-Schreibweisen", () => {
+    // Die genauen Feldnamen liessen sich beim Bauen nicht pruefen, deshalb
+    // werden mehrere abgeklopft.
+    const e = externZuEinheit({
+      id: "i2", type: "Ride", start_date_local: "2026-09-10T09:00:00",
+      icu_moving_time: 3600, icu_average_hr: 140, icu_max_hr: 165,
+    })!;
+    expect(e.durationSeconds).toBe(3600);
+    expect(e.avgHr).toBe(140);
+    expect(e.maxHr).toBe(165);
   });
 
   it("fasst verwandte Sportarten zusammen", () => {
-    expect(stravaSportart({ sport_type: "GravelRide" })).toBe("rad");
-    expect(stravaSportart({ sport_type: "MountainBikeRide" })).toBe("rad");
-    expect(stravaSportart({ sport_type: "TrailRun" })).toBe("laufen");
-    expect(stravaSportart({ sport_type: "Walk" })).toBe("wandern");
-    // Aeltere Aktivitaeten tragen nur "type".
-    expect(stravaSportart({ type: "Swim" })).toBe("schwimmen");
+    expect(externeSportart({ type: "GravelRide" })).toBe("rad");
+    expect(externeSportart({ type: "MountainBikeRide" })).toBe("rad");
+    expect(externeSportart({ type: "TrailRun" })).toBe("laufen");
+    expect(externeSportart({ type: "Walk" })).toBe("wandern");
+    expect(externeSportart({ sport_type: "Swim" })).toBe("schwimmen");
   });
 
   it("verliert eine unbekannte Sportart nicht, sondern bucht sie unter Sonstige", () => {
-    const e = stravaZuEinheit({ ...lauf, sport_type: "Kitesurf" })!;
+    const e = externZuEinheit({ ...lauf, type: "Kitesurf" })!;
     expect(e.sport).toBe("sonstige");
     expect(e.durationSeconds).toBe(2700);
   });
@@ -2086,43 +2101,47 @@ describe("Strava-Einheiten uebernehmen", () => {
   it("macht aus einem Krafttraining KEINE Ausdauer-Einheit", () => {
     // Sonst staende dasselbe Training doppelt in der Statistik: einmal mit
     // Saetzen aus der App, einmal als Ausdauer von der Uhr.
-    expect(stravaIstKraft({ sport_type: "WeightTraining" })).toBe(true);
-    expect(stravaIstKraft({ sport_type: "Crossfit" })).toBe(true);
-    expect(stravaIstKraft({ sport_type: "Run" })).toBe(false);
-    expect(stravaZuEinheit({ ...lauf, sport_type: "WeightTraining" })).toBe(null);
+    expect(istKraftEinheit({ type: "WeightTraining" })).toBe(true);
+    expect(istKraftEinheit({ type: "Run" })).toBe(false);
+    expect(externZuEinheit({ ...lauf, type: "WeightTraining" })).toBe(null);
   });
 
-  it("weist unbrauchbare Aktivitaeten ab, statt kaputte Einheiten anzulegen", () => {
-    expect(stravaZuEinheit(null)).toBe(null);
-    expect(stravaZuEinheit({ ...lauf, id: undefined })).toBe(null);
-    expect(stravaZuEinheit({ ...lauf, start_date: "keinDatum" })).toBe(null);
-    expect(stravaZuEinheit({ ...lauf, moving_time: 0, elapsed_time: 0 })).toBe(null);
+  it("weist unbrauchbare Einheiten ab, statt kaputte anzulegen", () => {
+    expect(externZuEinheit(null)).toBe(null);
+    expect(externZuEinheit({ ...lauf, id: undefined })).toBe(null);
+    expect(externZuEinheit({ ...lauf, start_date_local: "keinDatum", start_date: null })).toBe(null);
+    expect(externZuEinheit({ ...lauf, moving_time: 0, elapsed_time: 0 })).toBe(null);
   });
 
   it("uebernimmt eine Einheit kein zweites Mal", () => {
-    const vorhanden = [{ id: "strava-998877", stravaId: "998877", sport: "laufen" }];
-    expect(neueStravaEinheiten([lauf], vorhanden)).toEqual([]);
-    // Auch innerhalb EINER Antwort nicht, falls Strava sie doppelt liefert.
-    expect(neueStravaEinheiten([lauf, lauf], [])).toHaveLength(1);
+    const vorhanden = [{ id: "extern-i998877", externId: "i998877", sport: "laufen" }];
+    expect(neueExterneEinheiten([lauf], vorhanden)).toEqual([]);
+    expect(neueExterneEinheiten([lauf, lauf], [])).toHaveLength(1);
   });
 
   it("laesst eine von Hand eingetragene Einheit unangetastet", () => {
-    // Sie hat keine stravaId. Die App kann nicht wissen, ob es derselbe Lauf
-    // ist - sie stillschweigend zu verschlucken waere schlimmer, als sie
-    // zweimal zu zeigen, wo man sie sieht und loeschen kann.
-    const vonHand = [{ id: "x", stravaId: null, sport: "laufen", quelle: "hand" }];
-    expect(neueStravaEinheiten([lauf], vonHand)).toHaveLength(1);
+    const vonHand = [{ id: "x", externId: null, sport: "laufen", quelle: "hand" }];
+    expect(neueExterneEinheiten([lauf], vonHand)).toHaveLength(1);
   });
 
-  it("erkennt ein abgelaufenes Zugangstoken mit Sicherheitsrand", () => {
-    const jetzt = 1_000_000_000_000;
-    const inEinerStunde = Math.floor(jetzt / 1000) + 3600;
-    expect(stravaTokenAbgelaufen({ accessToken: "a", expiresAt: inEinerStunde }, jetzt)).toBe(false);
-    // Genau jetzt ablaufend gilt als abgelaufen - eine Minute Rand, damit der
-    // Abgleich nicht mitten im Aufruf ungueltig wird.
-    expect(stravaTokenAbgelaufen({ accessToken: "a", expiresAt: Math.floor(jetzt / 1000) + 30 }, jetzt)).toBe(true);
-    expect(stravaTokenAbgelaufen({ accessToken: "a", expiresAt: 0 }, jetzt)).toBe(true);
-    expect(stravaTokenAbgelaufen({ expiresAt: inEinerStunde }, jetzt)).toBe(true);
-    expect(stravaTokenAbgelaufen(null, jetzt)).toBe(true);
+  it("baut den Anmelde-Kopf nach dem Muster von intervals.icu", () => {
+    // Basic-Auth mit festem Benutzernamen "API_KEY".
+    expect(intervalsAuthKopf("abc123")).toBe("Basic " + btoa("API_KEY:abc123"));
+    // Leerzeichen aus dem Kopieren stoeren nicht.
+    expect(intervalsAuthKopf("  abc123 ")).toBe("Basic " + btoa("API_KEY:abc123"));
+  });
+
+  it("holt drei Tage Ueberlappung, damit nichts durchs Raster faellt", () => {
+    // Garmin schiebt eine Aufzeichnung manchmal erst Tage spaeter weiter.
+    const jetzt = new Date(2026, 8, 11, 12, 0, 0).getTime();
+    const z = abgleichZeitraum(new Date(2026, 8, 10, 12, 0, 0).getTime(), jetzt);
+    expect(z.oldest).toBe("2026-09-07");
+    // Bis morgen, damit die laufende Einheit von heute Abend sicher drin ist.
+    expect(z.newest).toBe("2026-09-12");
+  });
+
+  it("holt beim ersten Mal die letzten 60 Tage", () => {
+    const jetzt = new Date(2026, 8, 11, 12, 0, 0).getTime();
+    expect(abgleichZeitraum(0, jetzt).oldest).toBe("2026-07-13");
   });
 });

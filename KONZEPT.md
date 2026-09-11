@@ -703,60 +703,82 @@ Spitzen, nicht im Verhältnis zur geleisteten Arbeit, und die Kalorienschätzung
 bekanntermaßen ungenau. Der Bezug zum eigenen Bestwert ist die ehrlichere Größe; die Pulsdaten
 taugen daneben als Beobachtung, nicht als Bewertung.
 
-**Die Uhr liefert die Einheiten selbst – über Strava, mit einem Pförtner dazwischen.**
-Der Weg ist Garmin → Strava → App. Garmins eigene Schnittstelle steht nur Firmen offen, Strava ist
-die öffentlich zugängliche – und Garmin schiebt ohnehin schon dorthin.
+**Die Uhr liefert die Einheiten selbst – über intervals.icu.**
+Der Weg ist Garmin → intervals.icu → App. Garmins eigene Schnittstelle steht nur Firmen offen.
 
-Das erzwingt den ersten echten Serverbaustein dieser App, und zwar aus einem Grund, der sich nicht
-wegbauen lässt: Strava verlangt für den Zugriff ein Client Secret und kennt kein Verfahren, das
-ohne auskäme (kein PKCE). Die App wird als Dateisammlung ausgeliefert; alles in ihr ist auslesbar.
-Ein Secret kann dort also nicht liegen. Der **Pförtner** (`strava-helfer/worker.js`, ein
-Cloudflare-Worker) ist das einzige Stück, das es kennt.
+**Zuerst war Strava der Zwischenschritt, und der Weg war fertig gebaut.** Dann stellte sich beim
+Einrichten heraus: Strava verlangt seit Juni 2026 für den API-Zugang ein bezahltes Abo. Das ist
+keine Einstellung, die sich umgehen lässt, sondern die Geschäftsentscheidung dahinter – Strava
+begründet sie mit dem Datenhunger von KI-Firmen. Für eine App, die eine Person für sich selbst
+benutzt, steht der Preis in keinem Verhältnis. [intervals.icu](https://intervals.icu) ist ein
+kostenloser Auswertungsdienst, holt sich die Einheiten ebenfalls selbst von Garmin und gibt jedem
+Nutzer einen persönlichen Schlüssel, ohne Abo.
 
-Was bewusst **nicht** in den Pförtner gewandert ist, damit der Charakter der App erhalten bleibt:
+Der Wechsel hat den Anschluss **einfacher** gemacht, nicht komplizierter: Weg sind der
+OAuth-Tanz, die Weiterleitung zu einem fremden Anmeldebildschirm, der Code-Tausch und die alle
+sechs Stunden ablaufenden Token. Geblieben ist ein Aufruf mit einem Schlüssel im Kopf der Anfrage.
 
-- Er ist **zustandslos**. Keine Datenbank, keine Protokolle, kein Konto.
-- Er **wertet nichts aus**. Antworten von Strava reicht er unverändert durch; gerechnet wird auf
-  dem Gerät. Alle Trainingsdaten liegen weiterhin ausschließlich dort.
-- Er kennt die Zugangsdaten des Nutzers nur für die Dauer eines Aufrufs; Access- und Refresh-Token
-  liegen in der App.
+**Der Pförtner ist jetzt optional – und hütet kein Geheimnis mehr.**
+Beim Strava-Weg war er zwingend: Strava verlangt ein Client Secret, und das kann in einer App, die
+als Dateisammlung ausgeliefert wird, nicht liegen. intervals.icu braucht nur den persönlichen
+Schlüssel, und der gehört ohnehin auf das Gerät. Der Pförtner löst deshalb nur noch ein einziges
+Problem: Ein Browser darf eine fremde Adresse bloß anrufen, wenn diese zustimmt (CORS). Ob
+intervals.icu das tut, ließ sich beim Bauen **nicht** prüfen – der Dienst war aus der
+Entwicklungsumgebung nicht erreichbar.
 
-Zwei Absicherungen, die nicht nachträglich dazugehören, sondern zum Entwurf: Der Pförtner leitet
-nur an Adressen aus einer fest verdrahteten Positivliste zurück – ohne sie wäre er eine offene
-Weiterleitung, mit der sich Fremde die Vertrauenswürdigkeit der Adresse ausleihen könnten. Und er
-reicht nur die drei Abfrage-Parameter durch, die gebraucht werden, statt beliebige weiterzugeben.
+Daraus folgt eine bewusste Entscheidung gegen Rateversuche: Die Helfer-Adresse ist **ein leeres
+Feld**, das man nur füllt, wenn es ohne nicht geht. Kein Erraten, keine zwei Verfahren
+nebeneinander, die sich gegenseitig absichern – ein Pfad mit einer Stellschraube. Scheitert der
+Aufruf ohne Statuscode, nennt die Meldung genau diesen Fall und verweist auf Teil 2 der Anleitung,
+statt den Verdacht auf den Schlüssel zu lenken.
 
-**Die Zugangsdaten stehen bewusst nicht in der Datensicherung.** `strava-token` fehlt in
-`BACKUP_KEYS`, während `strava-einstellung` drinsteht. Eine Sicherungsdatei gibt man weiter oder
-legt sie in eine Cloud; ein gültiger Zugang zum Strava-Konto gehört da nicht hinein. Nach dem
-Zurückspielen bleibt die Helfer-Adresse erhalten, die Anmeldung ist einmal zu wiederholen – der
-richtige Preis.
+Der Pförtner prüft die Sportler-Nummer gegen ein festes Muster (Ziffern, optional ein `i` davor).
+Ungeprüft übernommen ließe sich der Aufruf über `../` auf eine ganz andere Adresse umbiegen. Und
+er reicht nur die drei benötigten Abfrage-Parameter weiter, statt beliebige durchzulassen.
+
+**Der Schlüssel steht bewusst nicht in der Datensicherung.** `ausdauer-schluessel` fehlt in
+`BACKUP_KEYS`, `ausdauer-abgleich` (Sportler-Nummer, Helfer-Adresse, Zeitpunkt) steht drin. Eine
+Sicherungsdatei gibt man weiter oder legt sie in eine Cloud; ein gültiger Kontozugang gehört da
+nicht hinein. Nach dem Zurückspielen bleibt alles erhalten außer dem Schlüssel – der ist einmal
+neu einzutragen.
 
 Weitere Entscheidungen beim Übernehmen:
 
 - **Krafttrainings von der Uhr werden keine Ausdauer-Einheiten.** Sonst stünde dasselbe Training
   doppelt in der Statistik: einmal mit Sätzen aus der App, einmal als Ausdauer von der Uhr. Sie
-  werden trotzdem gespeichert (`strava-kraft-aktivitaeten`), um später über die Uhrzeit dem
+  werden trotzdem gespeichert (`externe-kraft-aktivitaeten`), um später über die Uhrzeit dem
   passenden Training zugeordnet zu werden – beim Abgleich weggeworfen wären sie nicht mehr zu holen.
+- **Die Ortszeit wird als Ortszeit gelesen.** intervals.icu liefert `start_date_local` ohne
+  Zeitzonen-Anhang; JavaScript liest das als lokale Zeit, und genau das ist gewollt – der
+  Kalendertag soll der Tag sein, an dem man tatsächlich gelaufen ist. Ein Abendlauf würde sonst
+  auf den Vortag rutschen.
 - **Gerechnet wird mit `moving_time`, nicht `elapsed_time`.** Der Ø-Puls bezieht sich auf die Zeit
   in Bewegung; eine Ampelpause mitzurechnen zöge die Belastung nach oben, obwohl nichts passiert
   ist. `elapsed_time` wird mitgespeichert, weil für die Zuordnung zu einem Training die Uhrzeit von
   Anfang bis Ende zählt.
-- **Kalorien bleiben leer.** Die Übersichtsabfrage von Strava liefert keine; sie stünden nur in der
-  Einzelabfrage je Aktivität. Lieber kein Wert als ein erfundener.
+- **Mehrere Feldnamen je Angabe.** Die genaue Schreibweise der Antwort ließ sich nicht prüfen
+  (siehe oben), deshalb werden zwei bis drei plausible Namen abgeklopft. Und wenn Einheiten
+  ankommen, aber keine davon lesbar ist, sagt die App genau das – statt „keine neuen Einheiten" zu
+  melden und die Fehlersuche zu verschleppen.
+- **Kalorien bleiben leer.** Lieber kein Wert als ein erfundener.
 - **Drei Tage Überlappung** beim Abgleich statt exakt ab dem letzten Mal: Garmin schiebt eine
-  Aufzeichnung manchmal Tage später zu Strava. Doppelt holen schadet nicht, die `stravaId`
+  Aufzeichnung manchmal Tage später weiter. Doppelt holen schadet nicht, die `externId`
   verhindert Dopplungen.
-- **Eine von Hand eingetragene Einheit wird nie als Dopplung erkannt.** Sie hat keine `stravaId`,
+- **Eine von Hand eingetragene Einheit wird nie als Dopplung erkannt.** Sie hat keine `externId`,
   und die App kann nicht wissen, ob es derselbe Lauf ist. Sie stillschweigend zu verschlucken wäre
   schlimmer, als sie zweimal zu zeigen, wo man sie sieht und löschen kann.
 - **Unbekannte Sportarten landen unter „Sonstige"**, statt verworfen zu werden: Die Einheit hat
   stattgefunden, und eine Sportart, die diese App nicht kennt, ist kein Grund, die Arbeit zu
   verschweigen.
 - **Abgeglichen wird beim Öffnen, höchstens stündlich.** Automatisch war der Sinn der Anbindung;
-  öfter als stündlich brächte nichts, weil die Uhr ohnehin nur alle paar Stunden zu Strava schiebt,
-  und Strava die Zahl der Abfragen begrenzt. Ohne Neues bleibt der Abgleich stumm – eine Meldung
-  „keine neuen Einheiten" bei jedem Öffnen wäre eine Meldung ohne Anlass.
+  öfter brächte nichts, weil die Uhr ohnehin nur alle paar Stunden weiterschiebt. Ohne Neues bleibt
+  der Abgleich stumm – eine Meldung „keine neuen Einheiten" bei jedem Öffnen wäre eine Meldung ohne
+  Anlass.
+
+**Die Eingabe von Hand bleibt.** Sie war zuerst nur als Rückfallebene gedacht und hat sich prompt
+bewährt, als Strava wegfiel: Die Ausdauer-Einheiten funktionierten weiter, während der Weg zur Uhr
+neu gebaut wurde. Eine ganze Trainingsart allein an einen fremden Anbieter zu hängen, wäre der
+Fehler gewesen.
 
 ---
 
@@ -770,7 +792,7 @@ Weitere Entscheidungen beim Übernehmen:
   Maß. Die „gemeinsame Belastungswährung" für Kraft und Ausdauer ist damit bewusst **nicht**
   entstanden und bleibt offen, falls sie je gewollt ist.
 - **Garmin-Aufzeichnung einem Kraft-Training zuordnen** über die Überschneidung der Uhrzeiten. Die
-  Daten liegen bereit (`strava-kraft-aktivitaeten`), und `log.date` ist der Start des Trainings,
+  Daten liegen bereit (`externe-kraft-aktivitaeten`), und `log.date` ist der Start des Trainings,
   `durationMinutes` seine Länge – damit lässt sich die Überschneidung sauber bestimmen, statt nur
   Startzeitpunkte zu vergleichen. Anzeigen wird es Dauer und Puls als Beobachtung am Training,
   ohne Wirkung auf die Belastungsrechnung (siehe oben).

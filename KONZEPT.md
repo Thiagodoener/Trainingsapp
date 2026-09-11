@@ -697,11 +697,66 @@ als Messung des Maximums. Einheiten ohne Pulsaufzeichnung fehlen zwangsläufig i
 die Karte zählt sie und sagt es dazu, statt die Woche stillschweigend zu niedrig auszuweisen.
 
 **Beim Krafttraining zählt der Puls bewusst nicht mit.** Was die Uhr während eines Kraft-Trainings
-aufgezeichnet hat, wird später als Zusatzinfo am Training stehen – Dauer, Ø-Puls, Kalorien –, aber
-nicht in „Belastung pro Muskelgruppe" einfließen. Beim Heben steigt der Puls durch Pressatmung und
-kurze Spitzen, nicht im Verhältnis zur geleisteten Arbeit, und die Kalorienschätzung der Uhr ist
-dort bekanntermaßen ungenau. Der Bezug zum eigenen Bestwert ist die ehrlichere Größe; die Pulsdaten
+aufgezeichnet hat, wird später als Zusatzinfo am Training stehen – Dauer, Ø-Puls –, aber nicht in
+„Belastung pro Muskelgruppe" einfließen. Beim Heben steigt der Puls durch Pressatmung und kurze
+Spitzen, nicht im Verhältnis zur geleisteten Arbeit, und die Kalorienschätzung der Uhr ist dort
+bekanntermaßen ungenau. Der Bezug zum eigenen Bestwert ist die ehrlichere Größe; die Pulsdaten
 taugen daneben als Beobachtung, nicht als Bewertung.
+
+**Die Uhr liefert die Einheiten selbst – über Strava, mit einem Pförtner dazwischen.**
+Der Weg ist Garmin → Strava → App. Garmins eigene Schnittstelle steht nur Firmen offen, Strava ist
+die öffentlich zugängliche – und Garmin schiebt ohnehin schon dorthin.
+
+Das erzwingt den ersten echten Serverbaustein dieser App, und zwar aus einem Grund, der sich nicht
+wegbauen lässt: Strava verlangt für den Zugriff ein Client Secret und kennt kein Verfahren, das
+ohne auskäme (kein PKCE). Die App wird als Dateisammlung ausgeliefert; alles in ihr ist auslesbar.
+Ein Secret kann dort also nicht liegen. Der **Pförtner** (`strava-helfer/worker.js`, ein
+Cloudflare-Worker) ist das einzige Stück, das es kennt.
+
+Was bewusst **nicht** in den Pförtner gewandert ist, damit der Charakter der App erhalten bleibt:
+
+- Er ist **zustandslos**. Keine Datenbank, keine Protokolle, kein Konto.
+- Er **wertet nichts aus**. Antworten von Strava reicht er unverändert durch; gerechnet wird auf
+  dem Gerät. Alle Trainingsdaten liegen weiterhin ausschließlich dort.
+- Er kennt die Zugangsdaten des Nutzers nur für die Dauer eines Aufrufs; Access- und Refresh-Token
+  liegen in der App.
+
+Zwei Absicherungen, die nicht nachträglich dazugehören, sondern zum Entwurf: Der Pförtner leitet
+nur an Adressen aus einer fest verdrahteten Positivliste zurück – ohne sie wäre er eine offene
+Weiterleitung, mit der sich Fremde die Vertrauenswürdigkeit der Adresse ausleihen könnten. Und er
+reicht nur die drei Abfrage-Parameter durch, die gebraucht werden, statt beliebige weiterzugeben.
+
+**Die Zugangsdaten stehen bewusst nicht in der Datensicherung.** `strava-token` fehlt in
+`BACKUP_KEYS`, während `strava-einstellung` drinsteht. Eine Sicherungsdatei gibt man weiter oder
+legt sie in eine Cloud; ein gültiger Zugang zum Strava-Konto gehört da nicht hinein. Nach dem
+Zurückspielen bleibt die Helfer-Adresse erhalten, die Anmeldung ist einmal zu wiederholen – der
+richtige Preis.
+
+Weitere Entscheidungen beim Übernehmen:
+
+- **Krafttrainings von der Uhr werden keine Ausdauer-Einheiten.** Sonst stünde dasselbe Training
+  doppelt in der Statistik: einmal mit Sätzen aus der App, einmal als Ausdauer von der Uhr. Sie
+  werden trotzdem gespeichert (`strava-kraft-aktivitaeten`), um später über die Uhrzeit dem
+  passenden Training zugeordnet zu werden – beim Abgleich weggeworfen wären sie nicht mehr zu holen.
+- **Gerechnet wird mit `moving_time`, nicht `elapsed_time`.** Der Ø-Puls bezieht sich auf die Zeit
+  in Bewegung; eine Ampelpause mitzurechnen zöge die Belastung nach oben, obwohl nichts passiert
+  ist. `elapsed_time` wird mitgespeichert, weil für die Zuordnung zu einem Training die Uhrzeit von
+  Anfang bis Ende zählt.
+- **Kalorien bleiben leer.** Die Übersichtsabfrage von Strava liefert keine; sie stünden nur in der
+  Einzelabfrage je Aktivität. Lieber kein Wert als ein erfundener.
+- **Drei Tage Überlappung** beim Abgleich statt exakt ab dem letzten Mal: Garmin schiebt eine
+  Aufzeichnung manchmal Tage später zu Strava. Doppelt holen schadet nicht, die `stravaId`
+  verhindert Dopplungen.
+- **Eine von Hand eingetragene Einheit wird nie als Dopplung erkannt.** Sie hat keine `stravaId`,
+  und die App kann nicht wissen, ob es derselbe Lauf ist. Sie stillschweigend zu verschlucken wäre
+  schlimmer, als sie zweimal zu zeigen, wo man sie sieht und löschen kann.
+- **Unbekannte Sportarten landen unter „Sonstige"**, statt verworfen zu werden: Die Einheit hat
+  stattgefunden, und eine Sportart, die diese App nicht kennt, ist kein Grund, die Arbeit zu
+  verschweigen.
+- **Abgeglichen wird beim Öffnen, höchstens stündlich.** Automatisch war der Sinn der Anbindung;
+  öfter als stündlich brächte nichts, weil die Uhr ohnehin nur alle paar Stunden zu Strava schiebt,
+  und Strava die Zahl der Abfragen begrenzt. Ohne Neues bleibt der Abgleich stumm – eine Meldung
+  „keine neuen Einheiten" bei jedem Öffnen wäre eine Meldung ohne Anlass.
 
 ---
 
@@ -714,10 +769,11 @@ taugen daneben als Beobachtung, nicht als Bewertung.
 - **Ausdauer** – als eigene Einheiten gebaut (siehe oben), aber mit dem Puls statt Session-RPE als
   Maß. Die „gemeinsame Belastungswährung" für Kraft und Ausdauer ist damit bewusst **nicht**
   entstanden und bleibt offen, falls sie je gewollt ist.
-- **Strava-Anbindung** für Ausdauer-Einheiten und die Zuordnung der Garmin-Aufzeichnung zu einem
-  Kraft-Training über das Zeitfenster (±5 Min.). Vorbereitet ist beides: `quelle` und `stravaId`
-  liegen an jeder Einheit, die Startzeit ist Pflichtfeld. Braucht einen kleinen Helfer im Netz,
-  weil das Strava-Passwort nicht in eine reine Browser-App darf.
+- **Garmin-Aufzeichnung einem Kraft-Training zuordnen** über die Überschneidung der Uhrzeiten. Die
+  Daten liegen bereit (`strava-kraft-aktivitaeten`), und `log.date` ist der Start des Trainings,
+  `durationMinutes` seine Länge – damit lässt sich die Überschneidung sauber bestimmen, statt nur
+  Startzeitpunkte zu vergleichen. Anzeigen wird es Dauer und Puls als Beobachtung am Training,
+  ohne Wirkung auf die Belastungsrechnung (siehe oben).
 
 ### Bewusst verworfen
 

@@ -41,6 +41,7 @@ import {
   User,
   HeartPulse,
   Activity,
+  Link2,
 } from "lucide-react";
 import {
   LineChart,
@@ -2346,6 +2347,120 @@ export function getEnduranceLoadSeries(enduranceLogs, profil, weekCount = 21, no
   };
 }
 
+// ---------------------------------------------------------------------------
+// Strava: Einheiten von der Uhr übernehmen
+//
+// Der Weg ist Garmin -> Strava -> hier. Strava ist die Schnittstelle, die es
+// öffentlich gibt; Garmins eigene ist nur für Firmen zugänglich.
+//
+// Was Strava in der Übersichtsabfrage liefert: Start, Dauer, Strecke, Sportart
+// und - falls aufgezeichnet - Durchschnitts- und Maximalpuls. Was sie NICHT
+// liefert: Sätze und Wiederholungen eines Krafttrainings. Die kommen also
+// weiterhin aus der App selbst, und daran wird sich nichts ändern.
+// ---------------------------------------------------------------------------
+
+// Strava kennt deutlich mehr Sportarten als diese App. Zusammengefasst wird
+// nach dem, was für die Belastung zählt, nicht nach dem Gerät: Rennrad,
+// Gravel und MTB sind hier alle "Rad".
+const STRAVA_SPORTARTEN = {
+  Run: "laufen", TrailRun: "laufen", VirtualRun: "laufen",
+  Ride: "rad", VirtualRide: "rad", GravelRide: "rad", MountainBikeRide: "rad",
+  EBikeRide: "rad", Handcycle: "rad",
+  Swim: "schwimmen",
+  Rowing: "rudern", VirtualRow: "rudern", Kayaking: "rudern", Canoeing: "rudern",
+  Hike: "wandern", Walk: "wandern",
+  Elliptical: "airbike", StairStepper: "airbike",
+};
+
+// Diese Arten werden NICHT zu Ausdauer-Einheiten. Es sind Krafttrainings, die
+// in der App bereits als richtiges Training mit Sätzen und Wiederholungen
+// stehen. Als zweite Einheit daneben gezählt wäre dasselbe Training doppelt
+// in der Statistik - einmal als Kraft, einmal als Ausdauer.
+const STRAVA_KRAFT_ARTEN = ["WeightTraining", "Crossfit"];
+
+export function stravaIstKraft(aktivitaet) {
+  const art = aktivitaet?.sport_type || aktivitaet?.type || "";
+  return STRAVA_KRAFT_ARTEN.includes(art);
+}
+
+// Unbekannte Sportarten landen bei "sonstige", statt verworfen zu werden: Die
+// Einheit hat stattgefunden, und eine Sportart, die diese App nicht kennt, ist
+// kein Grund, die geleistete Arbeit zu verschweigen.
+export function stravaSportart(aktivitaet) {
+  const art = aktivitaet?.sport_type || aktivitaet?.type || "";
+  return STRAVA_SPORTARTEN[art] || "sonstige";
+}
+
+// Eine Strava-Aktivität in eine Ausdauer-Einheit dieser App übersetzen.
+//
+// Dauer: moving_time, nicht elapsed_time. Der Durchschnittspuls, mit dem
+// gerechnet wird, bezieht sich auf die Zeit in Bewegung; eine Ampelpause mit
+// hineinzurechnen würde die Belastung nach oben ziehen, obwohl in dieser Zeit
+// nichts passiert ist. elapsed_time wird trotzdem mitgespeichert - für die
+// Zuordnung zu einem Krafttraining zählt die Uhrzeit von Anfang bis Ende.
+export function stravaZuEinheit(aktivitaet) {
+  const id = aktivitaet?.id;
+  const start = new Date(aktivitaet?.start_date).getTime();
+  if (!id || !Number.isFinite(start)) return null;
+  if (stravaIstKraft(aktivitaet)) return null;
+  const dauer = Math.round(toNum(aktivitaet?.moving_time) || toNum(aktivitaet?.elapsed_time));
+  if (!(dauer > 0)) return null;
+  return {
+    id: `strava-${id}`,
+    stravaId: String(id),
+    quelle: "strava",
+    name: aktivitaet?.name || "",
+    date: new Date(start).toISOString(),
+    sport: stravaSportart(aktivitaet),
+    durationSeconds: dauer,
+    elapsedSeconds: Math.round(toNum(aktivitaet?.elapsed_time)) || dauer,
+    distanceMeters: toNum(aktivitaet?.distance) > 0 ? Math.round(toNum(aktivitaet.distance)) : null,
+    avgHr: toNum(aktivitaet?.average_heartrate) > 0 ? Math.round(toNum(aktivitaet.average_heartrate)) : null,
+    maxHr: toNum(aktivitaet?.max_heartrate) > 0 ? Math.round(toNum(aktivitaet.max_heartrate)) : null,
+    // Die Übersichtsabfrage von Strava liefert keine Kalorien - die stünden
+    // nur in der Einzelabfrage je Aktivität. Das Feld bleibt deshalb leer,
+    // statt eine Zahl zu erfinden.
+    calories: null,
+    notiz: "",
+  };
+}
+
+// Welche Aktivitäten sind wirklich neu? Verglichen wird über die stravaId,
+// nicht über den Zeitpunkt: Ein zweiter Abgleich desselben Zeitraums darf
+// nichts doppelt anlegen, und Strava kann eine Einheit auch nachträglich
+// ändern, ohne dass sie deshalb eine andere wäre.
+//
+// Eine von Hand eingetragene Einheit wird dabei NICHT als Dopplung erkannt -
+// sie hat keine stravaId. Das ist Absicht: Die App kann nicht wissen, ob der
+// Lauf von Hand derselbe ist wie der von der Uhr. Ihn stillschweigend zu
+// verschlucken wäre schlimmer, als ihn zweimal zu zeigen, wo man ihn sieht
+// und löschen kann.
+export function neueStravaEinheiten(aktivitaeten, vorhandene) {
+  const bekannt = new Set(
+    (Array.isArray(vorhandene) ? vorhandene : [])
+      .map((e) => e?.stravaId)
+      .filter(Boolean)
+      .map(String)
+  );
+  const gesehen = new Set();
+  return (Array.isArray(aktivitaeten) ? aktivitaeten : [])
+    .map(stravaZuEinheit)
+    .filter((e) => {
+      if (!e || bekannt.has(e.stravaId) || gesehen.has(e.stravaId)) return false;
+      gesehen.add(e.stravaId);
+      return true;
+    });
+}
+
+// Ein Zugangstoken gilt bei Strava sechs Stunden. Eine Minute Sicherheitsrand,
+// damit der Abgleich nicht ausgerechnet während des Aufrufs abläuft.
+export function stravaTokenAbgelaufen(verbindung, nowTs = Date.now()) {
+  const gueltigBis = toNum(verbindung?.expiresAt);
+  if (!verbindung?.accessToken) return true;
+  if (!(gueltigBis > 0)) return true;
+  return nowTs >= gueltigBis * 1000 - 60000;
+}
+
 // Wochenweise Anzahl absolvierter Atemübungs-Sitzungen - keine Gruppen wie
 // bei den Muskelgruppen, nur eine einzelne Reihe, dieselbe rollierende
 // 7-Tage-Fenster-Logik wie oben.
@@ -3135,6 +3250,13 @@ const BACKUP_KEYS = [
   "breathing-logs",
   "endurance-logs",
   "puls-profil",
+  "strava-einstellung",
+  "strava-kraft-aktivitaeten",
+  // "strava-token" steht hier bewusst NICHT: In der Sicherungsdatei lägen
+  // sonst gültige Zugangsdaten zum Strava-Konto. Eine Sicherung gibt man
+  // weiter oder legt sie in eine Cloud - ein Zugang gehört da nicht hinein.
+  // Nach dem Zurückspielen bleibt die Helfer-Adresse erhalten, die Anmeldung
+  // muss einmal wiederholt werden. Das ist der richtige Preis.
   "exercise-subgroup-overrides",
   "exercise-equipment-overrides",
   "exercise-secondary-overrides",
@@ -3441,6 +3563,16 @@ function TrainingAppInner() {
   // Ruhepuls, Maximalpuls und die Formel-Konstanten. Ohne diese drei Angaben
   // wird keine Ausdauer-Belastung gerechnet - erfunden wird hier nichts.
   const [pulsProfil, setPulsProfil] = useState({ ruhepuls: null, maxpuls: null, formel: null });
+  // Adresse des Pförtners und wann zuletzt abgeglichen wurde. Getrennt von den
+  // Zugangsdaten darunter, weil nur dieser Teil in die Sicherung darf.
+  const [stravaEinstellung, setStravaEinstellung] = useState({ workerUrl: "", lastSyncAt: null });
+  const [stravaToken, setStravaToken] = useState(null);
+  // Krafttrainings, die von der Uhr kamen. Sie werden NICHT zu Ausdauer-
+  // Einheiten (das Training steht ja schon mit Sätzen in der App), sondern
+  // aufbewahrt, um später über die Uhrzeit dem passenden Training zugeordnet
+  // zu werden. Beim Abgleich weggeworfen wären sie später nicht mehr zu holen.
+  const [stravaKraftAktivitaeten, setStravaKraftAktivitaeten] = useState([]);
+  const [stravaStatus, setStravaStatus] = useState({ laeuft: false, meldung: "" });
   const [breathingManagerOpen, setBreathingManagerOpen] = useState(false);
   // null = Liste, sonst die gerade bearbeitete Übung (ohne id = neu).
   const [breathingEditing, setBreathingEditing] = useState(null);
@@ -3499,7 +3631,7 @@ function TrainingAppInner() {
 
   useEffect(() => {
     (async () => {
-      const [p, l, c, f, en, no, tb, gi, active, prog, activeProg, sg, ce, cc, eq, th, gy, activeGy, restEnd, brEx, brLogs, dw, di, dsh, bnd, snd, bw, sec, secSub, ausdauer, puls] = await Promise.all([
+      const [p, l, c, f, en, no, tb, gi, active, prog, activeProg, sg, ce, cc, eq, th, gy, activeGy, restEnd, brEx, brLogs, dw, di, dsh, bnd, snd, bw, sec, secSub, ausdauer, puls, stravaSet, stravaTok, stravaKraft] = await Promise.all([
         loadJSON("training-plans", []),
         loadJSON("workout-logs", []),
         loadJSON("custom-exercises", []),
@@ -3531,6 +3663,9 @@ function TrainingAppInner() {
         loadJSON("exercise-secondary-subgroup-overrides", {}),
         loadJSON("endurance-logs", []),
         loadJSON("puls-profil", null),
+        loadJSON("strava-einstellung", null),
+        loadJSON("strava-token", null),
+        loadJSON("strava-kraft-aktivitaeten", []),
       ]);
       // Migration: users who already had folders before "programs" existed
       // get one default program that all their existing folders are
@@ -3565,6 +3700,9 @@ function TrainingAppInner() {
       setBreathingLogs(Array.isArray(brLogs) ? brLogs : []);
       setEnduranceLogs(Array.isArray(ausdauer) ? ausdauer : []);
       if (puls && typeof puls === "object") setPulsProfil(puls);
+      if (stravaSet && typeof stravaSet === "object") setStravaEinstellung(stravaSet);
+      if (stravaTok && typeof stravaTok === "object") setStravaToken(stravaTok);
+      setStravaKraftAktivitaeten(Array.isArray(stravaKraft) ? stravaKraft : []);
       setSession(active ? withEntryIds(active) : null);
       // A rest that already expired while the app was closed is not restored -
       // it would show a dead "0:00" bar with nothing to count down to.
@@ -3795,6 +3933,18 @@ function TrainingAppInner() {
   const persistPulsProfil = async (next) => {
     setPulsProfil(next);
     await saveJSON("puls-profil", next);
+  };
+  const persistStravaEinstellung = async (next) => {
+    setStravaEinstellung(next);
+    await saveJSON("strava-einstellung", next);
+  };
+  const persistStravaToken = async (next) => {
+    setStravaToken(next);
+    await saveJSON("strava-token", next);
+  };
+  const persistStravaKraftAktivitaeten = async (next) => {
+    setStravaKraftAktivitaeten(next);
+    await saveJSON("strava-kraft-aktivitaeten", next);
   };
 
   const createSessionFromPlan = (plan, gymId = null) => ({
@@ -4231,6 +4381,196 @@ function TrainingAppInner() {
     ]);
     return log;
   };
+  // --- Strava ---------------------------------------------------------------
+  // Die Adresse, unter der die App gerade läuft - ohne Anhängsel. Sie ist das
+  // Rückkehrziel nach der Anmeldung und muss mit der Positivliste im Pförtner
+  // übereinstimmen (siehe strava-helfer/worker.js).
+  const stravaAppUrl = () => window.location.origin + window.location.pathname;
+  // Die Adresse lässt sich mitgeben, statt sie immer aus dem Zustand zu lesen.
+  // Grund: Wer sie gerade erst eingetippt hat, löst mit demselben Tipp das
+  // Speichern UND das Verbinden aus - und der Zustand dieses Durchlaufs kennt
+  // den neuen Wert noch nicht. Ohne den Parameter stand hier die alte (leere)
+  // Adresse, und die Weiterleitung zu Strava passierte schlicht nicht.
+  const stravaBasis = (ueberschreiben) =>
+    String(ueberschreiben || stravaEinstellung?.workerUrl || "").replace(/\/+$/, "");
+
+  const stravaVerbinden = (basisUrl) => {
+    const basis = stravaBasis(basisUrl);
+    if (!basis) return;
+    window.location.href = `${basis}/login?redirect=${encodeURIComponent(stravaAppUrl())}`;
+  };
+
+  const stravaTrennen = async () => {
+    askConfirm(
+      "Verbindung zu Strava trennen? Bereits übernommene Einheiten bleiben erhalten.",
+      async () => {
+        await persistStravaToken(null);
+        showToast("Strava getrennt");
+      }
+    );
+  };
+
+  // Holt ein gültiges Zugangstoken - erneuert es über den Pförtner, wenn es
+  // abgelaufen ist. Strava-Token gelten sechs Stunden, das passiert also
+  // ständig und darf keine Bedienung kosten.
+  const stravaGueltigesToken = async (basisUrl) => {
+    if (!stravaToken?.refreshToken) return null;
+    if (!stravaTokenAbgelaufen(stravaToken)) return stravaToken.accessToken;
+    const antwort = await fetch(`${stravaBasis(basisUrl)}/token`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ refresh_token: stravaToken.refreshToken }),
+    });
+    if (!antwort.ok) throw new Error("Die Anmeldung bei Strava ist abgelaufen.");
+    const daten = await antwort.json();
+    const neu = {
+      accessToken: daten.access_token,
+      // Strava gibt bei jeder Erneuerung ein neues Refresh-Token aus. Das alte
+      // weiterzuverwenden führt beim übernächsten Mal zum Abbruch.
+      refreshToken: daten.refresh_token || stravaToken.refreshToken,
+      expiresAt: daten.expires_at,
+    };
+    await persistStravaToken(neu);
+    return neu.accessToken;
+  };
+
+  const stravaAbgleichen = async ({ still = false, basisUrl } = {}) => {
+    const basis = stravaBasis(basisUrl);
+    if (!stravaToken?.refreshToken || !basis) return;
+    if (stravaStatus.laeuft) return;
+    setStravaStatus({ laeuft: true, meldung: "" });
+    try {
+      const token = await stravaGueltigesToken(basis);
+      if (!token) throw new Error("Keine gültige Anmeldung.");
+      // Drei Tage Überlappung statt exakt ab dem letzten Abgleich: Garmin
+      // schiebt eine Aufzeichnung manchmal erst Tage später zu Strava, und
+      // ohne Überlappung fiele sie für immer durchs Raster. Doppelt holen
+      // schadet nichts, die stravaId verhindert Dopplungen.
+      const seit = stravaEinstellung?.lastSyncAt
+        ? Math.floor(stravaEinstellung.lastSyncAt / 1000) - 3 * 86400
+        : Math.floor((Date.now() - 60 * 86400000) / 1000);
+      const antwort = await fetch(`${stravaBasis()}/activities?after=${seit}&per_page=100`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (!antwort.ok) throw new Error(`Strava antwortet mit Fehler ${antwort.status}.`);
+      const aktivitaeten = await antwort.json();
+      if (!Array.isArray(aktivitaeten)) throw new Error("Unerwartete Antwort von Strava.");
+
+      const neue = neueStravaEinheiten(aktivitaeten, enduranceLogs);
+      if (neue.length > 0) {
+        // In EINEM Rutsch speichern, nicht je Einheit einzeln: Mehrere
+        // aufeinanderfolgende Aufrufe läsen alle denselben veralteten Stand,
+        // und alle bis auf den letzten gingen verloren.
+        await persistEnduranceLogs([...enduranceLogs, ...neue]);
+        await persistCalendarEntries([
+          ...calendarEntries,
+          ...neue.map((e) => ({
+            id: uid(),
+            date: toDateKey(new Date(e.date)),
+            type: "endurance",
+            enduranceId: e.id,
+          })),
+        ]);
+      }
+
+      // Krafttrainings von der Uhr: nicht als Einheit anlegen, aber aufheben.
+      const bekannteKraft = new Set(stravaKraftAktivitaeten.map((a) => String(a.stravaId)));
+      const neueKraft = aktivitaeten
+        .filter((a) => stravaIstKraft(a) && a?.id && !bekannteKraft.has(String(a.id)))
+        .map((a) => ({
+          stravaId: String(a.id),
+          name: a.name || "",
+          start: a.start_date,
+          elapsedSeconds: Math.round(toNum(a.elapsed_time)),
+          movingSeconds: Math.round(toNum(a.moving_time)),
+          avgHr: toNum(a.average_heartrate) > 0 ? Math.round(toNum(a.average_heartrate)) : null,
+          maxHr: toNum(a.max_heartrate) > 0 ? Math.round(toNum(a.max_heartrate)) : null,
+        }));
+      if (neueKraft.length > 0) {
+        await persistStravaKraftAktivitaeten([...stravaKraftAktivitaeten, ...neueKraft]);
+      }
+
+      await persistStravaEinstellung({ ...stravaEinstellung, lastSyncAt: Date.now() });
+      setStravaStatus({ laeuft: false, meldung: "" });
+      if (!still) {
+        showToast(
+          neue.length === 0
+            ? "Keine neuen Einheiten."
+            : neue.length === 1
+            ? "1 Einheit übernommen."
+            : `${neue.length} Einheiten übernommen.`
+        );
+      }
+    } catch (fehler) {
+      // Der Grund steht im Dialog, nicht nur als kurzer Hinweis: Wenn der
+      // Abgleich klemmt, ist die Ursache fast immer eine Einstellung, die man
+      // ohne die Meldung nicht findet.
+      setStravaStatus({ laeuft: false, meldung: fehler?.message || "Der Abgleich hat nicht geklappt." });
+      if (!still) showToast("Abgleich fehlgeschlagen");
+    }
+  };
+
+  // Rückkehr von der Strava-Anmeldung: Strava hängt einen einmalig gültigen
+  // Code an die Adresse. Der wird gegen die Zugangsdaten getauscht und sofort
+  // aus der Adresszeile entfernt - ein Neuladen würde ihn sonst ein zweites
+  // Mal einlösen wollen, und das lehnt Strava zu Recht ab.
+  useEffect(() => {
+    if (loading) return;
+    const params = new URLSearchParams(window.location.search);
+    const code = params.get("code");
+    if (!code) return;
+    const basis = stravaBasis();
+    window.history.replaceState({}, "", stravaAppUrl());
+    if (!basis) return;
+    (async () => {
+      try {
+        const antwort = await fetch(`${basis}/token`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ code, redirect: stravaAppUrl() }),
+        });
+        if (!antwort.ok) throw new Error(`Der Pförtner antwortet mit Fehler ${antwort.status}.`);
+        const daten = await antwort.json();
+        if (!daten?.refresh_token) throw new Error("Strava hat keine Zugangsdaten geschickt.");
+        await persistStravaToken({
+          accessToken: daten.access_token,
+          refreshToken: daten.refresh_token,
+          expiresAt: daten.expires_at,
+          athletName: [daten?.athlete?.firstname, daten?.athlete?.lastname].filter(Boolean).join(" "),
+        });
+        showToast("Mit Strava verbunden");
+        setStravaProfilOpen(true);
+      } catch (fehler) {
+        setStravaStatus({ laeuft: false, meldung: fehler?.message || "Die Anmeldung hat nicht geklappt." });
+        setStravaProfilOpen(true);
+      }
+    })();
+    // Nur beim ersten Laden nach der Rückkehr - danach ist der Code aus der
+    // Adresse verschwunden und es gibt nichts mehr einzulösen.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loading]);
+
+  // Beim Öffnen der App stillschweigend abgleichen, höchstens einmal pro
+  // Stunde. "Automatisch" war der Sinn der ganzen Anbindung - wer nach jedem
+  // Lauf erst ins Zahnrad-Menü tippen muss, trägt es genauso gut von Hand ein.
+  //
+  // Höchstens stündlich, weil Strava die Zahl der Abfragen begrenzt und ein
+  // Abgleich bei jedem Tabwechsel nichts brächte: Die Uhr schiebt ihre
+  // Aufzeichnung ohnehin nur alle paar Stunden zu Strava.
+  //
+  // Still: ohne Hinweis, wenn nichts Neues da ist. Ein "Keine neuen
+  // Einheiten" bei jedem Öffnen wäre eine Meldung ohne Anlass.
+  const stravaAutoGelaufen = useRef(false);
+  useEffect(() => {
+    if (loading || stravaAutoGelaufen.current) return;
+    if (!stravaToken?.refreshToken || !stravaEinstellung?.workerUrl) return;
+    const letzte = toNum(stravaEinstellung?.lastSyncAt);
+    if (letzte > 0 && Date.now() - letzte < 3600000) return;
+    stravaAutoGelaufen.current = true;
+    stravaAbgleichen({ still: true });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loading, stravaToken, stravaEinstellung]);
+
   // Löscht die Einheit und den Kalendereintrag, der auf sie zeigt - sonst
   // bliebe im Kalender ein Eintrag stehen, hinter dem nichts mehr steckt.
   const deleteEnduranceLog = (id) => {
@@ -4433,6 +4773,8 @@ function TrainingAppInner() {
   const [bodyWeightDraft, setBodyWeightDraft] = useState("");
   const [bodyWeightDate, setBodyWeightDate] = useState("");
   const [pulsProfilOpen, setPulsProfilOpen] = useState(false);
+  const [stravaProfilOpen, setStravaProfilOpen] = useState(false);
+  const [stravaUrlDraft, setStravaUrlDraft] = useState("");
   const [pulsDraft, setPulsDraft] = useState({ ruhepuls: "", maxpuls: "", formel: null });
   // Der höchste je aufgezeichnete Puls aus den eigenen Einheiten. Als Hilfe
   // beim Eintragen des Maximalpulses - aus eigenen Daten, nicht aus einer
@@ -7417,6 +7759,12 @@ function TrainingAppInner() {
               });
               setPulsProfilOpen(true);
             }}
+            stravaVerbunden={!!stravaToken?.refreshToken}
+            onEditStrava={() => {
+              setStravaUrlDraft(stravaEinstellung?.workerUrl || "");
+              setStravaStatus({ laeuft: false, meldung: "" });
+              setStravaProfilOpen(true);
+            }}
             onManageBreathing={() => { setBreathingEditing(null); setBreathingManagerOpen(true); }}
             onOpenBackup={() => setBackupOpen(true)}
             onStartWorkout={(plan, entryId) => startScheduledWorkout(plan, entryId)}
@@ -7898,6 +8246,94 @@ function TrainingAppInner() {
           onFinish={finishBreathingSession}
           onCancel={() => setBreathingSession(null)}
         />
+      )}
+
+      {stravaProfilOpen && (
+        <Modal title="Strava" onClose={() => setStravaProfilOpen(false)}>
+          <p className="deload-basis" style={{ marginTop: 0 }}>
+            Holt deine Ausdauer-Einheiten von Strava – dort landen sie
+            automatisch, sobald sich deine Garmin-Uhr synchronisiert hat.
+          </p>
+          <p className="deload-basis">
+            Krafttrainings von der Uhr werden dabei <b>nicht</b> als
+            Ausdauer-Einheit angelegt – das Training steht ja schon mit Sätzen
+            in der App. Ihre Pulsdaten werden aufbewahrt, um sie später dem
+            passenden Training zuzuordnen.
+          </p>
+
+          <label className="field-label" style={{ marginTop: 12 }}>Adresse des Helfers</label>
+          <input
+            type="text"
+            inputMode="url"
+            placeholder="https://strava-helfer.…workers.dev"
+            value={stravaUrlDraft}
+            onChange={(e) => setStravaUrlDraft(e.target.value)}
+          />
+          <p className="deload-basis" style={{ marginTop: 6 }}>
+            Die Adresse aus der Einrichtungs-Anleitung (Ordner
+            „strava-helfer“). Ohne sie geht es nicht: Das Strava-Passwort darf
+            nicht in die App selbst, weil man es dort auslesen könnte.
+          </p>
+
+          {stravaStatus.meldung && (
+            <p className="deload-basis" style={{ marginTop: 10, color: "var(--danger)" }}>
+              {stravaStatus.meldung}
+            </p>
+          )}
+
+          {stravaToken?.refreshToken ? (
+            <>
+              <p className="deload-basis" style={{ marginTop: 12 }}>
+                Verbunden{stravaToken.athletName ? ` als ${stravaToken.athletName}` : ""}.
+                {stravaEinstellung?.lastSyncAt
+                  ? ` Zuletzt abgeglichen: ${fmtDate(new Date(stravaEinstellung.lastSyncAt).toISOString())}.`
+                  : " Noch nicht abgeglichen."}
+              </p>
+              <button
+                className="btn btn-primary btn-block btn-sm"
+                style={{ marginTop: 10 }}
+                disabled={stravaStatus.laeuft}
+                onClick={async () => {
+                  const basis = stravaUrlDraft.trim().replace(/\/+$/, "");
+                  if (basis !== (stravaEinstellung?.workerUrl || "")) {
+                    await persistStravaEinstellung({ ...stravaEinstellung, workerUrl: basis });
+                  }
+                  await stravaAbgleichen({ basisUrl: basis });
+                }}
+              >
+                {stravaStatus.laeuft ? <Loader2 size={14} className="animate-spin" /> : <RotateCcw size={14} />}
+                {stravaStatus.laeuft ? " Wird abgeglichen…" : " Jetzt abgleichen"}
+              </button>
+              <button
+                className="btn btn-ghost btn-block btn-sm"
+                style={{ marginTop: 8 }}
+                onClick={stravaTrennen}
+              >
+                Verbindung trennen
+              </button>
+            </>
+          ) : (
+            <button
+              className="btn btn-primary btn-block btn-sm"
+              style={{ marginTop: 12 }}
+              disabled={!stravaUrlDraft.trim()}
+              onClick={async () => {
+                const basis = stravaUrlDraft.trim().replace(/\/+$/, "");
+                await persistStravaEinstellung({ ...stravaEinstellung, workerUrl: basis });
+                stravaVerbinden(basis);
+              }}
+            >
+              <Link2 size={14} /> Mit Strava verbinden
+            </button>
+          )}
+
+          <p className="deload-basis" style={{ marginTop: 14 }}>
+            Deine Zugangsdaten liegen nur auf diesem Gerät und kommen bewusst
+            nicht in die Datensicherung – eine weitergegebene Sicherungsdatei
+            wäre sonst ein Zugang zu deinem Strava-Konto. Nach dem
+            Zurückspielen einer Sicherung meldest du dich hier einmal neu an.
+          </p>
+        </Modal>
       )}
 
       {pulsProfilOpen && (
@@ -8701,6 +9137,8 @@ function DashboardView({
   bodyWeightNow = 0,
   pulsProfil = null,
   onEditPulsProfil = () => {},
+  stravaVerbunden = false,
+  onEditStrava = () => {},
   deloadWeeks = [],
   deloadStatusInfo = null,
   theme,
@@ -8935,6 +9373,15 @@ function DashboardView({
                 {pulsProfilVollstaendig(pulsProfil)
                   ? `${pulsProfil.ruhepuls}–${pulsProfil.maxpuls}`
                   : "fehlt"}
+              </span>
+            </button>
+            <button
+              className="program-menu-item"
+              onClick={() => { setSettingsOpen(false); onEditStrava(); }}
+            >
+              <Link2 size={14} /> Strava
+              <span style={{ marginLeft: "auto", color: "var(--text-dim)" }}>
+                {stravaVerbunden ? "verbunden" : "nicht verbunden"}
               </span>
             </button>
             <button

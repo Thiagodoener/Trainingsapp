@@ -41,6 +41,11 @@ import {
   pulsProfilVollstaendig,
   getEnduranceLoadSeries,
   TRIMP_KONSTANTEN,
+  stravaZuEinheit,
+  stravaSportart,
+  stravaIstKraft,
+  neueStravaEinheiten,
+  stravaTokenAbgelaufen,
   withSecondarySubgroupOverride,
   getExerciseSecondarySubgroups,
   set1RM,
@@ -2023,5 +2028,101 @@ describe("Ausdauer-Wochenreihe", () => {
       2
     );
     expect(reihe.current).toBeCloseTo(108.1, 1);
+  });
+});
+
+describe("Strava-Einheiten uebernehmen", () => {
+  const lauf = {
+    id: 998877,
+    name: "Runde am Fluss",
+    sport_type: "Run",
+    start_date: "2026-09-10T16:30:00Z",
+    moving_time: 2700,
+    elapsed_time: 2880,
+    distance: 8123.4,
+    average_heartrate: 150.2,
+    max_heartrate: 172.8,
+  };
+
+  it("uebersetzt eine Aktivitaet in eine Ausdauer-Einheit", () => {
+    const e = stravaZuEinheit(lauf)!;
+    expect(e.stravaId).toBe("998877");
+    expect(e.quelle).toBe("strava");
+    expect(e.sport).toBe("laufen");
+    expect(e.durationSeconds).toBe(2700);
+    expect(e.distanceMeters).toBe(8123);
+    expect(e.avgHr).toBe(150);
+    expect(e.maxHr).toBe(173);
+    expect(new Date(e.date).toISOString()).toBe("2026-09-10T16:30:00.000Z");
+  });
+
+  it("rechnet mit der Zeit in Bewegung, merkt sich aber die Gesamtdauer", () => {
+    // moving_time fuer die Belastung (der Ø-Puls bezieht sich darauf),
+    // elapsed_time fuer die spaetere Zuordnung zu einem Krafttraining.
+    const e = stravaZuEinheit(lauf)!;
+    expect(e.durationSeconds).toBe(2700);
+    expect(e.elapsedSeconds).toBe(2880);
+  });
+
+  it("erfindet keine Kalorien - die Uebersichtsabfrage liefert keine", () => {
+    expect(stravaZuEinheit(lauf)!.calories).toBe(null);
+  });
+
+  it("fasst verwandte Sportarten zusammen", () => {
+    expect(stravaSportart({ sport_type: "GravelRide" })).toBe("rad");
+    expect(stravaSportart({ sport_type: "MountainBikeRide" })).toBe("rad");
+    expect(stravaSportart({ sport_type: "TrailRun" })).toBe("laufen");
+    expect(stravaSportart({ sport_type: "Walk" })).toBe("wandern");
+    // Aeltere Aktivitaeten tragen nur "type".
+    expect(stravaSportart({ type: "Swim" })).toBe("schwimmen");
+  });
+
+  it("verliert eine unbekannte Sportart nicht, sondern bucht sie unter Sonstige", () => {
+    const e = stravaZuEinheit({ ...lauf, sport_type: "Kitesurf" })!;
+    expect(e.sport).toBe("sonstige");
+    expect(e.durationSeconds).toBe(2700);
+  });
+
+  it("macht aus einem Krafttraining KEINE Ausdauer-Einheit", () => {
+    // Sonst staende dasselbe Training doppelt in der Statistik: einmal mit
+    // Saetzen aus der App, einmal als Ausdauer von der Uhr.
+    expect(stravaIstKraft({ sport_type: "WeightTraining" })).toBe(true);
+    expect(stravaIstKraft({ sport_type: "Crossfit" })).toBe(true);
+    expect(stravaIstKraft({ sport_type: "Run" })).toBe(false);
+    expect(stravaZuEinheit({ ...lauf, sport_type: "WeightTraining" })).toBe(null);
+  });
+
+  it("weist unbrauchbare Aktivitaeten ab, statt kaputte Einheiten anzulegen", () => {
+    expect(stravaZuEinheit(null)).toBe(null);
+    expect(stravaZuEinheit({ ...lauf, id: undefined })).toBe(null);
+    expect(stravaZuEinheit({ ...lauf, start_date: "keinDatum" })).toBe(null);
+    expect(stravaZuEinheit({ ...lauf, moving_time: 0, elapsed_time: 0 })).toBe(null);
+  });
+
+  it("uebernimmt eine Einheit kein zweites Mal", () => {
+    const vorhanden = [{ id: "strava-998877", stravaId: "998877", sport: "laufen" }];
+    expect(neueStravaEinheiten([lauf], vorhanden)).toEqual([]);
+    // Auch innerhalb EINER Antwort nicht, falls Strava sie doppelt liefert.
+    expect(neueStravaEinheiten([lauf, lauf], [])).toHaveLength(1);
+  });
+
+  it("laesst eine von Hand eingetragene Einheit unangetastet", () => {
+    // Sie hat keine stravaId. Die App kann nicht wissen, ob es derselbe Lauf
+    // ist - sie stillschweigend zu verschlucken waere schlimmer, als sie
+    // zweimal zu zeigen, wo man sie sieht und loeschen kann.
+    const vonHand = [{ id: "x", stravaId: null, sport: "laufen", quelle: "hand" }];
+    expect(neueStravaEinheiten([lauf], vonHand)).toHaveLength(1);
+  });
+
+  it("erkennt ein abgelaufenes Zugangstoken mit Sicherheitsrand", () => {
+    const jetzt = 1_000_000_000_000;
+    const inEinerStunde = Math.floor(jetzt / 1000) + 3600;
+    expect(stravaTokenAbgelaufen({ accessToken: "a", expiresAt: inEinerStunde }, jetzt)).toBe(false);
+    // Genau jetzt ablaufend gilt als abgelaufen - eine Minute Rand, damit der
+    // Abgleich nicht mitten im Aufruf ungueltig wird.
+    expect(stravaTokenAbgelaufen({ accessToken: "a", expiresAt: Math.floor(jetzt / 1000) + 30 }, jetzt)).toBe(true);
+    expect(stravaTokenAbgelaufen({ accessToken: "a", expiresAt: 0 }, jetzt)).toBe(true);
+    expect(stravaTokenAbgelaufen({ expiresAt: inEinerStunde }, jetzt)).toBe(true);
+    expect(stravaTokenAbgelaufen(null, jetzt)).toBe(true);
   });
 });

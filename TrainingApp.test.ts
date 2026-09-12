@@ -49,6 +49,7 @@ import {
   abgleichZeitraum,
   kraftZuordnungAbweichung,
   ordneKraftAufzeichnungen,
+  istVerpasstePlanung,
   withSecondarySubgroupOverride,
   getExerciseSecondarySubgroups,
   set1RM,
@@ -2253,5 +2254,68 @@ describe("Garmin-Aufzeichnung dem Krafttraining zuordnen", () => {
     expect(ordneKraftAufzeichnungen([], [uhr()])).toEqual({});
     expect(ordneKraftAufzeichnungen([training()], [])).toEqual({});
     expect(ordneKraftAufzeichnungen(null, null)).toEqual({});
+  });
+});
+
+describe("Nachgetragenes Training bleibt im Kalender stehen", () => {
+  const HEUTE = "2026-09-12";
+
+  it("Regression: ein auf einen vergangenen Tag nachgetragenes Training verschwindet NICHT", () => {
+    // Der gemeldete Fehler: Man traegt ein Training fuer vorgestern ein, es
+    // wird gespeichert - und der Kalender zeigt nichts an. Die Regel
+    // "verpasste Planungen verschwinden" hat auch bewusste Nachtraege
+    // verschluckt.
+    const nachgetragen = {
+      type: "workout", date: "2026-09-09", logId: null, erstelltAm: HEUTE,
+    };
+    expect(istVerpasstePlanung(nachgetragen, HEUTE)).toBe(false);
+  });
+
+  it("eine wirklich verpasste Planung verschwindet weiterhin", () => {
+    // Am Montag fuer Mittwoch geplant, Mittwoch ist vorbei, nichts passiert.
+    // Stehen zu lassen waere nur ein Vorwurf - das bleibt so.
+    const geplantUndVerpasst = {
+      type: "workout", date: "2026-09-09", logId: null, erstelltAm: "2026-09-07",
+    };
+    expect(istVerpasstePlanung(geplantUndVerpasst, HEUTE)).toBe(true);
+  });
+
+  it("am Zieltag selbst angelegt gilt als Planung, nicht als Nachtrag", () => {
+    const amTagGeplant = {
+      type: "workout", date: "2026-09-09", logId: null, erstelltAm: "2026-09-09",
+    };
+    expect(istVerpasstePlanung(amTagGeplant, HEUTE)).toBe(true);
+  });
+
+  it("alte Eintraege ohne Entstehungstag verhalten sich wie bisher", () => {
+    const alt = { type: "workout", date: "2026-09-09", logId: null };
+    expect(istVerpasstePlanung(alt, HEUTE)).toBe(true);
+  });
+
+  it("ein absolviertes Training bleibt immer stehen", () => {
+    const gemacht = { type: "workout", date: "2026-09-09", logId: "log-1" };
+    expect(istVerpasstePlanung(gemacht, HEUTE)).toBe(false);
+  });
+
+  it("heutige und kuenftige Eintraege bleiben unangetastet", () => {
+    expect(istVerpasstePlanung({ type: "workout", date: HEUTE, logId: null }, HEUTE)).toBe(false);
+    expect(istVerpasstePlanung({ type: "workout", date: "2026-09-20", logId: null }, HEUTE)).toBe(false);
+  });
+
+  it("Aktionen und Ausdauer-Einheiten verschwinden nie", () => {
+    // Eine Aktion ist eine Notiz, keine Planung - und eine Ausdauer-Einheit
+    // hat stattgefunden, sonst waere sie nicht eingetragen worden.
+    expect(istVerpasstePlanung({ type: "action", date: "2026-09-01", logId: null }, HEUTE)).toBe(false);
+    expect(istVerpasstePlanung({ type: "endurance", date: "2026-09-01", enduranceId: "e1" }, HEUTE)).toBe(false);
+  });
+
+  it("gilt genauso fuer nachgetragene Atemuebungen", () => {
+    const atemNachtrag = { type: "breathing", date: "2026-09-09", logId: null, erstelltAm: HEUTE };
+    expect(istVerpasstePlanung(atemNachtrag, HEUTE)).toBe(false);
+  });
+
+  it("kommt mit fehlenden Daten klar", () => {
+    expect(istVerpasstePlanung(null, HEUTE)).toBe(false);
+    expect(istVerpasstePlanung({}, HEUTE)).toBe(false);
   });
 });

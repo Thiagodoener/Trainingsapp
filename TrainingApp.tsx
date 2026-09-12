@@ -4188,7 +4188,25 @@ function TrainingAppInner() {
 
   const startSession = async (plan, calendarEntryId = null, gymId = undefined) => {
     const next = createSessionFromPlan(plan, gymId === undefined ? activeGymId : gymId);
-    if (calendarEntryId) next.calendarEntryId = calendarEntryId;
+    if (calendarEntryId) {
+      next.calendarEntryId = calendarEntryId;
+      // Ein Training, das auf einem vergangenen Tag nachgetragen wird, gehört
+      // auf DIESEN Tag. Sonst landet es im Verlauf, im Kalender und in allen
+      // Wochenzahlen unter "heute" - und das Nachtragen wäre wirkungslos.
+      const eintrag = calendarEntries.find((ce) => ce.id === calendarEntryId);
+      const tag = eintrag?.date ? dateFromKey(eintrag.date) : null;
+      if (tag && eintrag.date < toDateKey(new Date())) {
+        // Mittags statt Mitternacht: So kann keine Zeitzonen-Verschiebung den
+        // Eintrag auf den Vortag rutschen lassen (wie bei den Atemübungen).
+        next.date = new Date(tag.getFullYear(), tag.getMonth(), tag.getDate(), 12, 0, 0).toISOString();
+        // Ohne Startzeit misst die App keine Dauer - und das ist richtig so:
+        // Wie lange das Training damals gedauert hat, weiß sie nicht. Die Zeit,
+        // die das Nachtragen kostet, wäre eine erfundene Antwort. Alle Stellen,
+        // die startedAt lesen, kommen mit dem fehlenden Wert bereits klar und
+        // schreiben dann keine Dauer ins Protokoll.
+        next.startedAt = null;
+      }
+    }
     setSession(next);
     await updateRestEndsAt(0);
     await saveJSON("active-workout", next);
@@ -4377,7 +4395,9 @@ function TrainingAppInner() {
   const scheduleCalendarWorkout = async (date, planId) => {
     await persistCalendarEntries([
       ...calendarEntries,
-      { id: uid(), date, type: "workout", planId, logId: null },
+      // erstelltAm unterscheidet eine Planung von einem bewussten Nachtrag -
+      // siehe istVerpasstePlanung.
+      { id: uid(), date, type: "workout", planId, logId: null, erstelltAm: toDateKey(new Date()) },
     ]);
   };
   // Atemübungen im Kalender funktionieren genau wie Workouts: geplant mit
@@ -4385,7 +4405,7 @@ function TrainingAppInner() {
   const scheduleCalendarBreathing = async (date, breathingId) => {
     await persistCalendarEntries([
       ...calendarEntries,
-      { id: uid(), date, type: "breathing", breathingId, logId: null },
+      { id: uid(), date, type: "breathing", breathingId, logId: null, erstelltAm: toDateKey(new Date()) },
     ]);
   };
 
@@ -9751,6 +9771,27 @@ function DashboardView({
   );
 }
 
+// Ein geplantes Training, das nie stattgefunden hat, verschwindet nach Ablauf
+// des Tages aus dem Kalender - es stehen zu lassen wäre nur ein Vorwurf.
+//
+// Das galt aber auch für Einträge, die man ABSICHTLICH auf einen vergangenen
+// Tag setzt, um ein Training nachzutragen. Die waren damit sofort unsichtbar:
+// eingetragen, gespeichert, nie zu sehen. Genau das hat Max gemeldet.
+//
+// Unterschieden wird über den Tag, an dem der Eintrag entstanden ist. Wurde er
+// an oder vor seinem Zieltag angelegt, war er eine Planung - die darf
+// verschwinden. Wurde er danach angelegt, ist er ein bewusstes Nachtragen und
+// bleibt stehen.
+//
+// Einträge ohne diese Angabe stammen aus der Zeit davor und werden wie bisher
+// behandelt: Es sind echte alte Planungen, für die die Regel richtig war.
+export function istVerpasstePlanung(eintrag, todayKey) {
+  if (!eintrag || eintrag.logId) return false;
+  if (eintrag.type !== "workout" && eintrag.type !== "breathing") return false;
+  if (!(eintrag.date < todayKey)) return false;
+  return !eintrag.erstelltAm || eintrag.erstelltAm <= eintrag.date;
+}
+
 function CalendarView({
   entries,
   categories,
@@ -9817,11 +9858,7 @@ function CalendarView({
     const map = {};
     const todayKey = toDateKey(new Date());
     entries.forEach((e) => {
-      // A planned workout that never happened simply disappears once the day
-      // is over - keeping it around would only ever be a reproach.
-      const verpasst =
-        (e.type === "workout" || e.type === "breathing") && !e.logId && e.date < todayKey;
-      if (verpasst) return;
+      if (istVerpasstePlanung(e, todayKey)) return;
       (map[e.date] = map[e.date] || []).push(e);
     });
     return map;

@@ -805,6 +805,25 @@ App sagt das direkt darunter. Beim Heben steigt der Puls durch Pressatmung und k
 im Verhältnis zur geleisteten Arbeit – was ein Puls dort bedeutet, hängt von Satzlänge, Pausen und
 Ausführung ab. Das weiß die App nicht, und ein Urteil ohne diese Grundlage verstößt gegen Regel 3.
 
+**Ein Training für einen vergangenen Tag nachtragen.**
+Ein geplantes Training, das nie stattgefunden hat, verschwindet nach Ablauf des Tages aus dem
+Kalender – es stehen zu lassen wäre nur ein Vorwurf. Diese Regel griff aber auch bei Einträgen, die
+man **absichtlich** auf einen vergangenen Tag setzt: eingetragen, gespeichert, nie zu sehen.
+
+Unterschieden wird jetzt über den Tag, an dem der Eintrag entstanden ist (`erstelltAm`). An oder vor
+seinem Zieltag angelegt heißt Planung – die darf verschwinden. Danach angelegt heißt Nachtrag – der
+bleibt. Einträge aus der Zeit davor haben die Angabe nicht und verhalten sich wie bisher; für sie
+war die Regel richtig.
+
+Dazu gehört die zweite Hälfte, ohne die das Nachtragen wirkungslos bliebe: Ein Training, das aus
+einem Eintrag auf einem vergangenen Tag gestartet wird, bekommt **dessen** Datum statt des heutigen.
+Sonst läge es im Verlauf, im Kalender und in allen Wochenzahlen unter „heute".
+
+Die Dauer bleibt dabei **leer**. Wie lange das Training damals gedauert hat, weiß die App nicht – die
+Zeit, die das Nachtragen kostet, wäre eine erfundene Antwort. Technisch entsteht das dadurch, dass
+eine nachgetragene Sitzung gar keine Startzeit bekommt; alle Stellen, die sie lesen, kommen mit dem
+fehlenden Wert bereits klar und schreiben dann keine Dauer ins Protokoll.
+
 ---
 
 ## Offene Punkte

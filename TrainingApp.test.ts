@@ -2131,17 +2131,25 @@ describe("Einheiten von der Uhr uebernehmen (intervals.icu)", () => {
     expect(intervalsAuthKopf("  abc123 ")).toBe("Basic " + btoa("API_KEY:abc123"));
   });
 
-  it("holt drei Tage Ueberlappung, damit nichts durchs Raster faellt", () => {
-    // Garmin schiebt eine Aufzeichnung manchmal erst Tage spaeter weiter.
-    const jetzt = new Date(2026, 8, 11, 12, 0, 0).getTime();
-    const z = abgleichZeitraum(new Date(2026, 8, 10, 12, 0, 0).getTime(), jetzt);
-    expect(z.oldest).toBe("2026-09-07");
-    // Bis morgen, damit die laufende Einheit von heute Abend sicher drin ist.
-    expect(z.newest).toBe("2026-09-12");
+  it("holt immer dieselbe grosszuegige Spanne, egal wann zuletzt abgeglichen wurde", () => {
+    // Regression: Das Fenster hing frueher am letzten Abgleich und reichte
+    // danach nur drei Tage zurueck. Wer beim Einrichten einmal abglich, BEVOR
+    // die Uhr ihre Aufzeichnungen weitergeschoben hatte, bekam nichts - der
+    // Zeitpunkt wurde aber gestempelt, und die Einheiten davor lagen ab da
+    // fuer immer ausserhalb des Fensters. Genau so sind Max' Radeinheiten von
+    // Dienstag bis Donnerstag verschwunden.
+    const jetzt = new Date(2026, 8, 12, 12, 0, 0).getTime();
+    const z = abgleichZeitraum(jetzt);
+    expect(z.oldest).toBe("2026-07-14");
+    // Bis morgen, damit eine Einheit von heute Abend sicher im Fenster liegt.
+    expect(z.newest).toBe("2026-09-13");
   });
 
-  it("holt beim ersten Mal die letzten 60 Tage", () => {
-    const jetzt = new Date(2026, 8, 11, 12, 0, 0).getTime();
-    expect(abgleichZeitraum(0, jetzt).oldest).toBe("2026-07-13");
+  it("nimmt keine Argumente mehr entgegen, die das Fenster verengen koennten", () => {
+    // Absichtlich ohne Parameter: Es gibt keinen Weg mehr, die Spanne von
+    // aussen zu verkleinern.
+    const jetzt = new Date(2026, 8, 12, 12, 0, 0).getTime();
+    expect(abgleichZeitraum.length).toBeLessThanOrEqual(1);
+    expect(abgleichZeitraum(jetzt).oldest).toBe("2026-07-14");
   });
 });

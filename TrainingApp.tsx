@@ -2506,15 +2506,32 @@ export function intervalsAuthKopf(schluessel) {
 }
 
 // Datumsgrenzen für die Abfrage, im Format JJJJ-MM-TT wie von intervals.icu
-// erwartet. Drei Tage Überlappung statt exakt ab dem letzten Abgleich: Garmin
-// schiebt eine Aufzeichnung manchmal erst Tage später weiter, und ohne
-// Überlappung fiele sie für immer durchs Raster. Doppelt holen schadet nicht,
-// die externId verhindert Dopplungen.
-export function abgleichZeitraum(lastSyncAt, nowTs = Date.now()) {
+// erwartet. Immer dieselbe großzügige Spanne, unabhängig davon, wann zuletzt
+// abgeglichen wurde.
+//
+// Vorher hing das Fenster am letzten Abgleich und reichte danach nur noch drei
+// Tage zurück. Das hat einen Fehler eingebaut, der sich selbst am Leben hielt:
+// Wer beim Einrichten einmal abgleicht, BEVOR die Uhr ihre Aufzeichnungen zu
+// intervals.icu geschoben hat, bekommt nichts - aber der Zeitpunkt wird
+// trotzdem gestempelt. Ab da lagen die Einheiten davor für immer außerhalb des
+// Fensters und konnten nie mehr nachkommen.
+//
+// Jedes Mal 60 Tage zu holen kostet praktisch nichts: Es geht um die Einheiten
+// EINES Menschen, und doppelt Geholtes wirft die externId ohnehin weg. Die
+// schlaue inkrementelle Variante war eine Optimierung für ein Mengenproblem,
+// das es hier nicht gibt - und sie hat genau den Fall kaputtgemacht, für den
+// sie gedacht war.
+const ABGLEICH_TAGE = 60;
+
+export function abgleichZeitraum(nowTs = Date.now()) {
   const tag = 86400000;
-  const von = lastSyncAt > 0 ? lastSyncAt - 3 * tag : nowTs - 60 * tag;
   const alsKey = (ts) => toDateKey(new Date(ts));
-  return { oldest: alsKey(von), newest: alsKey(nowTs + tag) };
+  return {
+    oldest: alsKey(nowTs - ABGLEICH_TAGE * tag),
+    // Bis morgen, damit eine Einheit von heute Abend sicher im Fenster liegt,
+    // egal in welcher Zeitzone intervals.icu die Grenze zieht.
+    newest: alsKey(nowTs + tag),
+  };
 }
 
 // Wochenweise Anzahl absolvierter Atemübungs-Sitzungen - keine Gruppen wie
@@ -4475,7 +4492,7 @@ function TrainingAppInner() {
     setAbgleichStatus({ laeuft: true, meldung: "" });
     try {
       const helfer = abgleichBasis(ueberschreiben);
-      const zeitraum = abgleichZeitraum(toNum(ausdauerAbgleich?.lastSyncAt));
+      const zeitraum = abgleichZeitraum();
       let antwort;
       try {
         antwort = await fetch(abgleichAdresse(athlet, zeitraum, helfer), {
@@ -4551,6 +4568,18 @@ function TrainingAppInner() {
           aktivitaeten.length > 0 && verwertbar === 0
             ? `${aktivitaeten.length} Einheiten gefunden, aber keine davon lesbar. Dauer oder Datum fehlen in der Antwort.`
             : "",
+        // Was tatsächlich ankam - abrufbar über "Antwort anzeigen". Ohne das
+        // bleibt bei "es fehlt etwas" nur Raten: Die genauen Feldnamen von
+        // intervals.icu ließen sich beim Bauen nicht prüfen, also muss die
+        // App zeigen können, was sie wirklich bekommen hat.
+        befund: {
+          gefunden: aktivitaeten.length,
+          lesbar: verwertbar,
+          uebernommen: neue.length,
+          zeitraum: `${zeitraum.oldest} bis ${zeitraum.newest}`,
+          arten: [...new Set(aktivitaeten.map((a) => externeArt(a) || "(ohne Art)"))],
+          erste: aktivitaeten.slice(0, 2),
+        },
       });
       if (!still) {
         showToast(
@@ -4797,6 +4826,7 @@ function TrainingAppInner() {
   const [athletDraft, setAthletDraft] = useState("");
   const [schluesselDraft, setSchluesselDraft] = useState("");
   const [helferDraft, setHelferDraft] = useState("");
+  const [befundOffen, setBefundOffen] = useState(false);
   const [pulsDraft, setPulsDraft] = useState({ ruhepuls: "", maxpuls: "", formel: null });
   // Der höchste je aufgezeichnete Puls aus den eigenen Einheiten. Als Hilfe
   // beim Eintragen des Maximalpulses - aus eigenen Daten, nicht aus einer
@@ -8328,6 +8358,41 @@ function TrainingAppInner() {
             <p className="deload-basis" style={{ marginTop: 10, color: "var(--danger)" }}>
               {abgleichStatus.meldung}
             </p>
+          )}
+
+          {/* Zeigt, was wirklich ankam. Wenn Einheiten fehlen, ist das die
+              einzige Stelle, an der man sieht, ob sie gar nicht geliefert
+              wurden oder nur nicht gelesen werden konnten - ein Unterschied,
+              der über die ganze Fehlersuche entscheidet. */}
+          {abgleichStatus.befund && (
+            <div style={{ marginTop: 10 }}>
+              <p className="deload-basis" style={{ margin: 0 }}>
+                {abgleichStatus.befund.gefunden} Einheiten im Zeitraum{" "}
+                {abgleichStatus.befund.zeitraum} · {abgleichStatus.befund.lesbar} lesbar ·{" "}
+                {abgleichStatus.befund.uebernommen} neu übernommen
+                {abgleichStatus.befund.arten.length > 0 && (
+                  <> · Arten: {abgleichStatus.befund.arten.join(", ")}</>
+                )}
+              </p>
+              <span
+                className="note-toggle"
+                style={{ marginTop: 6, display: "inline-block", whiteSpace: "nowrap" }}
+                onClick={() => setBefundOffen((o) => !o)}
+              >
+                {befundOffen ? "Antwort verbergen" : "Antwort anzeigen"}
+              </span>
+              {befundOffen && (
+                <pre
+                  style={{
+                    marginTop: 6, maxHeight: 220, overflow: "auto", fontSize: 10.5,
+                    background: "var(--fill)", padding: 8, borderRadius: 8,
+                    whiteSpace: "pre-wrap", wordBreak: "break-all",
+                  }}
+                >
+                  {JSON.stringify(abgleichStatus.befund.erste, null, 1)}
+                </pre>
+              )}
+            </div>
           )}
 
           {ausdauerAbgleich?.lastSyncAt > 0 && (

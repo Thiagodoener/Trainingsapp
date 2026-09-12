@@ -4558,15 +4558,19 @@ function TrainingAppInner() {
         ...(ueberschreiben?.workerUrl != null ? { workerUrl: helfer || "" } : {}),
         lastSyncAt: Date.now(),
       });
-      // Gefunden, aber nichts Brauchbares: Das ist kein Erfolg, sondern ein
-      // Hinweis, dass die Felder anders heißen als erwartet. Stillschweigend
-      // "keine neuen Einheiten" zu melden würde die Suche verschleppen.
-      const verwertbar = aktivitaeten.filter((a) => externZuEinheit(a)).length;
+      // Ein Krafttraining ist NICHT "unlesbar" - es wird mit Absicht
+      // übergangen. Beides zusammenzuzählen hat die App Alarm schlagen lassen,
+      // obwohl alles richtig lief: Wer nur ein Krafttraining bei intervals.icu
+      // liegen hat, sah "keine davon lesbar" in Rot. Gewarnt wird deshalb nur
+      // über Ausdauer-Einheiten, die wirklich nicht zu lesen waren.
+      const kraftAnzahl = aktivitaeten.filter((a) => istKraftEinheit(a)).length;
+      const kandidaten = aktivitaeten.filter((a) => !istKraftEinheit(a));
+      const lesbar = kandidaten.filter((a) => externZuEinheit(a)).length;
       setAbgleichStatus({
         laeuft: false,
         meldung:
-          aktivitaeten.length > 0 && verwertbar === 0
-            ? `${aktivitaeten.length} Einheiten gefunden, aber keine davon lesbar. Dauer oder Datum fehlen in der Antwort.`
+          kandidaten.length > 0 && lesbar === 0
+            ? `${plural(kandidaten.length, "Ausdauer-Einheit", "Ausdauer-Einheiten")} gefunden, aber nicht lesbar. Dauer oder Datum fehlen in der Antwort.`
             : "",
         // Was tatsächlich ankam - abrufbar über "Antwort anzeigen". Ohne das
         // bleibt bei "es fehlt etwas" nur Raten: Die genauen Feldnamen von
@@ -4574,7 +4578,8 @@ function TrainingAppInner() {
         // App zeigen können, was sie wirklich bekommen hat.
         befund: {
           gefunden: aktivitaeten.length,
-          lesbar: verwertbar,
+          kraft: kraftAnzahl,
+          lesbar,
           uebernommen: neue.length,
           zeitraum: `${zeitraum.oldest} bis ${zeitraum.newest}`,
           arten: [...new Set(aktivitaeten.map((a) => externeArt(a) || "(ohne Art)"))],
@@ -8366,10 +8371,18 @@ function TrainingAppInner() {
               der über die ganze Fehlersuche entscheidet. */}
           {abgleichStatus.befund && (
             <div style={{ marginTop: 10 }}>
+              {/* Krafttrainings getrennt ausweisen, statt sie unter "nicht
+                  lesbar" verschwinden zu lassen - sie fehlen nicht, sie
+                  gehören hier nicht hin. */}
               <p className="deload-basis" style={{ margin: 0 }}>
-                {abgleichStatus.befund.gefunden} Einheiten im Zeitraum{" "}
-                {abgleichStatus.befund.zeitraum} · {abgleichStatus.befund.lesbar} lesbar ·{" "}
-                {abgleichStatus.befund.uebernommen} neu übernommen
+                {plural(abgleichStatus.befund.gefunden, "Einheit", "Einheiten")} im Zeitraum{" "}
+                {abgleichStatus.befund.zeitraum}
+                {abgleichStatus.befund.kraft > 0 && (
+                  <> · davon {abgleichStatus.befund.kraft} Krafttraining
+                    {abgleichStatus.befund.kraft === 1 ? "" : "s"} (gehört nicht zur Ausdauer)</>
+                )}
+                {" "}· {plural(abgleichStatus.befund.lesbar, "Ausdauer-Einheit", "Ausdauer-Einheiten")}{" "}
+                lesbar · {abgleichStatus.befund.uebernommen} neu übernommen
                 {abgleichStatus.befund.arten.length > 0 && (
                   <> · Arten: {abgleichStatus.befund.arten.join(", ")}</>
                 )}

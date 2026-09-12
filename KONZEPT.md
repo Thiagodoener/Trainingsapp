@@ -780,6 +780,31 @@ bewährt, als Strava wegfiel: Die Ausdauer-Einheiten funktionierten weiter, wäh
 neu gebaut wurde. Eine ganze Trainingsart allein an einen fremden Anbieter zu hängen, wäre der
 Fehler gewesen.
 
+**Die Aufzeichnung der Uhr steht beim passenden Krafttraining.**
+Was die Uhr während eines Krafttrainings mitgeschrieben hat – Dauer, Ø-Puls, Maximalpuls – steht
+jetzt im Verlauf beim zugehörigen Training. Zugeordnet wird über die **Überschneidung der
+Zeiträume**, nicht über den Startzeitpunkt: Uhr und App werden fast nie im selben Moment
+gestartet. Man startet die Uhr, wärmt sich auf und tippt erst beim ersten Arbeitssatz auf
+„Training starten" – oder andersherum. Ein reiner Vergleich der Startzeiten würde genau diese
+Fälle verfehlen.
+
+Die Regel: zugeordnet wird, wenn sich die Zeiträume um mindestens 5 Minuten überschneiden **oder**
+die Starts höchstens 20 Minuten auseinanderliegen. Die Mindest-Überschneidung verhindert, dass ein
+Training, das versehentlich stundenlang offen blieb, eine fremde Aufzeichnung an seinem Rand
+einsammelt. Bei mehreren Kandidaten gewinnt die kleinste Abweichung, und jede Aufzeichnung wird
+höchstens einmal vergeben – ohne diese Regel könnte ein Vormittags-Training die Aufzeichnung des
+Abend-Trainings an sich reißen, nur weil es in der Liste zuerst kam. Die Reihenfolge der Daten
+würde dann über das Ergebnis entscheiden.
+
+**Gerechnet statt gespeichert.** Die Zuordnung entsteht bei jeder Anzeige neu aus Trainings und
+Aufzeichnungen. Kommt eine Aufzeichnung nach oder wird ein Training nachträglich korrigiert,
+stimmt sie sofort wieder; ein gespeicherter Verweis würde still veralten.
+
+**Und sie bleibt eine Beobachtung.** Die Zahlen zählen nicht in die Belastungs-Statistik, und die
+App sagt das direkt darunter. Beim Heben steigt der Puls durch Pressatmung und kurze Spitzen, nicht
+im Verhältnis zur geleisteten Arbeit – was ein Puls dort bedeutet, hängt von Satzlänge, Pausen und
+Ausführung ab. Das weiß die App nicht, und ein Urteil ohne diese Grundlage verstößt gegen Regel 3.
+
 ---
 
 ## Offene Punkte
@@ -791,11 +816,6 @@ Fehler gewesen.
 - **Ausdauer** – als eigene Einheiten gebaut (siehe oben), aber mit dem Puls statt Session-RPE als
   Maß. Die „gemeinsame Belastungswährung" für Kraft und Ausdauer ist damit bewusst **nicht**
   entstanden und bleibt offen, falls sie je gewollt ist.
-- **Garmin-Aufzeichnung einem Kraft-Training zuordnen** über die Überschneidung der Uhrzeiten. Die
-  Daten liegen bereit (`externe-kraft-aktivitaeten`), und `log.date` ist der Start des Trainings,
-  `durationMinutes` seine Länge – damit lässt sich die Überschneidung sauber bestimmen, statt nur
-  Startzeitpunkte zu vergleichen. Anzeigen wird es Dauer und Puls als Beobachtung am Training,
-  ohne Wirkung auf die Belastungsrechnung (siehe oben).
 
 ### Bewusst verworfen
 

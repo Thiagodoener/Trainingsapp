@@ -47,6 +47,8 @@ import {
   neueExterneEinheiten,
   intervalsAuthKopf,
   abgleichZeitraum,
+  kraftZuordnungAbweichung,
+  ordneKraftAufzeichnungen,
   withSecondarySubgroupOverride,
   getExerciseSecondarySubgroups,
   set1RM,
@@ -2151,5 +2153,105 @@ describe("Einheiten von der Uhr uebernehmen (intervals.icu)", () => {
     const jetzt = new Date(2026, 8, 12, 12, 0, 0).getTime();
     expect(abgleichZeitraum.length).toBeLessThanOrEqual(1);
     expect(abgleichZeitraum(jetzt).oldest).toBe("2026-07-14");
+  });
+});
+
+describe("Garmin-Aufzeichnung dem Krafttraining zuordnen", () => {
+  // Training in der App: 18:00 Uhr, 60 Minuten.
+  const training = (over: Record<string, unknown> = {}) => ({
+    id: "t1",
+    date: new Date(2026, 8, 11, 18, 0, 0).toISOString(),
+    durationMinutes: 60,
+    ...over,
+  });
+  // Aufzeichnung der Uhr: 18:05 Uhr, 58 Minuten.
+  const uhr = (over: Record<string, unknown> = {}) => ({
+    externId: "i900",
+    start: new Date(2026, 8, 11, 18, 5, 0).toISOString(),
+    elapsedSeconds: 58 * 60,
+    avgHr: 108,
+    maxHr: 141,
+    ...over,
+  });
+
+  it("ordnet zu, wenn die Uhr ein paar Minuten spaeter gestartet wurde", () => {
+    expect(kraftZuordnungAbweichung(training(), uhr())).toBe(5);
+  });
+
+  it("ordnet auch zu, wenn die Uhr FRUEHER lief - Aufwaermen zaehlt mit", () => {
+    // Uhr um 17:45 gestartet, App erst um 18:00 beim ersten Arbeitssatz.
+    const frueh = uhr({ start: new Date(2026, 8, 11, 17, 45, 0).toISOString(), elapsedSeconds: 80 * 60 });
+    expect(kraftZuordnungAbweichung(training(), frueh)).toBe(15);
+  });
+
+  it("ordnet ueber die Ueberschneidung zu, auch wenn die Starts weit auseinanderliegen", () => {
+    // Uhr erst nach 40 Minuten gestartet - der Startabstand ist zu gross,
+    // aber die Zeitraeume ueberschneiden sich deutlich.
+    const spaet = uhr({ start: new Date(2026, 8, 11, 18, 40, 0).toISOString(), elapsedSeconds: 30 * 60 });
+    expect(kraftZuordnungAbweichung(training(), spaet)).toBe(40);
+  });
+
+  it("ordnet NICHT zu, wenn nichts zusammenpasst", () => {
+    const morgens = uhr({ start: new Date(2026, 8, 11, 7, 0, 0).toISOString(), elapsedSeconds: 45 * 60 });
+    expect(kraftZuordnungAbweichung(training(), morgens)).toBe(null);
+    const andererTag = uhr({ start: new Date(2026, 8, 10, 18, 5, 0).toISOString() });
+    expect(kraftZuordnungAbweichung(training(), andererTag)).toBe(null);
+  });
+
+  it("laesst sich von einer winzigen Ueberschneidung am Rand nicht taeuschen", () => {
+    // Training blieb versehentlich 5 Stunden offen. Eine Aufzeichnung, die
+    // erst ganz am Ende eine Minute hineinragt, gehoert nicht dazu.
+    const langesTraining = training({ durationMinutes: 300 });
+    const spaeterAbend = uhr({ start: new Date(2026, 8, 11, 22, 59, 0).toISOString(), elapsedSeconds: 40 * 60 });
+    expect(kraftZuordnungAbweichung(langesTraining, spaeterAbend)).toBe(null);
+  });
+
+  it("kommt mit fehlenden oder kaputten Zeiten klar", () => {
+    expect(kraftZuordnungAbweichung(null, uhr())).toBe(null);
+    expect(kraftZuordnungAbweichung(training(), null)).toBe(null);
+    expect(kraftZuordnungAbweichung(training({ date: "keinDatum" }), uhr())).toBe(null);
+    // Ohne Dauer zaehlt nur noch der Startabstand.
+    expect(kraftZuordnungAbweichung(training({ durationMinutes: null }), uhr())).toBe(5);
+  });
+
+  it("gibt jede Aufzeichnung nur einmal her", () => {
+    const zwei = [training({ id: "a" }), training({ id: "b" })];
+    const zuordnung = ordneKraftAufzeichnungen(zwei, [uhr()]);
+    expect(Object.keys(zuordnung)).toHaveLength(1);
+  });
+
+  it("gibt bei zwei Trainings am selben Tag jedem das richtige", () => {
+    // Genau der Fall, in dem eine schlampige Zuordnung auffliegt: Ohne die
+    // Sortierung nach Abweichung koennte das Vormittags-Training die
+    // Abend-Aufzeichnung an sich reissen, nur weil es zuerst in der Liste steht.
+    const vormittag = training({ id: "vm", date: new Date(2026, 8, 11, 9, 0, 0).toISOString() });
+    const abend = training({ id: "ab", date: new Date(2026, 8, 11, 18, 0, 0).toISOString() });
+    const uhrVormittag = uhr({ externId: "i-vm", start: new Date(2026, 8, 11, 9, 3, 0).toISOString() });
+    const uhrAbend = uhr({ externId: "i-ab", start: new Date(2026, 8, 11, 18, 5, 0).toISOString() });
+    // Bewusst in verdrehter Reihenfolge uebergeben.
+    const zuordnung = ordneKraftAufzeichnungen([vormittag, abend], [uhrAbend, uhrVormittag]);
+    expect(zuordnung.vm.externId).toBe("i-vm");
+    expect(zuordnung.ab.externId).toBe("i-ab");
+  });
+
+  it("nimmt bei mehreren Kandidaten den mit der kleinsten Abweichung", () => {
+    const nah = uhr({ externId: "nah", start: new Date(2026, 8, 11, 18, 2, 0).toISOString() });
+    const fern = uhr({ externId: "fern", start: new Date(2026, 8, 11, 18, 18, 0).toISOString() });
+    const zuordnung = ordneKraftAufzeichnungen([training()], [fern, nah]);
+    expect(zuordnung.t1.externId).toBe("nah");
+    expect(zuordnung.t1.abweichungMin).toBe(2);
+  });
+
+  it("reicht Puls und Dauer zur Anzeige durch", () => {
+    const zuordnung = ordneKraftAufzeichnungen([training()], [uhr()]);
+    expect(zuordnung.t1.avgHr).toBe(108);
+    expect(zuordnung.t1.maxHr).toBe(141);
+    expect(zuordnung.t1.elapsedSeconds).toBe(58 * 60);
+  });
+
+  it("liefert eine leere Zuordnung, wenn es nichts zuzuordnen gibt", () => {
+    expect(ordneKraftAufzeichnungen([], [uhr()])).toEqual({});
+    expect(ordneKraftAufzeichnungen([training()], [])).toEqual({});
+    expect(ordneKraftAufzeichnungen(null, null)).toEqual({});
   });
 });

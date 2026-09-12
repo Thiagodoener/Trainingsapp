@@ -2490,6 +2490,67 @@ export function neueExterneEinheiten(aktivitaeten, vorhandene) {
     });
 }
 
+// ---------------------------------------------------------------------------
+// Eine Kraft-Aufzeichnung der Uhr dem passenden Training zuordnen
+//
+// Verglichen werden Zeiträume, nicht Zeitpunkte. Uhr und App werden fast nie
+// im selben Moment gestartet: Man startet die Uhr, wärmt sich auf, und tippt
+// erst beim ersten Arbeitssatz auf "Training starten" - oder andersherum.
+// Ein reiner Vergleich der Startzeiten würde genau diese Fälle verfehlen.
+//
+// Zugeordnet wird deshalb, wenn sich die beiden Zeiträume ernsthaft
+// überschneiden ODER die Starts nah beieinanderliegen. Die
+// Mindest-Überschneidung verhindert, dass ein Training, das versehentlich
+// stundenlang offen blieb, eine fremde Aufzeichnung an seinem Rand
+// einsammelt.
+// ---------------------------------------------------------------------------
+const ZUORDNUNG_TOLERANZ_MS = 20 * 60000;
+const ZUORDNUNG_MIN_UEBERSCHNEIDUNG_MS = 5 * 60000;
+
+// Wie weit liegen die Startzeiten auseinander (in Minuten)? null heißt: passt
+// nicht zusammen.
+export function kraftZuordnungAbweichung(log, aufzeichnung) {
+  const logStart = new Date(log?.date).getTime();
+  const aufStart = new Date(aufzeichnung?.start).getTime();
+  if (!Number.isFinite(logStart) || !Number.isFinite(aufStart)) return null;
+  const logEnde = logStart + Math.max(0, toNum(log?.durationMinutes)) * 60000;
+  const aufEnde = aufStart + Math.max(0, toNum(aufzeichnung?.elapsedSeconds)) * 1000;
+  const ueberschneidung = Math.min(logEnde, aufEnde) - Math.max(logStart, aufStart);
+  const abstand = Math.abs(logStart - aufStart);
+  if (ueberschneidung < ZUORDNUNG_MIN_UEBERSCHNEIDUNG_MS && abstand > ZUORDNUNG_TOLERANZ_MS) {
+    return null;
+  }
+  return Math.round(abstand / 60000);
+}
+
+// Ordnet Aufzeichnungen und Trainings einander zu: jede Aufzeichnung
+// höchstens einem Training, jedes Training höchstens einer Aufzeichnung.
+//
+// Bei mehreren Kandidaten gewinnt die kleinste Abweichung. Ohne diese Regel
+// könnte ein Vormittags-Training die Aufzeichnung des Abend-Trainings an sich
+// reißen, nur weil es in der Liste zuerst kam - die Reihenfolge der Daten
+// würde über das Ergebnis entscheiden, und das wäre nicht nachvollziehbar.
+export function ordneKraftAufzeichnungen(logs, aufzeichnungen) {
+  const paare = [];
+  (Array.isArray(logs) ? logs : []).forEach((log) => {
+    if (!log?.id) return;
+    (Array.isArray(aufzeichnungen) ? aufzeichnungen : []).forEach((auf) => {
+      if (!auf?.externId) return;
+      const abweichung = kraftZuordnungAbweichung(log, auf);
+      if (abweichung != null) paare.push({ logId: log.id, auf, abweichung });
+    });
+  });
+  paare.sort((a, b) => a.abweichung - b.abweichung);
+  const proLog = {};
+  const vergeben = new Set();
+  paare.forEach((p) => {
+    if (proLog[p.logId] || vergeben.has(p.auf.externId)) return;
+    proLog[p.logId] = { ...p.auf, abweichungMin: p.abweichung };
+    vergeben.add(p.auf.externId);
+  });
+  return proLog;
+}
+
 // Der Kopf für die Anmeldung bei intervals.icu: Basic-Auth mit dem festen
 // Benutzernamen "API_KEY" und dem persönlichen Schlüssel als Passwort.
 export function intervalsAuthKopf(schluessel) {
@@ -8039,6 +8100,7 @@ function TrainingAppInner() {
             onSetExerciseSecondarySubgroup={handleSetExerciseSecondarySubgroup}
             enduranceLogs={enduranceLogs}
             pulsProfil={pulsProfil}
+            externeKraftAktivitaeten={externeKraftAktivitaeten}
             timeBasedExercises={timeBasedExercises}
             gymIndependentExercises={gymIndependentExercises}
             onUpdateExerciseNote={handleUpdateExerciseNote}
@@ -17612,6 +17674,7 @@ function ProgressView({
   onSetExerciseSecondarySubgroup,
   enduranceLogs = [],
   pulsProfil = null,
+  externeKraftAktivitaeten = [],
   timeBasedExercises,
   gymIndependentExercises,
   bodyWeights = [],
@@ -18027,6 +18090,7 @@ function ProgressView({
       <div>
         {subTabs}
         <HistoryView
+          externeKraftAktivitaeten={externeKraftAktivitaeten}
           focusLogId={focusLogId}
           onFocusHandled={onFocusHandled}
           onResumeLog={onResumeLog}
@@ -19191,6 +19255,7 @@ function BreathingProgressView({ breathingExercises = [], breathingLogs = [] }) 
 
 function HistoryView({
   logs,
+  externeKraftAktivitaeten = [],
   exBy,
   exercises,
   exerciseNotes,
@@ -19223,6 +19288,15 @@ function HistoryView({
   const sortedLogs = useMemo(() => {
     return [...logs].sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
   }, [logs]);
+
+  // Welches Training welche Aufzeichnung der Uhr bekommt. Wird gerechnet statt
+  // gespeichert: Kommt eine Aufzeichnung nach, oder wird ein Training
+  // nachträglich verschoben, stimmt die Zuordnung sofort wieder - ein
+  // gespeicherter Verweis würde still veralten.
+  const uhrProLog = useMemo(
+    () => ordneKraftAufzeichnungen(logs, externeKraftAktivitaeten),
+    [logs, externeKraftAktivitaeten]
+  );
 
   // Pokale: wo wurde ein Rekord aufgestellt. Einmal gerechnet und gemerkt -
   // dafuer muss zu jedem Training die gesamte Historie davor durchgegangen
@@ -19296,6 +19370,16 @@ function HistoryView({
                   <Smile size={12} /> {feelingLabel(log.feeling)}
                 </span>
               )}
+              {/* Der Puls von der Uhr. Steht hier als Beobachtung neben den
+                  anderen Angaben - er fließt bewusst NICHT in die Belastung
+                  ein (siehe KONZEPT.md: beim Heben steigt der Puls durch
+                  Pressatmung und kurze Spitzen, nicht im Verhältnis zur
+                  geleisteten Arbeit). */}
+              {uhrProLog[log.id]?.avgHr > 0 && (
+                <span title="Durchschnittspuls, von der Uhr aufgezeichnet">
+                  <HeartPulse size={12} /> Ø {uhrProLog[log.id].avgHr}
+                </span>
+              )}
             </div>
 
             {isOpen && (
@@ -19318,6 +19402,30 @@ function HistoryView({
                     >
                       <Pencil size={14} /> Bearbeiten
                     </button>
+                  </div>
+                )}
+                {/* Was die Uhr zu diesem Training aufgezeichnet hat.
+                    Ausdrücklich als Beobachtung formuliert, nicht als Urteil:
+                    Was ein Puls beim Heben bedeutet, hängt von Pressatmung,
+                    Satzlänge und Pausen ab - das weiß die App nicht, und ein
+                    Urteil ohne diese Grundlage verstößt gegen Regel 3. */}
+                {uhrProLog[log.id] && (
+                  <div className="deload-basis" style={{ marginBottom: 10 }}>
+                    <HeartPulse size={12} style={{ verticalAlign: -2, marginRight: 4 }} />
+                    Von der Uhr:{" "}
+                    {[
+                      uhrProLog[log.id].elapsedSeconds > 0
+                        ? `${Math.max(1, Math.round(uhrProLog[log.id].elapsedSeconds / 60))} Min.`
+                        : null,
+                      uhrProLog[log.id].avgHr > 0 ? `Ø-Puls ${uhrProLog[log.id].avgHr}` : null,
+                      uhrProLog[log.id].maxHr > 0 ? `max. ${uhrProLog[log.id].maxHr}` : null,
+                    ].filter(Boolean).join(" · ")}
+                    {uhrProLog[log.id].abweichungMin > 2 && (
+                      <> · Uhr {uhrProLog[log.id].abweichungMin} Min. versetzt gestartet</>
+                    )}
+                    <br />
+                    Zählt nicht in die Belastungs-Statistik – beim Heben sagt der
+                    Puls wenig über den Trainingsreiz.
                   </div>
                 )}
                 {logEntries(log).map((entry) => {

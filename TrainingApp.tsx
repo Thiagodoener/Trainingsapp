@@ -42,6 +42,7 @@ import {
   HeartPulse,
   Activity,
   Link2,
+  EyeOff,
 } from "lucide-react";
 import {
   LineChart,
@@ -2178,7 +2179,31 @@ export function getMuscleLoadSeries(
 // sind ein Anhängsel des Satzes, den sie fortsetzen, kein zusätzlicher.
 // Ihre Arbeit fehlt dadurch nicht in der Statistik, sie steht bereits
 // vollständig in Volumen, Wdh.-Summen und "Belastung pro Muskelgruppe".
-function getWeeklySetSeries(logs, exBy, subgroupOverrides, weekCount = 21, nowTs = Date.now()) {
+// Nimmt einzelne Übungen aus den Protokollen heraus - für die Karte "Sätze
+// pro Muskelgruppe".
+//
+// Dasselbe gibt es auf Ordner-Ebene ("ohne Statistik", z. B. für EMOM und
+// Conditioning). Dort wird ein ganzes Training weggelassen; hier fallen nur
+// die Sätze EINER Übung weg, während der Rest des Trainings normal zählt.
+// Anwendungsfall: eine Reha-Übung oder ein Zusatz, der die Satzzahl einer
+// Muskelgruppe verzerrt, ohne ein Hypertrophie-Reiz zu sein.
+//
+// Das Training selbst bleibt unangetastet: Verlauf, Rekorde, "letztes Mal"
+// und die Diagramme der Übung zeigen weiter alles. Herausgenommen wird nur
+// aus dieser einen Zählung.
+export function logsOhneUebungen(logs, ausgeschlossen) {
+  const liste = Array.isArray(logs) ? logs : [];
+  if (!ausgeschlossen || ausgeschlossen.size === 0) return liste;
+  return liste.map((l) => {
+    const alle = logEntries(l);
+    const uebrig = alle.filter((e) => !ausgeschlossen.has(e?.exerciseId));
+    // Unverändert durchreichen, wenn nichts wegfällt - sonst entstünde bei
+    // jedem Rendern ein neues Objekt und alles darunter rechnete neu.
+    return uebrig.length === alle.length ? l : { ...l, entries: uebrig };
+  });
+}
+
+export function getWeeklySetSeries(logs, exBy, subgroupOverrides, weekCount = 21, nowTs = Date.now()) {
   const safeLogs = Array.isArray(logs) ? logs : [];
   const emptyWeeks = () => new Array(weekCount).fill(0);
   const groupWeeks = {};
@@ -3380,6 +3405,7 @@ const BACKUP_KEYS = [
   "exercise-name-overrides",
   "exercise-time-based",
   "exercise-gym-independent",
+  "exercise-stats-excluded",
   "breathing-exercises",
   "breathing-logs",
   "endurance-logs",
@@ -3687,6 +3713,9 @@ function TrainingAppInner() {
   const [exerciseSecondarySubgroupOverrides, setExerciseSecondarySubgroupOverrides] = useState({});
   const [timeBasedExercises, setTimeBasedExercises] = useState({});
   const [gymIndependentExercises, setGymIndependentExercises] = useState({});
+  // Übungen, die aus "Sätze pro Muskelgruppe" herausgehalten werden -
+  // dasselbe wie "ohne Statistik" bei den Ordnern, nur je Übung.
+  const [statsExcludedExercises, setStatsExcludedExercises] = useState({});
   const [breathingExercises, setBreathingExercises] = useState([]);
   const [breathingLogs, setBreathingLogs] = useState([]);
   // Ausdauer-Einheiten (Laufen, Rad, ...) - eigene Datenart neben den
@@ -3765,7 +3794,7 @@ function TrainingAppInner() {
 
   useEffect(() => {
     (async () => {
-      const [p, l, c, f, en, no, tb, gi, active, prog, activeProg, sg, ce, cc, eq, th, gy, activeGy, restEnd, brEx, brLogs, dw, di, dsh, bnd, snd, bw, sec, secSub, ausdauer, puls, abgleichSet, abgleichKey, externKraft] = await Promise.all([
+      const [p, l, c, f, en, no, tb, gi, statsEx, active, prog, activeProg, sg, ce, cc, eq, th, gy, activeGy, restEnd, brEx, brLogs, dw, di, dsh, bnd, snd, bw, sec, secSub, ausdauer, puls, abgleichSet, abgleichKey, externKraft] = await Promise.all([
         loadJSON("training-plans", []),
         loadJSON("workout-logs", []),
         loadJSON("custom-exercises", []),
@@ -3774,6 +3803,7 @@ function TrainingAppInner() {
         loadJSON("exercise-name-overrides", {}),
         loadJSON("exercise-time-based", {}),
         loadJSON("exercise-gym-independent", {}),
+        loadJSON("exercise-stats-excluded", {}),
         loadJSON("active-workout", null),
         loadJSON("training-programs", []),
         loadJSON("active-program-id", null),
@@ -3830,6 +3860,7 @@ function TrainingAppInner() {
       setExerciseSecondarySubgroupOverrides(secSub && typeof secSub === "object" ? secSub : {});
       setTimeBasedExercises(tb);
       setGymIndependentExercises(gi);
+      setStatsExcludedExercises(statsEx && typeof statsEx === "object" ? statsEx : {});
       setBreathingExercises(Array.isArray(brEx) ? brEx : []);
       setBreathingLogs(Array.isArray(brLogs) ? brLogs : []);
       setEnduranceLogs(Array.isArray(ausdauer) ? ausdauer : []);
@@ -4051,6 +4082,10 @@ function TrainingAppInner() {
   const persistGymIndependentExercises = async (next) => {
     setGymIndependentExercises(next);
     await saveJSON("exercise-gym-independent", next);
+  };
+  const persistStatsExcludedExercises = async (next) => {
+    setStatsExcludedExercises(next);
+    await saveJSON("exercise-stats-excluded", next);
   };
   const persistBreathingExercises = async (next) => {
     setBreathingExercises(next);
@@ -4357,6 +4392,9 @@ function TrainingAppInner() {
   };
   const handleToggleGymIndependent = async (exerciseId, enabled) => {
     await persistGymIndependentExercises({ ...gymIndependentExercises, [exerciseId]: enabled });
+  };
+  const handleToggleStatsExcluded = async (exerciseId, enabled) => {
+    await persistStatsExcludedExercises({ ...statsExcludedExercises, [exerciseId]: enabled });
   };
   const handleAddCustomExercise = async (exercise) => {
     await persistCustomExercises([...customExercises, exercise]);
@@ -7647,6 +7685,8 @@ function TrainingAppInner() {
               onRenameExercise={handleRenameExercise}
               onToggleTimeBased={handleToggleTimeBased}
               onToggleGymIndependent={handleToggleGymIndependent}
+            statsExcludedExercises={statsExcludedExercises}
+            onToggleStatsExcluded={handleToggleStatsExcluded}
               onStartFromPlan={(plan) => requestStart(plan)}
               onUpdateSession={updateSession}
               onRequestConfirm={askConfirm}
@@ -7981,6 +8021,8 @@ function TrainingAppInner() {
             gymIndependentExercises={gymIndependentExercises}
             onToggleTimeBased={handleToggleTimeBased}
             onToggleGymIndependent={handleToggleGymIndependent}
+            statsExcludedExercises={statsExcludedExercises}
+            onToggleStatsExcluded={handleToggleStatsExcluded}
             onRequestConfirm={askConfirm}
           />
         ) : tab === "plans" ? (
@@ -8008,6 +8050,8 @@ function TrainingAppInner() {
               onRenameExercise={handleRenameExercise}
               onToggleTimeBased={handleToggleTimeBased}
               onToggleGymIndependent={handleToggleGymIndependent}
+            statsExcludedExercises={statsExcludedExercises}
+            onToggleStatsExcluded={handleToggleStatsExcluded}
               onCancel={() => { setBuilding(false); setEditingPlan(null); }}
               onSave={async (plan) => {
                 const next = editingPlan
@@ -8127,6 +8171,8 @@ function TrainingAppInner() {
             onRenameExercise={handleRenameExercise}
             onToggleTimeBased={handleToggleTimeBased}
             onToggleGymIndependent={handleToggleGymIndependent}
+            statsExcludedExercises={statsExcludedExercises}
+            onToggleStatsExcluded={handleToggleStatsExcluded}
             breathingExercises={breathingExercises}
             breathingLogs={breathingLogs}
             deloadWeeks={deloadWeeks}
@@ -11478,6 +11524,8 @@ function ExercisesView({
   gymIndependentExercises,
   onToggleTimeBased,
   onToggleGymIndependent,
+  statsExcludedExercises = {},
+  onToggleStatsExcluded = () => {},
   onRequestConfirm,
   gyms = [],
 }) {
@@ -11689,6 +11737,8 @@ function ExercisesView({
           onRenameExercise={onRenameExercise}
           onToggleTimeBased={onToggleTimeBased}
           onToggleGymIndependent={onToggleGymIndependent}
+          statsExcludedExercises={statsExcludedExercises}
+          onToggleStatsExcluded={onToggleStatsExcluded}
           onClose={() => setSelectedExerciseId(null)}
         />
       )}
@@ -11718,6 +11768,8 @@ function ExerciseDetailSheet({
   onRenameExercise,
   onToggleTimeBased,
   onToggleGymIndependent,
+  statsExcludedExercises = {},
+  onToggleStatsExcluded = () => {},
   onClose,
   gyms = [],
   initialTab = "stats",
@@ -11731,6 +11783,7 @@ function ExerciseDetailSheet({
   const [renameError, setRenameError] = useState("");
   const [editingSubgroup, setEditingSubgroup] = useState(false);
   const [editingEquipment, setEditingEquipment] = useState(false);
+  const istOhneStatistik = !!statsExcludedExercises[exercise.id];
   const [editingSecondary, setEditingSecondary] = useState(false);
   const availableSubgroups = SUBGROUPS[exercise.group] || [];
   const currentSubgroups = getExerciseSubgroups(exercise, exerciseSubgroupOverrides);
@@ -12099,6 +12152,21 @@ function ExerciseDetailSheet({
               <Globe size={11} /> Überall gleich
             </button>
 
+            {/* Dasselbe wie "ohne Statistik" bei den Ordnern, nur für eine
+                einzelne Übung. Betrifft NUR "Sätze pro Muskelgruppe" - diese
+                Karte ist bewusst ein reiner Zähler für Hypertrophie-Sätze.
+                "Belastung pro Muskelgruppe" beantwortet eine andere Frage
+                (geleistete Arbeit insgesamt), und die Arbeit wurde ja
+                geleistet. Verlauf, Rekorde und die Diagramme der Übung
+                bleiben ebenfalls unberührt. */}
+            <button
+              className={`chip chip-sm ${istOhneStatistik ? "active" : ""}`}
+              onClick={() => onToggleStatsExcluded(exercise.id, !istOhneStatistik)}
+              title="Die Sätze dieser Übung zählen nicht in „Sätze pro Muskelgruppe“ – z. B. bei Reha- oder Zusatzübungen. Belastung, Verlauf, Rekorde und Diagramme bleiben unverändert."
+            >
+              <EyeOff size={11} /> Ohne Statistik
+            </button>
+
             {availableSubgroups.length > 0 && (
               <button
                 className={`chip chip-sm ${currentSubgroups.length > 0 ? "active" : ""}`}
@@ -12307,6 +12375,8 @@ function PlanBuilder({
   onRenameExercise,
   onToggleTimeBased,
   onToggleGymIndependent,
+  statsExcludedExercises = {},
+  onToggleStatsExcluded = () => {},
   onCancel,
   onSave,
   onCreateFolder,
@@ -13376,6 +13446,8 @@ function PlanBuilder({
           onRenameExercise={onRenameExercise}
           onToggleTimeBased={onToggleTimeBased}
           onToggleGymIndependent={onToggleGymIndependent}
+          statsExcludedExercises={statsExcludedExercises}
+          onToggleStatsExcluded={onToggleStatsExcluded}
           onClose={() => setSelectedExerciseId(null)}
         />
       )}
@@ -14022,6 +14094,8 @@ function LogView({
   onRenameExercise,
   onToggleTimeBased,
   onToggleGymIndependent,
+  statsExcludedExercises = {},
+  onToggleStatsExcluded = () => {},
   onStartFromPlan,
   onUpdateSession,
   onFinish,
@@ -15997,6 +16071,8 @@ function LogView({
           onRenameExercise={onRenameExercise}
           onToggleTimeBased={onToggleTimeBased}
           onToggleGymIndependent={onToggleGymIndependent}
+          statsExcludedExercises={statsExcludedExercises}
+          onToggleStatsExcluded={onToggleStatsExcluded}
           onClose={() => setSelectedExerciseId(null)}
         />
       )}
@@ -17719,6 +17795,8 @@ function ProgressView({
   onRenameExercise,
   onToggleTimeBased,
   onToggleGymIndependent,
+  statsExcludedExercises = {},
+  onToggleStatsExcluded = () => {},
   gyms = [],
   onResumeLog,
   focusLogId,
@@ -17832,10 +17910,18 @@ function ProgressView({
     () => new Set(plans.filter((p) => p.folderId && excludedFolderIds.has(p.folderId)).map((p) => p.id)),
     [plans, excludedFolderIds]
   );
-  const hypertrophyLogs = useMemo(
-    () => (excludedPlanIds.size === 0 ? logs : logs.filter((l) => !l.planId || !excludedPlanIds.has(l.planId))),
-    [logs, excludedPlanIds]
+  // Einzelne Uebungen koennen ebenfalls herausgenommen werden ("Ohne
+  // Statistik" im Uebungs-Detail). Anders als beim Ordner faellt dabei nicht
+  // das ganze Training weg, sondern nur die Saetze dieser einen Uebung.
+  const excludedExerciseIds = useMemo(
+    () => new Set(Object.entries(statsExcludedExercises).filter(([, an]) => an).map(([id]) => id)),
+    [statsExcludedExercises]
   );
+  const hypertrophyLogs = useMemo(() => {
+    const ohneOrdner =
+      excludedPlanIds.size === 0 ? logs : logs.filter((l) => !l.planId || !excludedPlanIds.has(l.planId));
+    return logsOhneUebungen(ohneOrdner, excludedExerciseIds);
+  }, [logs, excludedPlanIds, excludedExerciseIds]);
 
   // Grenze für den Vergleichszeitraum - siehe logsHistoryWeeks. Muss vor der
   // Serie berechnet werden, weil deren Länge jetzt von der echten Historie
@@ -18148,6 +18234,8 @@ function ProgressView({
           onRenameExercise={onRenameExercise}
           onToggleTimeBased={onToggleTimeBased}
           onToggleGymIndependent={onToggleGymIndependent}
+          statsExcludedExercises={statsExcludedExercises}
+          onToggleStatsExcluded={onToggleStatsExcluded}
         />
       </div>
     );
@@ -18797,6 +18885,8 @@ function ProgressView({
           onRenameExercise={onRenameExercise}
           onToggleTimeBased={onToggleTimeBased}
           onToggleGymIndependent={onToggleGymIndependent}
+          statsExcludedExercises={statsExcludedExercises}
+          onToggleStatsExcluded={onToggleStatsExcluded}
           initialTab={exerciseSheetTab}
           onClose={() => setSelectedExerciseId(null)}
         />
@@ -19308,6 +19398,8 @@ function HistoryView({
   onRenameExercise,
   onToggleTimeBased,
   onToggleGymIndependent,
+  statsExcludedExercises = {},
+  onToggleStatsExcluded = () => {},
   gyms = [],
   onResumeLog,
   focusLogId,
@@ -19562,6 +19654,8 @@ function HistoryView({
           onRenameExercise={onRenameExercise}
           onToggleTimeBased={onToggleTimeBased}
           onToggleGymIndependent={onToggleGymIndependent}
+          statsExcludedExercises={statsExcludedExercises}
+          onToggleStatsExcluded={onToggleStatsExcluded}
           onClose={() => setSelectedExerciseId(null)}
         />
       )}

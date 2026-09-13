@@ -50,6 +50,8 @@ import {
   kraftZuordnungAbweichung,
   ordneKraftAufzeichnungen,
   istVerpasstePlanung,
+  logsOhneUebungen,
+  getWeeklySetSeries,
   withSecondarySubgroupOverride,
   getExerciseSecondarySubgroups,
   set1RM,
@@ -2317,5 +2319,63 @@ describe("Nachgetragenes Training bleibt im Kalender stehen", () => {
   it("kommt mit fehlenden Daten klar", () => {
     expect(istVerpasstePlanung(null, HEUTE)).toBe(false);
     expect(istVerpasstePlanung({}, HEUTE)).toBe(false);
+  });
+});
+
+describe("Einzelne Uebungen aus der Muskelgruppen-Statistik nehmen", () => {
+  const log = (id: string, exIds: string[]) => ({
+    id, date: new Date().toISOString(),
+    entries: exIds.map((ex, i) => ({
+      id: `${id}-${i}`, exerciseId: ex,
+      sets: [{ done: true, warmup: false, dropset: false, weight: 50, reps: 10 }],
+    })),
+  });
+
+  it("nimmt nur die ausgeschlossene Uebung heraus, nicht das ganze Training", () => {
+    // Das ist der Unterschied zum Ordner-Schalter: Dort faellt ein ganzes
+    // Training weg, hier nur die Saetze EINER Uebung.
+    const logs = [log("l1", ["bankdruecken", "reha-schulter", "kniebeuge"])];
+    const gefiltert = logsOhneUebungen(logs, new Set(["reha-schulter"]));
+    expect(gefiltert[0].entries.map((e: any) => e.exerciseId)).toEqual(["bankdruecken", "kniebeuge"]);
+  });
+
+  it("laesst Trainings ohne die Uebung voellig unangetastet", () => {
+    // Wichtig fuer die Leistung: Unveraendert durchgereicht heisst dasselbe
+    // Objekt, sonst rechnet bei jedem Rendern alles darunter neu.
+    const logs = [log("l1", ["bankdruecken"]), log("l2", ["reha-schulter"])];
+    const gefiltert = logsOhneUebungen(logs, new Set(["reha-schulter"]));
+    expect(gefiltert[0]).toBe(logs[0]);
+    expect(gefiltert[1]).not.toBe(logs[1]);
+    expect(gefiltert[1].entries).toEqual([]);
+  });
+
+  it("gibt ohne Ausschluss die Liste unveraendert zurueck", () => {
+    const logs = [log("l1", ["bankdruecken"])];
+    expect(logsOhneUebungen(logs, new Set())).toBe(logs);
+    expect(logsOhneUebungen(logs, null)).toBe(logs);
+  });
+
+  it("kommt mit kaputten Daten klar", () => {
+    expect(logsOhneUebungen(null, new Set(["x"]))).toEqual([]);
+    expect(logsOhneUebungen([{ id: "l1" }], new Set(["x"]))).toEqual([{ id: "l1" }]);
+  });
+
+  it("wirkt sich auf die Satzzahl aus, aber nicht auf die Belastung", () => {
+    // Die Karte "Saetze pro Muskelgruppe" rechnet mit den gefilterten Logs,
+    // "Belastung pro Muskelgruppe" bewusst mit allen - die Arbeit wurde ja
+    // geleistet. Hier wird nachgewiesen, dass das Filtern die Satzzahl
+    // wirklich senkt.
+    const exBy: any = {
+      bankdruecken: { id: "bankdruecken", group: "brust" },
+      "reha-schulter": { id: "reha-schulter", group: "schultern" },
+    };
+    const logs = [log("l1", ["bankdruecken", "reha-schulter"])];
+    const mit = getWeeklySetSeries(logs, exBy, {}, 2);
+    const ohne = getWeeklySetSeries(logsOhneUebungen(logs, new Set(["reha-schulter"])), exBy, {}, 2);
+    const schultern = (reihe: any) => reihe.find((g: any) => g.id === "schultern").current;
+    const brust = (reihe: any) => reihe.find((g: any) => g.id === "brust").current;
+    expect(schultern(mit)).toBeGreaterThan(schultern(ohne));
+    // Die Brust bleibt unberuehrt - es faellt nur die eine Uebung weg.
+    expect(brust(ohne)).toBe(brust(mit));
   });
 });

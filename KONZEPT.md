@@ -824,6 +824,27 @@ Zeit, die das Nachtragen kostet, wäre eine erfundene Antwort. Technisch entsteh
 eine nachgetragene Sitzung gar keine Startzeit bekommt; alle Stellen, die sie lesen, kommen mit dem
 fehlenden Wert bereits klar und schreiben dann keine Dauer ins Protokoll.
 
+**Einzelne Übungen lassen sich aus „Sätze pro Muskelgruppe" herausnehmen.**
+Auf Ordner-Ebene gab es das schon („ohne Statistik", gedacht für EMOM und Conditioning). Es fehlte
+für den Fall, dass nicht ein ganzes Training stört, sondern **eine Übung** darin – eine Reha-Übung
+etwa, oder ein Zusatz, der die Satzzahl einer Muskelgruppe aufbläht, ohne ein Hypertrophie-Reiz zu
+sein. Der Schalter sitzt im Übungs-Detail unter „Info", neben „Zeitbasiert" und „Überall gleich".
+
+Der Unterschied zum Ordner: Dort fällt das ganze Training weg, hier nur die Sätze dieser einen
+Übung – der Rest des Trainings zählt normal weiter.
+
+**Die Wirkung ist bewusst eng.** Betroffen ist nur „Sätze pro Muskelgruppe"; diese Karte ist ein
+reiner Zähler für Hypertrophie-Sätze. „Belastung pro Muskelgruppe" beantwortet eine andere Frage –
+geleistete Arbeit – und die Arbeit wurde ja geleistet, unabhängig vom Trainingsziel. Verlauf,
+Rekorde, „letztes Mal" und die Diagramme der Übung bleiben ebenfalls unberührt. Das ist dieselbe
+Abgrenzung, die schon für die Ordner gilt; zwei verschiedene Regeln für dieselbe Absicht wären
+nicht erklärbar.
+
+Nachgemessen: Ein Training mit 3 Sätzen Bankdrücken und 3 Sätzen Seitheben weist für die Schultern
+4,5 Sätze aus (3 direkt, 1,5 als Nebengruppe des Bankdrückens). Mit „Ohne Statistik" am Seitheben
+bleiben 1,5 – der halbe Satz je Nebengruppe also, und nur der. Die Belastungs-Karte zeigt
+unverändert dieselbe Zahl.
+
 ---
 
 ## Offene Punkte

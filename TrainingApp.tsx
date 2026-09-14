@@ -9091,13 +9091,6 @@ function TrainingAppInner() {
         )}
         <nav className="fab-nav">
           <button
-            className={`nav-btn ${tab === "dashboard" ? "active" : ""}`}
-            onClick={() => setTab("dashboard")}
-          >
-            <Home size={19} />
-            Start
-          </button>
-          <button
             className={`nav-btn ${tab === "calendar" ? "active" : ""}`}
             onClick={() => setTab("calendar")}
           >
@@ -9113,6 +9106,13 @@ function TrainingAppInner() {
           >
             <ClipboardList size={19} />
             Pläne
+          </button>
+          <button
+            className={`nav-btn ${tab === "dashboard" ? "active" : ""}`}
+            onClick={() => setTab("dashboard")}
+          >
+            <Home size={19} />
+            Start
           </button>
           <button
             className={`nav-btn ${tab === "exercises" ? "active" : ""}`}

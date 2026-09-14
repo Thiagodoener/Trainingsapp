@@ -16087,6 +16087,20 @@ function LogView({
 
 const GYM_LINE_COLORS = ["#b25a26", "#41707d", "#4f7a48", "#6f5f92", "#9a7414"];
 
+// Jedes Gym bekommt überall dieselbe Farbe - in jeder Übung, jedem Diagramm.
+// Grundlage ist die Reihenfolge in der Gym-Verwaltung (gyms), NICHT die
+// Reihenfolge, in der die Gyms in einer bestimmten Übung zuerst auftauchen.
+// Genau Letzteres war der Fehler: Bankdrücken wurde zuerst in Fit+ trainiert,
+// Hammercurls zuerst in der Waldschule - macht Fit+ und Waldschule zu Index 0
+// bzw. 1 in jeweils unterschiedlicher Reihenfolge, und beide Gyms tauschten
+// ihre Farbe von Übung zu Übung.
+// "Ohne Gym" bekommt den Platz direkt nach den echten Gyms - stabil, weil
+// die Zahl der echten Gyms sich nicht während einer Ansicht ändert.
+export function gymColor(gymId, gyms) {
+  const idx = gymId === "none" ? gyms.length : gyms.findIndex((g) => g.id === gymId);
+  return GYM_LINE_COLORS[(idx >= 0 ? idx : gyms.length) % GYM_LINE_COLORS.length];
+}
+
 // Recharts takes plain colour strings rather than CSS variables, so the
 // current theme's values are read off the stylesheet once per render.
 function useChartColors(theme) {
@@ -16425,6 +16439,7 @@ function ExerciseCharts({ logs, exerciseId, isTimeBased, theme, gyms = [], gymIn
           splitByGym={splitByGym}
           gymKeys={gymKeys}
           gymLabel={gymLabel}
+          gyms={gyms}
           chartColors={chartColors}
         />
       ))}
@@ -16478,7 +16493,7 @@ function TrophyGlyph({ cx, cy, size = 11, color, strokeWidth = 2.4 }) {
 // sie aenderte ausschliesslich die Vergleichsbasis - die Datumsleiste blieb
 // stehen, egal was man antippte. "4 Wochen" liest sich aber wie "zeig mir
 // 4 Wochen", und bei den Muskelgruppen-Karten tut derselbe Chip genau das.
-function ExerciseStatCard({ title, dataKey, color, chartData, splitByGym, gymKeys, gymLabel, chartColors }) {
+function ExerciseStatCard({ title, dataKey, color, chartData, splitByGym, gymKeys, gymLabel, gyms, chartColors }) {
   const [mode, setMode] = useState("absolute");
   // "Gesamt" als Startwert: Beim Oeffnen einer Uebung will man ihren ganzen
   // Verlauf sehen, nicht die letzten sieben Tage. In der Prozent-Ansicht
@@ -16559,8 +16574,8 @@ function ExerciseStatCard({ title, dataKey, color, chartData, splitByGym, gymKey
 
   const renderLines = () =>
     splitByGym
-      ? gymKeys.map((g, i) => {
-          const lineColor = GYM_LINE_COLORS[i % GYM_LINE_COLORS.length];
+      ? gymKeys.map((g) => {
+          const lineColor = gymColor(g, gyms);
           return (
             <Line
               key={g}

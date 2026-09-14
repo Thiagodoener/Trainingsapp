@@ -51,6 +51,7 @@ import {
   ordneKraftAufzeichnungen,
   istVerpasstePlanung,
   logsOhneUebungen,
+  gymColor,
   getWeeklySetSeries,
   withSecondarySubgroupOverride,
   getExerciseSecondarySubgroups,
@@ -2377,5 +2378,48 @@ describe("Einzelne Uebungen aus der Muskelgruppen-Statistik nehmen", () => {
     expect(schultern(mit)).toBeGreaterThan(schultern(ohne));
     // Die Brust bleibt unberuehrt - es faellt nur die eine Uebung weg.
     expect(brust(ohne)).toBe(brust(mit));
+  });
+});
+
+describe("Jedes Gym behält überall dieselbe Farbe", () => {
+  const gyms = [
+    { id: "fit-plus", name: "Fit+" },
+    { id: "waldschule", name: "Waldschule" },
+  ];
+
+  it("Regression: die Farbe hängt an der Position in der Gym-Verwaltung, nicht an der Übung", () => {
+    // Der gemeldete Fehler: Bei Bankdrücken war Fit+ zuerst trainiert worden,
+    // bei Hammercurls die Waldschule - die alte Logik (Index in den Logs
+    // DIESER Übung) gab den beiden Gyms je nach Übung eine andere Farbe.
+    // gymColor bekommt nur die Gym-ID und die Gym-Liste, nie die Logs einer
+    // bestimmten Übung - die Farbe kann sich also gar nicht mehr danach
+    // richten, welches Gym in einer Übung zuerst auftaucht.
+    const farbeFitPlus = gymColor("fit-plus", gyms);
+    const farbeWaldschule = gymColor("waldschule", gyms);
+    expect(farbeFitPlus).not.toBe(farbeWaldschule);
+    // Bleibt bei wiederholtem Aufruf (= bei jeder weiteren Übung) gleich.
+    expect(gymColor("fit-plus", gyms)).toBe(farbeFitPlus);
+    expect(gymColor("waldschule", gyms)).toBe(farbeWaldschule);
+  });
+
+  it("verschiedene Gyms bekommen verschiedene Farben", () => {
+    const drei = [...gyms, { id: "kraftwerk", name: "Kraftwerk" }];
+    const farben = drei.map((g) => gymColor(g.id, drei));
+    expect(new Set(farben).size).toBe(drei.length);
+  });
+
+  it("'Ohne Gym' hat eine feste, von den echten Gyms verschiedene Farbe", () => {
+    const farbeOhne = gymColor("none", gyms);
+    expect(farbeOhne).not.toBe(gymColor("fit-plus", gyms));
+    expect(farbeOhne).not.toBe(gymColor("waldschule", gyms));
+    // Stabil ueber mehrere Aufrufe (= mehrere Übungen) hinweg.
+    expect(gymColor("none", gyms)).toBe(farbeOhne);
+  });
+
+  it("ein geloeschtes Gym bekommt dieselbe Ausweich-Farbe wie 'Ohne Gym'", () => {
+    // exercise.gymId kann auf ein Gym zeigen, das inzwischen geloescht wurde -
+    // findIndex liefert dann -1. Das darf nicht abstuerzen und soll sich wie
+    // "kein bekanntes Gym" verhalten.
+    expect(gymColor("geloescht", gyms)).toBe(gymColor("none", gyms));
   });
 });

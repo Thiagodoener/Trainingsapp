@@ -508,6 +508,25 @@ leistet und dabei gleich stark bleibt, sieht in jeder Zahl für sich nichts Auff
   Kraftaussage wären mitarbeitende Muskeln Rauschen.
 - **Körpergewichts- und Bandübungen** tauchen nicht auf. Für sie gibt es keine Kraftzahl, die sich
   vergleichen ließe, und eine erfundene wäre schlechter als keine.
+- **Eine Woche mit fast nichts ist eine Lücke, keine Vergleichswoche.** Nachgereicht, nachdem in
+  der Karte „+7.930 %" für den Rücken stand. Das war keine Mehrarbeit, sondern ein Vergleich
+  zwischen zwei völlig verschiedenen Dingen: In der einen Woche gab es einen echten Rückentag mit
+  rund 13.000 kg, in der anderen kam der Rücken nur mit einem einzelnen leichten Satz an einem
+  Beintag vor – ein paar hundert Kilogramm. Weil die Summe einer Woche mit jedem Trainingstag
+  mitwächst, die Kraftzahl aber nicht, fiel es nur beim Volumen auf. Eine Woche zählt jetzt nur
+  als Vergleichswoche, wenn darin mindestens ein **Fünftel** der Arbeit einer normalen
+  Trainingswoche steckt. Maßstab ist der **Median** aller Wochen mit Training über die
+  **komplette** Reihe – der Median, damit genau die Ausreißerwochen den Maßstab nicht selbst
+  verschieben, und die komplette Reihe, damit dieselbe Woche nicht je nach gewähltem Zeitraum mal
+  zählt und mal nicht. Ein Fünftel ist bewusst tief angesetzt: Eine **Entlastungswoche** bringt die
+  Hälfte bis ein Drittel einer normalen Woche und soll selbstverständlich mitzählen; heraus fällt
+  nur, was wenige Prozent einer echten Woche ist.
+- **Über die Arbeit entschieden wird für beide Zahlen, auch für die Kraft.** Die Kraftreihe kann
+  die Frage „war das eine Trainingswoche?" gar nicht beantworten: Ein einzelner leichter Satz
+  ergibt kein kleines 1RM, sondern ein mittleres. Die Woche sähe nach einem Kraft-Einbruch und
+  danach nach einem Sprung aus (im Test: +325 %), obwohl an ihr nur eines auffällig war – dass
+  fast nichts gemacht wurde. Deshalb entscheidet eine Reihe (das Volumen) für beide, statt dass
+  jede über sich selbst entscheidet.
 
 Der Satz unter einer Zeile ist die einzige Stelle in der App, an der über die reine Beschreibung
 hinausgegangen wird: „Deutlich mehr Arbeit, aber die Kraft steht – der Punkt, an dem sich

@@ -1834,7 +1834,8 @@ const STAT_EXPLANATIONS = {
       "Kraft einer Woche = bestes geschätztes 1RM dieser Woche. Volumen einer Woche = Summe aus kg × Wdh. aller abgehakten Arbeitssätze.",
       "Veränderung = zweite Hälfte des gewählten Zeitraums gegen die erste, jeweils als Durchschnitt über die Wochen mit Daten. Wochen ohne Training zählen in keiner Hälfte mit; bei ungerader Wochenzahl fällt die mittlere heraus.",
       "Bewusst nicht „aktuelle Woche gegen den Schnitt davor\" wie bei der Belastung: Dort geht es um diese eine Woche, hier um die Richtung über Wochen. Eine Übung, die du diese Woche zufällig nicht gemacht hast, hätte sonst gar keinen Wert.",
-      "Ein Strich statt einer Zahl heißt: In einer der beiden Hälften fehlen die Daten.",
+      "Eine Woche zählt nur als Vergleichswoche, wenn darin mindestens ein Fünftel der Arbeit einer normalen Trainingswoche steckt (Median aller Wochen mit Training). Ein einzelner Beiwerk-Satz für den Rücken an einem Beintag macht aus der Woche sonst eine Rückenwoche mit ein paar hundert Kilogramm - und gegen einen echten Rückentag stünde dort eine vierstellige Prozentzahl, die nur zwei völlig verschiedene Dinge nebeneinanderstellt. Über die Arbeit entschieden wird für beide Zahlen, auch für die Kraft. Entlastungswochen bleiben dabei drin: Die liegen deutlich über einem Fünftel.",
+      "Ein Strich statt einer Zahl heißt: In einer der beiden Hälften bleibt danach keine Vergleichswoche übrig.",
     ],
   },
   deload: {
@@ -2878,6 +2879,28 @@ export function getStrengthVolumeSeries(logs, weekCount = 26, nowTs = Date.now()
   return out;
 }
 
+// Ab welchem Wert eine Woche als Trainingswoche dieser Reihe gilt.
+//
+// Maßstab ist der Median aller Wochen, in denen überhaupt etwas passiert ist
+// - bewusst der Median und nicht der Schnitt: Genau die Ausreißerwochen, um
+// die es hier geht, sollen den Maßstab nicht selbst verschieben. Gemessen
+// wird an der KOMPLETTEN Reihe, nicht am gewählten Zeitraum, damit dieselbe
+// Woche nicht je nach Chip mal zählt und mal nicht.
+//
+// Ein Fünftel ist bewusst tief angesetzt: Eine Entlastungswoche bringt
+// typischerweise die Hälfte bis ein Drittel einer normalen Woche und soll
+// selbstverständlich mitzählen. Was hier herausfällt, sind Wochen mit einem
+// einzelnen Satz - wenige Prozent einer echten Woche.
+const WEEK_MIN_SHARE = 0.2;
+
+export function typicalWeekFloor(values) {
+  const aktiv = (Array.isArray(values) ? values : []).filter((v) => v > 0).sort((a, b) => a - b);
+  if (aktiv.length === 0) return 0;
+  const mitte = Math.floor(aktiv.length / 2);
+  const median = aktiv.length % 2 ? aktiv[mitte] : (aktiv[mitte - 1] + aktiv[mitte]) / 2;
+  return median * WEEK_MIN_SHARE;
+}
+
 // Wie hat sich eine Reihe über den gewählten Zeitraum verändert: die zweite
 // Hälfte gegen die erste.
 //
@@ -2890,12 +2913,39 @@ export function getStrengthVolumeSeries(logs, weekCount = 26, nowTs = Date.now()
 // Wochen ohne Daten zählen in keiner der beiden Hälften mit: Sie sind eine
 // Lücke, keine Null. Bei ungerader Wochenzahl fällt die mittlere Woche
 // heraus, damit beide Hälften gleich lang sind.
-export function halfPeriodChange(values, compareWeeks) {
-  const reihe = compareWindowSeries(Array.isArray(values) ? values : [], compareWeeks);
+//
+// Und genauso wenig zählt eine Woche mit, in der für diese Gruppe fast
+// nichts passiert ist (siehe typicalWeekFloor). Das ist der Grund für
+// Prozentzahlen in den Tausendern gewesen: Ein einzelner Beiwerk-Satz für
+// den Rücken an einem Beintag macht aus der Woche keine Rückenwoche - aber
+// einen Vergleichswert von ein paar hundert Kilogramm. Gegen eine echte
+// Rückenwoche mit 13.000 kg steht dann "+7.900 %" da, und das hat mit
+// Mehrarbeit nichts zu tun: Verglichen wurden ein Trainingstag und ein
+// Nebensatz.
+// Welche Woche eine Trainingswoche war, entscheidet dabei die geleistete
+// ARBEIT (`gate`), nicht die Reihe selbst. Für die Kraftreihe wäre die Frage
+// sonst gar nicht zu beantworten: Ein einzelner leichter Satz ergibt kein
+// kleines 1RM, sondern ein mittleres - die Woche sähe nach einem Einbruch
+// und danach nach einem Sprung aus, obwohl an ihr nur eines auffällig war,
+// nämlich dass fast nichts gemacht wurde. Ohne `gate` entscheidet die Reihe
+// über sich selbst.
+export function halfPeriodChange(values, compareWeeks, gate = null) {
+  const voll = Array.isArray(values) ? values : [];
+  const tor = Array.isArray(gate) && gate.length === voll.length ? gate : voll;
+  const mindest = typicalWeekFloor(tor);
+  const reihe = compareWindowSeries(voll, compareWeeks);
+  const torReihe = compareWindowSeries(tor, compareWeeks);
   const haelfte = Math.floor(reihe.length / 2);
   if (haelfte < 1) return null;
-  const erste = reihe.slice(0, haelfte).filter((v) => v > 0);
-  const zweite = reihe.slice(reihe.length - haelfte).filter((v) => v > 0);
+  const nimm = (von, bis) => {
+    const out = [];
+    for (let i = von; i < bis; i++) {
+      if (reihe[i] > 0 && torReihe[i] > 0 && torReihe[i] >= mindest) out.push(reihe[i]);
+    }
+    return out;
+  };
+  const erste = nimm(0, haelfte);
+  const zweite = nimm(reihe.length - haelfte, reihe.length);
   if (erste.length === 0 || zweite.length === 0) return null;
   const mittel = (l) => l.reduce((sum, v) => sum + v, 0) / l.length;
   const vorher = mittel(erste);
@@ -18056,7 +18106,8 @@ function ProgressView({
       g.exercises.push({
         id: exId,
         name: ex.name,
-        strength: halfPeriodChange(reihen.strength, svCompareWeeks),
+        // Die Arbeit entscheidet, welche Woche zählt - für beide Zahlen.
+        strength: halfPeriodChange(reihen.strength, svCompareWeeks, reihen.volume),
         volume: halfPeriodChange(reihen.volume, svCompareWeeks),
       });
     });
@@ -18069,7 +18120,7 @@ function ProgressView({
         label: mg.label,
         strengthSeries: kraftReihe,
         volumeSeries: g.volume,
-        strength: halfPeriodChange(kraftReihe, svCompareWeeks),
+        strength: halfPeriodChange(kraftReihe, svCompareWeeks, g.volume),
         volume: halfPeriodChange(g.volume, svCompareWeeks),
         exercises: g.exercises.sort((a, b) => a.name.localeCompare(b.name, "de")),
       };
@@ -18589,8 +18640,10 @@ function ProgressView({
             })}
             <p className="deload-basis">
               Verglichen wird die zweite Hälfte des gewählten Zeitraums gegen
-              die erste. Ein Strich heißt: dafür fehlen in einer der beiden
-              Hälften die Daten.
+              die erste. Wochen, in denen für eine Gruppe fast nichts
+              passiert ist, zählen dabei nicht als Vergleichswoche. Ein
+              Strich heißt: In einer der beiden Hälften bleibt danach nichts
+              übrig, womit sich vergleichen ließe.
             </p>
           </div>
         )}

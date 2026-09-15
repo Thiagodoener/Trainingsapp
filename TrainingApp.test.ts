@@ -68,6 +68,7 @@ import {
   bodyWeightAt,
   getStrengthVolumeSeries,
   halfPeriodChange,
+  typicalWeekFloor,
   strengthVolumeNote,
   plural,
   shortSet,
@@ -1668,6 +1669,55 @@ describe("Kraft gegen Volumen", () => {
     expect(halfPeriodChange([0, 0, 0, 0, 5, 5, 5, 5], 7)).toBeNull();
     expect(halfPeriodChange([], 7)).toBeNull();
     expect(halfPeriodChange([5], 7)).toBeNull();
+  });
+
+  it("eine Woche mit einem einzelnen Beiwerk-Satz ist keine Vergleichswoche", () => {
+    // Genau der gemeldete Fall: echte Rueckentage mit rund 13.000 kg, und
+    // dazwischen eine Woche, in der der Ruecken nur mit einem leichten Satz
+    // an einem Beintag vorkam (160 kg). Als Vergleichswoche gerechnet stuende
+    // dort "+7.900 %".
+    const werte = [13000, 12000, 13000, 12500, 160, 13000];
+    const roh = (12500 + 13000) / 2 / 160 - 1;
+    expect(Math.round(roh * 100)).toBeGreaterThan(7000); // so sah es aus
+    expect(halfPeriodChange(werte, 1)).toBeNull();
+  });
+
+  it("Entlastungswochen bleiben Vergleichswochen", () => {
+    // Eine halbierte Woche ist gewolltes Training, kein Ausreisser - sie
+    // darf nicht wegfallen, sonst verschwindet die Entlastung aus der Zahl.
+    const werte = [10000, 10000, 10000, 10000, 10000, 5000];
+    const r = halfPeriodChange(werte, 1)!;
+    expect(r).not.toBeNull();
+    expect(Math.round(r.change)).toBe(-50);
+  });
+
+  it("der Massstab ist die ganze Reihe, nicht der gewaehlte Zeitraum", () => {
+    // Dieselben beiden letzten Wochen, einmal mit und einmal ohne Historie.
+    // Ohne Historie ist 300 kg das Normale - dann ist es auch eine
+    // Vergleichswoche. Mit 13.000-kg-Wochen davor ist es Beiwerk.
+    expect(halfPeriodChange([300, 600], 1)).not.toBeNull();
+    expect(halfPeriodChange([13000, 13000, 13000, 300, 600], 1)).toBeNull();
+  });
+
+  it("die Arbeit entscheidet auch fuer die Kraftzahl, welche Woche zaehlt", () => {
+    // Kraftreihe (relativ) und Arbeitsreihe derselben Gruppe. In der
+    // Vorwoche gab es nur einen einzelnen leichten Satz: wenig Arbeit, aber
+    // ein mittleres 1RM. Ohne das Tor stuende dort ein Kraftsprung, den es
+    // nicht gab - verglichen wuerde ein Trainingstag mit einem Nebensatz.
+    const kraft = [1, 0.98, 1, 0.99, 0.25, 1];
+    const arbeit = [13000, 12000, 13000, 12500, 160, 13000];
+    expect(Math.round(halfPeriodChange(kraft, 1)!.change)).toBe(300); // ohne Tor
+    expect(halfPeriodChange(kraft, 1, arbeit)).toBeNull();            // mit Tor
+  });
+
+  it("typicalWeekFloor nimmt den Median der Wochen mit Training", () => {
+    // Nullen zaehlen nicht mit, und der eine Ausreisser verschiebt den
+    // Massstab nicht (Schnitt waere 4100, Median ist 200).
+    expect(typicalWeekFloor([0, 100, 200, 12000])).toBeCloseTo(200 * 0.2, 10);
+    expect(typicalWeekFloor([])).toBe(0);
+    expect(typicalWeekFloor([0, 0])).toBe(0);
+    // Gerade Anzahl: Mittel der beiden mittleren Werte.
+    expect(typicalWeekFloor([100, 200, 300, 400])).toBeCloseTo(250 * 0.2, 10);
   });
 
   it("Koerpergewichts-Uebungen bekommen keine Kraftzahl", () => {

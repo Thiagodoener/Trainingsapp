@@ -619,12 +619,15 @@ solchen Daten wirklich **startet**. Deshalb gibt es jetzt zwei Prüfungen mehr:
   eine neue Funktion dazuschreibt, bekommt sie ohne Zutun mitgeprüft. Der Maßstab ist niedrig
   gehalten – nicht „rechnet richtig", nur „wirft keine Ausnahme". Was eine Funktion bei Müll
   zurückgibt, darf sie selbst wissen; was sie nicht darf, ist die Oberfläche mitreißen.
-- **`Oberflaeche.test.tsx`** startet die App wirklich, mit kaputter Ablage, und tippt jeden Reiter
-  einmal an. Das Antippen ist der Punkt: Die erste Fassung prüfte nur den Startbildschirm und war
-  damit fast blind – sie fand genau einen der Fehler. Erst der Durchgang durch alle Reiter fand
-  den nächsten (`e.name.toLowerCase()` in fünf Suchfeldern, die `exerciseName` umgingen). Das ist
-  dieselbe Lehre wie bei der Browser-Prüfung oben, nur automatisiert: **Ein Absturz passiert dort,
-  wo man gerade hingetippt hat.** Eine Prüfung, die nicht tippt, prüft an ihm vorbei.
+- **`Oberflaeche.test.tsx`** startet die App wirklich, mit kaputter Ablage, und *bedient* sie:
+  jeden Reiter einmal antippen, dann mehrere Übungen öffnen und in jeder Statistik, Verlauf und
+  Info durchgehen – die Regel der Browser-Prüfung von oben, nur automatisiert. Das Antippen ist
+  der Punkt: Die erste Fassung prüfte nur den Startbildschirm und war damit fast blind – von den
+  beiden schon gebauten Absicherungen fand sie beim Gegentest nur eine. Erst der Durchgang durch
+  alle Reiter fand beide, und obendrein einen Fehler, der noch drin war: `e.name.toLowerCase()`
+  in fünf Suchfeldern, die `exerciseName` umgingen. Dieselbe Lehre wie oben, nur diesmal
+  eingebaut statt aufgeschrieben: **Ein Absturz passiert dort, wo man gerade hingetippt hat.**
+  Eine Prüfung, die nicht tippt, prüft an ihm vorbei.
 
 Beide Prüfungen wurden gegengeprüft, indem die Absicherungen versuchsweise wieder ausgebaut
 wurden – sie schlagen dann fehl. Eine Prüfung, von der man das nicht weiß, ist keine.

@@ -62,19 +62,64 @@ function nichtAbgestuerzt(wo: string) {
 // prueft, prueft an der Stelle vorbei, um die es geht.
 const REITER = ["Kalender", "Pläne", "Übungen", "Fortschritt", "Start"];
 
+async function tippe(element: Element | null | undefined) {
+  if (!element) return;
+  await act(async () => { fireEvent.click(element); });
+}
+
+async function reiter(name: string) {
+  const knopf = screen.queryAllByRole("button").find((b) => b.textContent?.trim() === name);
+  // Fehlt ein Reiter, ist die Navigationsleiste nicht da - auch das waere ein
+  // Befund und kein Grund, stillschweigend weiterzumachen.
+  expect(knopf, `Reiter "${name}" nicht gefunden`).toBeTruthy();
+  await tippe(knopf);
+  await waitFor(() => nichtAbgestuerzt(`Reiter "${name}"`));
+}
+
+// Uebungen aufmachen - und zwar mehrere.
+//
+// Genau hier knallte es beide Male: "beim Antippen einer Uebung". In
+// KONZEPT.md steht als Regel fuer die Browser-Pruefung, mindestens eine
+// Uebung JEDES Typs zu oeffnen (mit Gewicht, Koerpergewicht, Zeit). Weil
+// sich die Typen von aussen nicht ansehen lassen, werden hier die ersten
+// paar der Liste genommen - bei den gefilterten Listen der Tests deckt das
+// die vorhandenen Typen ab.
+async function oeffneUebungen(wieviele = 5) {
+  for (let i = 0; i < wieviele; i++) {
+    const zeilen = Array.from(document.querySelectorAll(".ex-row-clickable"));
+    if (zeilen.length <= i) return;
+    await tippe(zeilen[i]);
+    await waitFor(() => nichtAbgestuerzt(`Uebung Nr. ${i + 1}`));
+
+    // Statistik, Verlauf und Info - drei getrennte Ansichten mit Diagrammen,
+    // Rekorden und Verlauf darunter. Die Uebungsliste allein rendert davon
+    // nichts.
+    for (const unterreiter of ["Statistik", "Verlauf", "Info"]) {
+      const knopf = Array.from(document.querySelectorAll(".sub-tab")).find(
+        (b) => b.textContent?.trim() === unterreiter
+      );
+      await tippe(knopf);
+      await waitFor(() => nichtAbgestuerzt(`Uebung Nr. ${i + 1}, "${unterreiter}"`));
+    }
+
+    // Wieder zu. Bleibt das Blatt offen, ist die Liste darunter nicht
+    // erreichbar und die naechste Runde tippt ins Leere.
+    const zurueck = screen.queryAllByRole("button").find((b) =>
+      /zurück|schließen|abbrechen/i.test(b.getAttribute("aria-label") || b.textContent || "")
+    );
+    await tippe(zurueck);
+    await waitFor(() => nichtAbgestuerzt("nach dem Schliessen einer Uebung"));
+    if (document.querySelectorAll(".ex-row-clickable").length === 0) return;
+  }
+}
+
 async function appStartetUndLaesstSichBedienen() {
   render(<TrainingApp />);
   await waitFor(() => nichtAbgestuerzt("beim Start"));
 
   for (const name of REITER) {
-    const knopf = screen
-      .queryAllByRole("button")
-      .find((b) => b.textContent?.trim() === name);
-    // Fehlt ein Reiter, ist die Navigationsleiste nicht da - auch das waere
-    // ein Befund und kein Grund, stillschweigend weiterzumachen.
-    expect(knopf, `Reiter "${name}" nicht gefunden`).toBeTruthy();
-    await act(async () => { fireEvent.click(knopf!); });
-    await waitFor(() => nichtAbgestuerzt(`Reiter "${name}"`));
+    await reiter(name);
+    if (name === "Übungen") await oeffneUebungen();
   }
 }
 

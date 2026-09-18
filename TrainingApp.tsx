@@ -11894,7 +11894,7 @@ function ExercisesView({
               key={e.id}
               onClick={() => setSelectedExerciseId(e.id)}
             >
-              <span className="ex-name">{e.name}</span>
+              <span className="ex-name">{exerciseName(e)}</span>
               <div style={{ display: "flex", alignItems: "center", gap: 8, flexShrink: 0 }}>
                 {/* Untergruppen stehen bewusst nicht mehr hier - bei mehreren
                     zugewiesenen Untergruppen wurde die Zeile zu voll und
@@ -15648,7 +15648,7 @@ function LogView({
                       const addedCount = session.entries.filter((se) => se.exerciseId === e.id).length;
                       return (
                         <div className="ex-row" key={e.id}>
-                          <span className="ex-name">{e.name}</span>
+                          <span className="ex-name">{exerciseName(e)}</span>
                           {addedCount > 0 && (
                             <span className="tag" title="So oft ist die Übung schon im Training">
                               {addedCount}×
@@ -16202,7 +16202,7 @@ function LogView({
                   const addedCount = session.entries.filter((se) => se.exerciseId === e.id).length;
                   return (
                     <div className="ex-row" key={e.id}>
-                      <span className="ex-name">{e.name}</span>
+                      <span className="ex-name">{exerciseName(e)}</span>
                       {addedCount > 0 && (
                         <span className="tag" title="So oft ist die Übung schon im Training">
                           {addedCount}×

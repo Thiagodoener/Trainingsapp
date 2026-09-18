@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   toNum,
+  exerciseName,
   fmtDecimal,
   fmtRir,
   estimate1RM,
@@ -96,6 +97,23 @@ const satz = (over: Record<string, unknown> = {}) => ({
 const training = (over: Record<string, unknown> = {}) => ({
   id: "t1", date: new Date().toISOString(), planName: "Test", durationMinutes: 45,
   entries: [{ id: "e1", exerciseId: "bankdruecken", sets: [satz()] }], ...over,
+});
+
+describe("Eine geloeschte Uebung darf die App nicht umbringen", () => {
+  it("ein fehlender Uebungs-Eintrag bekommt einen Namen statt eines Absturzes", () => {
+    // Genau der gemeldete Fall: Im laufenden Training steckt eine Uebung,
+    // die es nicht mehr gibt. exBy[...] ist dann undefined, und ein blankes
+    // ex.name hat beim Oeffnen der App die ganze Oberflaeche abgeraeumt
+    // ("undefined is not an object (evaluating 'A.name')").
+    expect(exerciseName(undefined)).toBe("Gelöschte Übung");
+    expect(exerciseName(null)).toBe("Gelöschte Übung");
+    expect(exerciseName({})).toBe("Gelöschte Übung");
+    expect(exerciseName({ name: "" })).toBe("Gelöschte Übung");
+  });
+
+  it("eine vorhandene Uebung behaelt ihren Namen", () => {
+    expect(exerciseName({ id: "bankdruecken", name: "Bankdrücken" })).toBe("Bankdrücken");
+  });
 });
 
 describe("Zahlen einlesen und ausgeben", () => {

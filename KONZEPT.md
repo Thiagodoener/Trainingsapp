@@ -558,6 +558,29 @@ Und für die Browser-Prüfung gilt ab jetzt: Ein Skript, das an einer Bedienung 
 Befund, kein Skriptproblem – bis nachgesehen wurde. Zur Prüfung gehört, mindestens eine Übung jedes
 Typs zu öffnen (mit Gewicht, Körpergewicht, Zeit).
 
+**Eine gelöschte Übung hat die App beim Öffnen abgestürzt.**
+Statt der App erschien „Da ist etwas schiefgelaufen – undefined is not an object (evaluating
+'A.name')". Ursache: Ein Trainings- oder Planeintrag merkt sich nur die Übungs-**ID**. Wird die
+Übung gelöscht, bleibt der Eintrag mit seinen Sätzen stehen, die Übung dahinter ist aber weg –
+und an zwei Stellen stand der Name ohne Absicherung (`ex.name` im laufenden Training und im
+Plan-Editor). Dass es *beim Öffnen* knallte, liegt daran, dass die App mit einem laufenden
+Training direkt auf den Trainings-Reiter springt: Die App war damit gar nicht mehr zu benutzen.
+
+Bemerkenswert ist wieder, dass rundherum überall abgesichert war – `if (!ex) return null`,
+`ex?.name || "Übung"`, `!!ex &&` – nur an diesen beiden Stellen nicht. Eine Absicherung, die man
+an jeder Stelle einzeln nicht vergessen darf, wird irgendwo vergessen. Deshalb gibt es jetzt
+`exerciseName(ex)` an einer Stelle, und die Regel dahinter:
+
+- **Wo an einem Eintrag Daten hängen** (laufendes Training, Plan-Editor), bleibt er stehen und
+  heißt „Gelöschte Übung". Die Sätze sind echte, eingetippte Daten – sie verschwinden zu lassen
+  wäre schlimmer als ein fehlender Name.
+- **Wo ein Eintrag gefahrlos wegfallen kann** (Auswertungen, Verlauf), wird er weiter
+  übersprungen. Eine Zeile „Gelöschte Übung" in der Statistik wäre dort keine Information.
+
+Und die Rückfrage vor dem Löschen sagt jetzt auch, wenn die Übung im **laufenden Training**
+steckt. Vorher zählte sie nur die gespeicherten Trainings – ein laufendes ist noch keins, also
+stand dort „steckt in 0 Trainings", während die Übung gerade auf dem Bildschirm war.
+
 **Veröffentlicht wird über GitHub, nicht mehr über Netlify.**
 Netlify rechnete jede Aktualisierung gegen ein Guthaben ab, was dazu führte, dass Verbesserungen
 gesammelt statt ausgeliefert wurden. GitHub Pages kostet bei einem öffentlichen Repository nichts

@@ -288,6 +288,23 @@ export const toNum = (value) => {
   return Number.isFinite(n) ? n : 0;
 };
 
+// Der Name einer Uebung, die es vielleicht nicht mehr gibt.
+//
+// Ein Trainings- oder Planeintrag merkt sich nur die Uebungs-ID. Wird die
+// Uebung geloescht, bleibt der Eintrag mit seinen Saetzen stehen - die
+// Saetze sind schliesslich echte Daten -, aber die Uebung dahinter ist weg.
+// Genau das hat die App beim Oeffnen zum Absturz gebracht: Ein laufendes
+// Training wird beim Start angezeigt, und dort stand der Name ohne
+// Absicherung ("undefined is not an object (evaluating 'A.name')").
+//
+// Ueberall dort, wo ein Eintrag stehen bleiben MUSS, weil an ihm Daten
+// haengen, steht deshalb dieser Name statt eines Absturzes. Wo ein Eintrag
+// gefahrlos wegfallen kann (Auswertungen, Verlauf), wird er weiterhin
+// uebersprungen - eine Zeile "Geloeschte Uebung" in der Statistik waere
+// dort keine Information, sondern Rauschen.
+const GELOESCHTE_UEBUNG = "Gelöschte Übung";
+export const exerciseName = (ex) => (ex && ex.name) || GELOESCHTE_UEBUNG;
+
 // Saved logs are read defensively everywhere: an entry written by an older
 // version, or one interrupted mid-save, can be missing `entries` or `sets`
 // entirely, and a bare .map/.forEach on those would take the whole screen
@@ -8074,6 +8091,7 @@ function TrainingAppInner() {
             statsExcludedExercises={statsExcludedExercises}
             onToggleStatsExcluded={handleToggleStatsExcluded}
             onRequestConfirm={askConfirm}
+            laufendeUebungsIds={session ? logEntries(session).map((e) => e.exerciseId) : []}
           />
         ) : tab === "plans" ? (
           building ? (
@@ -11578,6 +11596,7 @@ function ExercisesView({
   onToggleStatsExcluded = () => {},
   onRequestConfirm,
   gyms = [],
+  laufendeUebungsIds = [],
 }) {
   const [query, setQuery] = useState("");
   const [group, setGroup] = useState("alle");
@@ -11596,12 +11615,24 @@ function ExercisesView({
       (l) => logEntriesFor(l, exercise.id).length > 0
     ).length;
     const base = `Eigene Übung „${exercise.name}“ wirklich löschen?`;
-    if (trainings === 0) return base;
-    return (
-      base +
-      ` Sie steckt in ${trainings} ${trainings === 1 ? "Training" : "Trainings"} –` +
-      " deren Sätze verschwinden danach aus Verlauf und Statistik."
-    );
+    // Ein laufendes Training ist noch kein Log - ohne diesen Satz stand hier
+    // "steckt in 0 Trainings", waehrend die Uebung gerade auf dem Bildschirm
+    // war. Die Saetze gehen dort nicht verloren; nur der Name ist weg.
+    const laeuft = (Array.isArray(laufendeUebungsIds) ? laufendeUebungsIds : []).includes(exercise.id);
+    const teile = [];
+    if (trainings > 0) {
+      teile.push(
+        ` Sie steckt in ${trainings} ${trainings === 1 ? "Training" : "Trainings"} –` +
+        " deren Sätze verschwinden danach aus Verlauf und Statistik."
+      );
+    }
+    if (laeuft) {
+      teile.push(
+        ` Sie steht außerdem im laufenden Training – die Sätze dort bleiben stehen,` +
+        ` die Übung heißt danach aber nur noch „${GELOESCHTE_UEBUNG}“.`
+      );
+    }
+    return base + teile.join("");
   };
 
   // Look the exercise up live so a rename is reflected immediately instead
@@ -13128,7 +13159,7 @@ function PlanBuilder({
                         className="builder-item-main"
                         onClick={() => setExpandedItemId(isOpen ? null : it.id)}
                       >
-                        <span className="ex-name">{ex.name}</span>
+                        <span className="ex-name">{exerciseName(ex)}</span>
                         <span className="builder-item-summary">
                           {warm > 0 && `${warm}W + `}
                           {`${it.sets}×${itemUsesTime ? `${shownSeconds} Sek.` : it.reps}`}
@@ -15310,7 +15341,7 @@ function LogView({
                   className="ex-name ex-name-clickable"
                   onClick={() => setSelectedExerciseId(entry.exerciseId)}
                 >
-                  {ex.name}
+                  {exerciseName(ex)}
                 </span>
                 {/* Records covering all sets of the exercise belong here, not
                     on one particular set. */}
@@ -15395,7 +15426,7 @@ function LogView({
                       onClick={() => {
                         setOpenEntryMenu(null);
                         onRequestConfirm(
-                          `„${ex.name}“ aus diesem Training entfernen?`,
+                          `„${exerciseName(ex)}“ aus diesem Training entfernen?`,
                           () => removeExerciseFromSession(entry.id)
                         );
                       }}

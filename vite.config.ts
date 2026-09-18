@@ -3,6 +3,12 @@ import react from '@vitejs/plugin-react';
 
 export default defineConfig({
   plugins: [react()],
+  // Oberflaeche.test.tsx startet die App wirklich, dafuer braucht es einen
+  // nachgebauten Browser. Nur eine Entwicklungs-Abhaengigkeit: In die
+  // ausgelieferte App wandert davon nichts.
+  test: {
+    environment: 'jsdom',
+  },
   // Relative Pfade zu den eigenen Dateien.
   //
   // Bei GitHub Pages liegt die App nicht ganz oben auf der Adresse, sondern in

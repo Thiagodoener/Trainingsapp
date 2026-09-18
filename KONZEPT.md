@@ -581,6 +581,59 @@ Und die Rückfrage vor dem Löschen sagt jetzt auch, wenn die Übung im **laufen
 steckt. Vorher zählte sie nur die gespeicherten Trainings – ein laufendes ist noch keins, also
 stand dort „steckt in 0 Trainings", während die Übung gerade auf dem Bildschirm war.
 
+**Kaputte gespeicherte Daten waren der Absturz, aus dem es kein Zurück gab.**
+Die beiden Abstürze oben hatten etwas gemeinsam, das erst im Rückblick auffiel: Keiner kam von
+einer falschen Rechnung. Beide kamen von Daten, die anders aussahen als der Code erwartete – eine
+Übung, die es nicht mehr gab, ein Name, den niemand gesetzt hatte.
+
+Die schlimmste Ausprägung davon sitzt beim Start. Ein Wert, der in der falschen **Form** in der
+Ablage liegt – eine Karte, wo eine Liste erwartet wird –, wird direkt in den Zustand gesetzt und
+dort mit `.map` oder `.length` angefasst. Die App stürzt ab, bevor sie etwas anzeigt. Und anders
+als bei einem Absturz in einer Unteransicht hilft Neuladen nicht: Beim nächsten Start wird
+derselbe kaputte Wert wieder gelesen. Die Fehlerseite („Da ist etwas schiefgelaufen") ist die
+**Anzeige** eines Absturzes, nicht seine Behebung – sie kann nur noch die Sicherung anbieten.
+
+Drei Absicherungen, alle nach demselben Muster wie `exerciseName`: an *einer* Stelle statt an
+jeder einzeln.
+
+- **`loadJSON` prüft die Form.** Der Ersatzwert kündigt sie an: Wer `[]` mitgibt, bekommt nie
+  etwas anderes als eine Liste zurück. Passt der gespeicherte Wert nicht, gilt der Standardwert
+  und es steht eine Meldung im Log. Ein Ersatzwert von `null` heißt weiterhin „alles erlaubt" –
+  dort prüft der Aufrufer selbst, und die Sicherung nimmt bewusst alles mit, was da ist.
+- **Kaputte Listeneinträge fliegen beim Laden einmal heraus.** Quer durch die Oberfläche steht
+  `plans.map((p) => p.id === …)`; ein einzelnes `null` in so einer Liste ließ jede dieser Zeilen
+  abstürzen. Aussortiert wird nur, was gar kein Objekt ist – ein leeres Objekt bleibt, `{}.id` ist
+  schlicht `undefined`. Ausgenommen sind die Entlastungswochen: Dort ist eine blanke Zeichenkette
+  ein gültiger älterer Speicherstand und würde sonst stillschweigend verschwinden.
+- **Eine Wochenzahl, die keine Zahl ist**, ergab `new Array(NaN)` → „Invalid array length" und riss
+  die ganze Auswertung mit. `safeWeekCount` fängt das an den sechs Reihen-Funktionen ab.
+
+Dazu die eigentliche Lehre, und sie betrifft die Prüfungen. Oben steht schon, warum die
+Rechen-Tests solche Fehler nicht finden: *Sie rufen einzelne Funktionen auf, keine Oberfläche.*
+`pruefe-namen.mjs` schließt davon die eine Hälfte – Namen, die es nicht gibt. Die andere Hälfte
+sind Zugriffe auf Daten, die anders aussehen als erwartet, und die findet nur, wer die App mit
+solchen Daten wirklich **startet**. Deshalb gibt es jetzt zwei Prüfungen mehr:
+
+- **`Robustheit.test.ts`** geht *alle* exportierten Funktionen automatisch durch und wirft ihnen
+  Unsinn und halbkaputte Trainingsdaten vor. Bewusst nicht aufgezählt, welche geprüft werden: Wer
+  eine neue Funktion dazuschreibt, bekommt sie ohne Zutun mitgeprüft. Der Maßstab ist niedrig
+  gehalten – nicht „rechnet richtig", nur „wirft keine Ausnahme". Was eine Funktion bei Müll
+  zurückgibt, darf sie selbst wissen; was sie nicht darf, ist die Oberfläche mitreißen.
+- **`Oberflaeche.test.tsx`** startet die App wirklich, mit kaputter Ablage, und tippt jeden Reiter
+  einmal an. Das Antippen ist der Punkt: Die erste Fassung prüfte nur den Startbildschirm und war
+  damit fast blind – sie fand genau einen der Fehler. Erst der Durchgang durch alle Reiter fand
+  den nächsten (`e.name.toLowerCase()` in fünf Suchfeldern, die `exerciseName` umgingen). Das ist
+  dieselbe Lehre wie bei der Browser-Prüfung oben, nur automatisiert: **Ein Absturz passiert dort,
+  wo man gerade hingetippt hat.** Eine Prüfung, die nicht tippt, prüft an ihm vorbei.
+
+Beide Prüfungen wurden gegengeprüft, indem die Absicherungen versuchsweise wieder ausgebaut
+wurden – sie schlagen dann fehl. Eine Prüfung, von der man das nicht weiß, ist keine.
+
+Was sie **nicht** kosten: `jsdom` und die Testbibliothek sind reine Entwicklungs-Abhängigkeiten,
+in der ausgelieferten App landet davon nichts (nachgemessen: 406,64 kB → 406,67 kB, die
+Bibliotheken unverändert). Gerechnet wird überall wie vorher – geprüfte Daten laufen durch
+dieselben Zeilen.
+
 **Veröffentlicht wird über GitHub, nicht mehr über Netlify.**
 Netlify rechnete jede Aktualisierung gegen ein Guthaben ab, was dazu führte, dass Verbesserungen
 gesammelt statt ausgeliefert wurden. GitHub Pages kostet bei einem öffentlichen Repository nichts

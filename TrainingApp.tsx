@@ -10180,7 +10180,7 @@ function CalendarView({
   };
 
   const filteredPlansForSchedule = plans.filter((p) =>
-    p.name.toLowerCase().includes(workoutQuery.toLowerCase())
+    (p?.name || "").toLowerCase().includes(workoutQuery.toLowerCase())
   );
 
   // Only entries that have not happened yet can be moved or re-linked - a
@@ -10199,10 +10199,10 @@ function CalendarView({
   };
   const closeEditDialog = () => setEditingEntry(null);
   const filteredPlansForSwap = plans.filter((p) =>
-    p.name.toLowerCase().includes(editSwapQuery.toLowerCase())
+    (p?.name || "").toLowerCase().includes(editSwapQuery.toLowerCase())
   );
   const filteredBreathingForSwap = breathingExercises.filter((b) =>
-    b.name.toLowerCase().includes(editSwapQuery.toLowerCase())
+    (b?.name || "").toLowerCase().includes(editSwapQuery.toLowerCase())
   );
 
   // Der Bereich, der sich waehrend der Auswahl schon mitfaerbt: vom ersten
@@ -11492,7 +11492,7 @@ function NewExerciseForm({ exercises, onAddCustom, onSetExerciseSubgroups, onDon
     if (exercises.some((e) => e.id === id)) {
       id = `custom-${baseId}-${uid()}`;
     }
-    if (exercises.some((e) => e.name.toLowerCase() === trimmed.toLowerCase())) {
+    if (exercises.some((e) => exerciseName(e).toLowerCase() === trimmed.toLowerCase())) {
       setErrorMsg("Diese Übung gibt es schon.");
       return;
     }
@@ -11786,7 +11786,7 @@ function ExercisesView({
     const matchesEquipment =
       equipmentFilter === "alle" ||
       getExerciseEquipment(e, exerciseEquipmentOverrides) === equipmentFilter;
-    const matchesQuery = e.name.toLowerCase().includes(query.toLowerCase());
+    const matchesQuery = exerciseName(e).toLowerCase().includes(query.toLowerCase());
     return matchesGroup && matchesSubgroup && matchesEquipment && matchesQuery;
   })
     // Zuletzt Trainiertes zuerst: die Liste soll die eigene Praxis abbilden,
@@ -12061,7 +12061,7 @@ function ExerciseDetailSheet({
       return;
     }
     const clash = exercises.some(
-      (e) => e.id !== exercise.id && e.name.toLowerCase() === trimmed.toLowerCase()
+      (e) => e.id !== exercise.id && exerciseName(e).toLowerCase() === trimmed.toLowerCase()
     );
     if (clash) {
       setRenameError("Diese Übung gibt es schon.");
@@ -12749,7 +12749,7 @@ function PlanBuilder({
           (subgroupFilter === "alle" || exerciseHasSubgroup(e, exerciseSubgroupOverrides, subgroupFilter)) &&
           (equipmentFilter === "alle" ||
             getExerciseEquipment(e, exerciseEquipmentOverrides) === equipmentFilter) &&
-          e.name.toLowerCase().includes(query.toLowerCase())
+          exerciseName(e).toLowerCase().includes(query.toLowerCase())
       );
       const BOTTOM = Number.MAX_SAFE_INTEGER;
       return matching.sort((a, b) => {
@@ -14412,7 +14412,7 @@ function LogView({
       exerciseHasSubgroup(e, exerciseSubgroupOverrides, addSubgroup)) &&
     (addEquipment === "alle" ||
       getExerciseEquipment(e, exerciseEquipmentOverrides) === addEquipment) &&
-    e.name.toLowerCase().includes(addExerciseQuery.toLowerCase());
+    exerciseName(e).toLowerCase().includes(addExerciseQuery.toLowerCase());
   const [settingsMenuOpen, setSettingsMenuOpen] = useState(false);
   const [openEntryMenu, setOpenEntryMenu] = useState(null);
   const entryMenuRef = useMenuFlip(openEntryMenu, setEntryMenuUp);

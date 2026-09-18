@@ -288,6 +288,42 @@ export const toNum = (value) => {
   return Number.isFinite(n) ? n : 0;
 };
 
+// Eine Wochenzahl, aus der sich gefahrlos ein Array bauen laesst.
+//
+// `new Array(x)` wirft bei NaN, bei Nachkommastellen und bei negativen Zahlen
+// einen "Invalid array length" - und NaN entsteht schnell, sobald eine
+// Wochenzahl aus einer gespeicherten Einstellung oder einer Rechnung kommt
+// statt aus einer Konstante. Das war ein Absturz der ganzen Auswertung, weil
+// die Reihen-Funktionen ihre leeren Wochen genau so anlegen.
+const WOCHEN_MAX = 520; // rund zehn Jahre - darueber ist es kein Zeitraum mehr, sondern ein Tippfehler
+function safeWeekCount(weekCount, fallback = 12) {
+  const n = Number(weekCount);
+  if (!Number.isFinite(n)) return fallback;
+  return Math.min(WOCHEN_MAX, Math.max(0, Math.floor(n)));
+}
+
+// Aus einer Liste nur das behalten, was ueberhaupt ein Eintrag sein kann.
+//
+// Quer durch die Oberflaeche steht `plans.map((p) => p.id === ...)`,
+// `gyms.map((g) => g.name)` und Dutzende gleichartige Zeilen. Ein einzelnes
+// `null` in so einer Liste - ein abgebrochenes Speichern, eine von Hand
+// bearbeitete Sicherungsdatei - liess jede davon abstuerzen. Ein leeres
+// Objekt tut das nicht, `{}.id` ist schlicht undefined. Aussortiert wird
+// deshalb nur, was gar kein Objekt ist; echte Eintraege bleiben unangetastet.
+function nurEintraege(value) {
+  return (Array.isArray(value) ? value : []).filter(
+    (e) => e !== null && typeof e === "object" && !Array.isArray(e)
+  );
+}
+
+// Eine Nachschlagekarte (Uebung nach ID, Aenderungen nach ID, ...), aus der
+// sich gefahrlos lesen laesst. Steht in der Ablage statt eines Objekts etwas
+// anderes - eine Liste, null, ein Rest aus einer aelteren Fassung -, wird
+// daraus eine leere Karte statt eines Absturzes beim ersten Zugriff.
+function safeMap(value) {
+  return value && typeof value === "object" && !Array.isArray(value) ? value : {};
+}
+
 // Der Name einer Uebung, die es vielleicht nicht mehr gibt.
 //
 // Ein Trainings- oder Planeintrag merkt sich nur die Uebungs-ID. Wird die
@@ -333,7 +369,10 @@ const logSetsFor = (log, exerciseId) =>
 // und Eintraege aus beschaedigten Sicherungen haben beides nicht - und die
 // Trainingsansicht greift beim Rendern direkt auf entry.sets zu.
 function withEntryIds(session) {
-  if (!session || !Array.isArray(session.entries)) return session;
+  // Was kein Objekt ist, ist kein Training - und wuerde eine Zeile spaeter
+  // beim Zugriff auf .entries oder .id die Trainingsansicht mitreissen.
+  if (!session || typeof session !== "object" || Array.isArray(session)) return null;
+  if (!Array.isArray(session.entries)) return session;
   const clean = session.entries.filter(Boolean);
   const alreadyFine =
     clean.length === session.entries.length &&
@@ -410,8 +449,9 @@ const feelingLabel = (value) =>
 // (erster Satz der Uebung, oder davor stehen nur Aufwaermsaetze) ergibt er
 // keinen Sinn und wird gar nicht erst angeboten.
 export function canBeDropset(sets, idx) {
+  const liste = Array.isArray(sets) ? sets : [];
   for (let i = idx - 1; i >= 0; i -= 1) {
-    if (!sets[i]?.warmup) return true;
+    if (!liste[i]?.warmup) return true;
   }
   return false;
 }
@@ -776,7 +816,7 @@ export function isTimeBasedInLogs(logs, exerciseId, timeBasedExercises) {
   if (timeBasedExercises && Object.prototype.hasOwnProperty.call(timeBasedExercises, exerciseId)) {
     return !!timeBasedExercises[exerciseId];
   }
-  return (logs || []).some((l) => {
+  return (Array.isArray(logs) ? logs : []).some((l) => {
     // Trainings aus dem Automatik-Modus zaehlen hier nicht mit. Der Modus hat
     // frueher JEDE Uebung eines solchen Trainings als Zeit-Uebung
     // weggeschrieben, obwohl er nur taktet. Ein einziges getaktetes Training
@@ -971,8 +1011,8 @@ function finishExerciseHistory(h, newestFirst = true) {
 }
 
 export function getExerciseHistory(logs, exerciseId, excludeSessionId, isTimeBased = false, gymId = null) {
-  const all = logs
-    .filter((l) => l.id !== excludeSessionId)
+  const all = (Array.isArray(logs) ? logs : [])
+    .filter((l) => l && l.id !== excludeSessionId)
     .slice()
     .sort((a, b) => new Date(b.date) - new Date(a.date));
 
@@ -1988,13 +2028,15 @@ export function bodyWeightEntries(raw) {
 // eintraegt, hat es letztes Jahr nicht gewogen - aber mit dem heutigen Wert
 // zu rechnen ist immer noch naeher dran als mit gar keinem.
 export function bodyWeightAt(entries, ts) {
-  const liste = Array.isArray(entries) ? entries : [];
+  const liste = (Array.isArray(entries) ? entries : []).filter(
+    (e) => e && typeof e === "object"
+  );
   if (liste.length === 0) return 0;
   let treffer = null;
   for (const e of liste) {
     if (e.ts <= ts) treffer = e;
   }
-  return (treffer || liste[0]).kg;
+  return toNum((treffer || liste[0]).kg);
 }
 
 // Gibt es ueberhaupt eine Angabe? Davon haengt ab, ob eine
@@ -2034,15 +2076,17 @@ function loadModeFor(exercise, { isTime, hasWeight, usesBodyWeight, equipmentOve
 // "Sätze pro Muskelgruppe (7 Tage)" passen.
 export function getMuscleLoadSeries(
   logs,
-  exBy,
+  rohExBy,
   subgroupOverrides,
   timeBasedExercises,
-  weekCount = 12,
+  rohWeekCount = 12,
   nowTs = Date.now(),
   // { equipmentOverrides, bodyWeights } - siehe loadModeFor. Ohne diese
   // Angaben rechnet alles wie vorher.
   opts = {}
 ) {
+  const weekCount = safeWeekCount(rohWeekCount, 12);
+  const exBy = safeMap(rohExBy);
   const safeLogs = Array.isArray(logs) ? logs : [];
   const emptyWeeks = () => new Array(weekCount).fill(0);
 
@@ -2211,17 +2255,25 @@ export function getMuscleLoadSeries(
 // aus dieser einen Zählung.
 export function logsOhneUebungen(logs, ausgeschlossen) {
   const liste = Array.isArray(logs) ? logs : [];
-  if (!ausgeschlossen || ausgeschlossen.size === 0) return liste;
+  // Ein Set ist gemeint; eine Liste wird der Bequemlichkeit halber
+  // mitgenommen, damit ein Aufrufer die App nicht mit dem falschen Typ
+  // zum Absturz bringt.
+  const raus = ausgeschlossen instanceof Set
+    ? ausgeschlossen
+    : new Set(Array.isArray(ausgeschlossen) ? ausgeschlossen : []);
+  if (raus.size === 0) return liste;
   return liste.map((l) => {
     const alle = logEntries(l);
-    const uebrig = alle.filter((e) => !ausgeschlossen.has(e?.exerciseId));
+    const uebrig = alle.filter((e) => !raus.has(e?.exerciseId));
     // Unverändert durchreichen, wenn nichts wegfällt - sonst entstünde bei
     // jedem Rendern ein neues Objekt und alles darunter rechnete neu.
     return uebrig.length === alle.length ? l : { ...l, entries: uebrig };
   });
 }
 
-export function getWeeklySetSeries(logs, exBy, subgroupOverrides, weekCount = 21, nowTs = Date.now()) {
+export function getWeeklySetSeries(logs, rohExBy, subgroupOverrides, rohWeekCount = 21, nowTs = Date.now()) {
+  const weekCount = safeWeekCount(rohWeekCount, 21);
+  const exBy = safeMap(rohExBy);
   const safeLogs = Array.isArray(logs) ? logs : [];
   const emptyWeeks = () => new Array(weekCount).fill(0);
   const groupWeeks = {};
@@ -2354,7 +2406,8 @@ export function trimpWert(durationSeconds, avgHr, profil) {
 // konnte (kein Puls aufgezeichnet oder Profil unvollständig). Die Karte sagt
 // das offen, statt eine zu niedrige Wochensumme als vollständig auszugeben -
 // eine stillschweigend fehlende Einheit wäre schlimmer als ein Hinweis.
-export function getEnduranceLoadSeries(enduranceLogs, profil, weekCount = 21, nowTs = Date.now()) {
+export function getEnduranceLoadSeries(enduranceLogs, profil, rohWeekCount = 21, nowTs = Date.now()) {
+  const weekCount = safeWeekCount(rohWeekCount, 21);
   const leer = () => new Array(weekCount).fill(0);
   const weeks = leer();
   const minutenWochen = leer();
@@ -2641,7 +2694,8 @@ export function abgleichZeitraum(nowTs = Date.now()) {
 // Wochenweise Anzahl absolvierter Atemübungs-Sitzungen - keine Gruppen wie
 // bei den Muskelgruppen, nur eine einzelne Reihe, dieselbe rollierende
 // 7-Tage-Fenster-Logik wie oben.
-function getBreathingWeeklySeries(breathingLogs, weekCount = 21, nowTs = Date.now()) {
+function getBreathingWeeklySeries(breathingLogs, rohWeekCount = 21, nowTs = Date.now()) {
+  const weekCount = safeWeekCount(rohWeekCount, 21);
   const weeks = new Array(weekCount).fill(0);
   (Array.isArray(breathingLogs) ? breathingLogs : []).forEach((l) => {
     const ts = new Date(l?.date).getTime();
@@ -2866,7 +2920,8 @@ export function detectLoadSignal(values, historyWeeks = Infinity, deloadFlags = 
 // Beide Wochenreihen für ALLE Übungen in einem Durchgang - getrennt je Übung
 // gerechnet, weil ein 1RM nur innerhalb derselben Übung vergleichbar ist.
 // Rückgabe alt -> neu, wie überall.
-export function getStrengthVolumeSeries(logs, weekCount = 26, nowTs = Date.now()) {
+export function getStrengthVolumeSeries(logs, rohWeekCount = 26, nowTs = Date.now()) {
+  const weekCount = safeWeekCount(rohWeekCount, 26);
   const out = {};
   const leer = () => new Array(weekCount).fill(0);
   (Array.isArray(logs) ? logs : []).forEach((log) => {
@@ -3017,7 +3072,8 @@ export function strengthVolumeNote(rohKraft, rohVolumen) {
 // Bestwert-Normierung wie getMuscleLoadSeries (siehe dort für die Herleitung),
 // nur ohne die Aggregation über Muskelgruppen. Grundlage für
 // detectLoadSignal auf Einzelübungs-Ebene.
-function getExerciseLoadSeries(logs, exerciseId, timeBasedExercises, weekCount = 12, nowTs = Date.now(), opts = {}) {
+function getExerciseLoadSeries(logs, exerciseId, timeBasedExercises, rohWeekCount = 12, nowTs = Date.now(), opts = {}) {
+  const weekCount = safeWeekCount(rohWeekCount, 12);
   const safeLogs = Array.isArray(logs) ? logs : [];
   const isTime = isTimeBasedInLogs(safeLogs, exerciseId, timeBasedExercises);
   const hasWeight = safeLogs.some((l) =>
@@ -3189,7 +3245,7 @@ export function deloadDayInfo(date, deloadWeeks) {
 // jedes Fenster, das sich mit ihm überschneidet - lieber ein Fenster zu viel
 // überspringen als einen halb verfälschten Vergleich anstellen.
 export function deloadWeekFlags(deloadWeeks, weekCount, nowTs = Date.now()) {
-  const flags = new Array(Math.max(0, weekCount)).fill(false);
+  const flags = new Array(safeWeekCount(weekCount, 0)).fill(false);
   const ranges = deloadRanges(deloadWeeks);
   if (ranges.length === 0 || flags.length === 0) return flags;
   ranges.forEach((r) => {
@@ -3425,18 +3481,51 @@ function getExerciseEquipment(exercise, equipmentOverrides) {
 // Storage helpers
 // ---------------------------------------------------------------------------
 
+// Passt der gespeicherte Wert ueberhaupt zu dem, was der Aufrufer erwartet?
+//
+// Der Ersatzwert sagt die Form an: Wer `[]` als Ersatz mitgibt, rechnet mit
+// einer Liste, wer `{}` mitgibt, mit einer Karte. Steht in der Ablage etwas
+// anderes, wird der Ersatzwert genommen statt der kaputte Wert durchgereicht.
+//
+// Warum das wichtig ist: Diese Werte werden direkt in den Zustand gesetzt und
+// dort ohne weitere Pruefung mit .map, .some oder .length angefasst. Eine
+// einzige Liste, die als Objekt in der Ablage liegt - abgebrochenes
+// Speichern, eine fremde Sicherungsdatei, ein Rest aus einer aelteren
+// Fassung -, liess die App deshalb beim Start abstuerzen, und zwar dauerhaft:
+// Neuladen liest denselben kaputten Wert wieder. Genau diesen Fall kann die
+// Fehlerseite nicht auffangen, weil sie den Absturz nur anzeigt, nicht heilt.
+//
+// Ein Ersatzwert von `null` heisst "alles erlaubt" - dort prueft der Aufrufer
+// selbst, und die Sicherung liest bewusst alles, was da ist.
+export function passtZurForm(value, fallback) {
+  if (fallback === null || fallback === undefined) return true;
+  if (Array.isArray(fallback)) return Array.isArray(value);
+  if (typeof fallback === "object") {
+    return value !== null && typeof value === "object" && !Array.isArray(value);
+  }
+  return typeof value === typeof fallback;
+}
+
 async function loadJSON(key, fallback) {
+  const geprueft = (value) => {
+    if (passtZurForm(value, fallback)) return value;
+    console.warn(
+      `Gespeicherter Wert passt nicht zur erwarteten Form: ${key} - es wird der Standardwert benutzt.`,
+      value
+    );
+    return fallback;
+  };
   try {
     if (typeof window === "undefined") return fallback;
     if (window.storage?.get) {
       const res = await window.storage.get(key, false);
-      if (res?.value) return JSON.parse(res.value) ?? fallback;
+      if (res?.value) return geprueft(JSON.parse(res.value) ?? fallback);
     }
     // Outside Claude.ai (i.e. running as a standalone app via `npm run dev`
     // or a deployed build) window.storage doesn't exist, so fall back to
     // localStorage — otherwise nothing would ever persist between reloads.
     const local = window.localStorage?.getItem(`training-app:${key}`);
-    return local ? (JSON.parse(local) ?? fallback) : fallback;
+    return local ? geprueft(JSON.parse(local) ?? fallback) : fallback;
   } catch (e) {
     console.error(`Laden fehlgeschlagen: ${key}`, e);
     return fallback;
@@ -3447,13 +3536,28 @@ async function saveJSON(key, value) {
   try {
     if (typeof window === "undefined") return false;
     const json = JSON.stringify(value);
+    // Gemeldet wird nur, was wirklich angekommen ist. Vorher stand hier
+    // immer `true`, auch wenn beide Speicher den Wert abgelehnt hatten - ein
+    // voller Speicher (Safari wirft dann QuotaExceededError) sah damit im
+    // Log genauso aus wie ein erfolgreiches Speichern.
+    let angekommen = false;
     if (window.storage?.set) {
-      await window.storage.set(key, json, false);
+      try {
+        await window.storage.set(key, json, false);
+        angekommen = true;
+      } catch (e) {
+        console.error(`Speichern in window.storage fehlgeschlagen: ${key}`, e);
+      }
     }
     try {
       window.localStorage?.setItem(`training-app:${key}`, json);
-    } catch (_) {}
-    return true;
+      angekommen = true;
+    } catch (e) {
+      // Ohne window.storage ist das der einzige Speicher - dann ist es ein
+      // echter Datenverlust und gehoert sichtbar ins Log, nicht verschluckt.
+      if (!angekommen) console.error(`Speichern fehlgeschlagen: ${key}`, e);
+    }
+    return angekommen;
   } catch (e) {
     console.error(`Speichern fehlgeschlagen: ${key}`, e);
     return false;
@@ -3898,64 +4002,81 @@ function TrainingAppInner() {
         loadJSON("ausdauer-schluessel", ""),
         loadJSON("externe-kraft-aktivitaeten", []),
       ]);
+      // Kaputte Listeneintraege fliegen hier einmal raus, damit die
+      // Oberflaeche darunter nicht an jeder der Dutzenden `.map((x) => x.id)`
+      // Zeilen einzeln abgesichert werden muss (siehe nurEintraege).
+      const plaene = nurEintraege(p);
+      const trainings = nurEintraege(l);
+      const eigeneUebungen = nurEintraege(c);
+      const ordner = nurEintraege(f);
+      const studios = nurEintraege(gy);
       // Migration: users who already had folders before "programs" existed
       // get one default program that all their existing folders are
       // assigned to, so nothing they built before suddenly disappears.
-      let migratedPrograms = prog;
-      let migratedFolders = f;
+      let migratedPrograms = nurEintraege(prog);
+      let migratedFolders = ordner;
       if (migratedPrograms.length === 0) {
         const defaultProgram = { id: uid(), name: "Mein Programm" };
         migratedPrograms = [defaultProgram];
-        migratedFolders = f.map((folder) =>
+        migratedFolders = ordner.map((folder) =>
           folder.programId ? folder : { ...folder, programId: defaultProgram.id }
         );
         await saveJSON("training-programs", migratedPrograms);
-        if (migratedFolders !== f) await saveJSON("plan-folders", migratedFolders);
+        if (migratedFolders !== ordner) await saveJSON("plan-folders", migratedFolders);
       }
       const resolvedActiveProgramId =
         activeProg && migratedPrograms.some((pr) => pr.id === activeProg)
           ? activeProg
           : migratedPrograms[0]?.id || null;
-      setPlans(p);
-      setLogs(l);
-      setCustomExercises(c);
+      setPlans(plaene);
+      setLogs(trainings);
+      setCustomExercises(eigeneUebungen);
       setFolders(migratedFolders);
-      setExerciseNotes(en);
-      setExerciseNameOverrides(no);
-      setExerciseSubgroupOverrides(sg);
-      setExerciseSecondaryOverrides(sec && typeof sec === "object" ? sec : {});
-      setExerciseSecondarySubgroupOverrides(secSub && typeof secSub === "object" ? secSub : {});
-      setTimeBasedExercises(tb);
-      setGymIndependentExercises(gi);
-      setStatsExcludedExercises(statsEx && typeof statsEx === "object" ? statsEx : {});
-      setBreathingExercises(Array.isArray(brEx) ? brEx : []);
-      setBreathingLogs(Array.isArray(brLogs) ? brLogs : []);
-      setEnduranceLogs(Array.isArray(ausdauer) ? ausdauer : []);
+      setExerciseNotes(safeMap(en));
+      setExerciseNameOverrides(safeMap(no));
+      setExerciseSubgroupOverrides(safeMap(sg));
+      setExerciseSecondaryOverrides(safeMap(sec));
+      setExerciseSecondarySubgroupOverrides(safeMap(secSub));
+      setTimeBasedExercises(safeMap(tb));
+      setGymIndependentExercises(safeMap(gi));
+      setStatsExcludedExercises(safeMap(statsEx));
+      setBreathingExercises(nurEintraege(brEx));
+      setBreathingLogs(nurEintraege(brLogs));
+      setEnduranceLogs(nurEintraege(ausdauer));
       if (puls && typeof puls === "object") setPulsProfil(puls);
       if (abgleichSet && typeof abgleichSet === "object") setAusdauerAbgleich(abgleichSet);
       if (typeof abgleichKey === "string") setAusdauerSchluessel(abgleichKey);
-      setExterneKraftAktivitaeten(Array.isArray(externKraft) ? externKraft : []);
-      setSession(active ? withEntryIds(active) : null);
+      setExterneKraftAktivitaeten(nurEintraege(externKraft));
+      const laufendesTraining = active ? withEntryIds(active) : null;
+      setSession(laufendesTraining);
       // A rest that already expired while the app was closed is not restored -
       // it would show a dead "0:00" bar with nothing to count down to.
-      setRestEndsAt(active && typeof restEnd === "number" && restEnd > Date.now() ? restEnd : 0);
+      setRestEndsAt(
+        laufendesTraining && typeof restEnd === "number" && restEnd > Date.now() ? restEnd : 0
+      );
       // Landing on the plans list while a workout is still running means
       // hunting for the way back - on a phone the app gets reloaded between
       // sets often enough that this should just resume where it left off.
-      if (active) setTab("log");
+      if (laufendesTraining) setTab("log");
       setPrograms(migratedPrograms);
       setActiveProgramId(resolvedActiveProgramId);
-      setCalendarEntries(ce);
-      setCalendarCategories(cc);
+      setCalendarEntries(nurEintraege(ce));
+      setCalendarCategories(nurEintraege(cc));
+      // Hier bewusst KEIN nurEintraege: Eine Entlastungswoche darf auch eine
+      // blanke Zeichenkette sein (aeltere Speicherstaende, siehe
+      // deloadRanges) - die wuerde sonst beim Laden stillschweigend
+      // verschwinden.
       setDeloadWeeks(Array.isArray(dw) ? dw : []);
       setDeloadInterval(Number.isFinite(Number(di)) && Number(di) > 0 ? Number(di) : null);
       setDeloadSuggestionHiddenAt(typeof dsh === "string" ? dsh : null);
-      setBands(Array.isArray(bnd) ? bnd : []);
+      setBands(nurEintraege(bnd));
       setSoundOn(snd !== false);
       setBodyWeights(bodyWeightEntries(bw));
-      setGyms(gy);
-      setActiveGymId(activeGy && gy.some((g) => g.id === activeGy) ? activeGy : gy[0]?.id || null);
-      setExerciseEquipmentOverrides(eq);
+      setGyms(studios);
+      setActiveGymId(
+        activeGy && studios.some((g) => g.id === activeGy) ? activeGy : studios[0]?.id || null
+      );
+      setExerciseEquipmentOverrides(safeMap(eq));
       setTheme(th === "light" ? "light" : "dark");
       setLoading(false);
     })();
@@ -9298,6 +9419,7 @@ function prsAgainstHistory(entry, history, isTime) {
 
 // Dasselbe fuer ein einzelnes Training, mit frisch aufgebauter Historie.
 export function entryPRs(logs, log, entry, isTime, gymId) {
+  if (!entry || !log) return [];
   const history = getExerciseHistory(logsBefore(logs, log), entry.exerciseId, log.id, isTime, gymId);
   return prsAgainstHistory(entry, history, isTime);
 }
@@ -16178,8 +16300,9 @@ const GYM_LINE_COLORS = ["#b25a26", "#41707d", "#4f7a48", "#6f5f92", "#9a7414"];
 // "Ohne Gym" bekommt den Platz direkt nach den echten Gyms - stabil, weil
 // die Zahl der echten Gyms sich nicht während einer Ansicht ändert.
 export function gymColor(gymId, gyms) {
-  const idx = gymId === "none" ? gyms.length : gyms.findIndex((g) => g.id === gymId);
-  return GYM_LINE_COLORS[(idx >= 0 ? idx : gyms.length) % GYM_LINE_COLORS.length];
+  const liste = Array.isArray(gyms) ? gyms : [];
+  const idx = gymId === "none" ? liste.length : liste.findIndex((g) => g?.id === gymId);
+  return GYM_LINE_COLORS[(idx >= 0 ? idx : liste.length) % GYM_LINE_COLORS.length];
 }
 
 // Recharts takes plain colour strings rather than CSS variables, so the
@@ -16228,7 +16351,11 @@ function useChartColors(theme) {
 const PERCENT_TOLERANCE_SHARE = 0.15;
 const PERCENT_TOLERANCE_MIN_DAYS = 3;
 
-export function buildPercentSeries(data, keys, compareWeeks, toleranceDays = PERCENT_TOLERANCE_MIN_DAYS) {
+export function buildPercentSeries(rohdaten, rohschluessel, compareWeeks, toleranceDays = PERCENT_TOLERANCE_MIN_DAYS) {
+  const data = (Array.isArray(rohdaten) ? rohdaten : []).filter(
+    (pt) => pt && typeof pt === "object"
+  );
+  const keys = Array.isArray(rohschluessel) ? rohschluessel : [];
   // "Gesamt" hat hier keinen Zeitpunkt in der Vergangenheit, den man ansteuern
   // koennte - also wird gegen den ERSTEN erfassten Wert verglichen: "wie weit
   // bin ich seit dem Anfang gekommen". Ohne diesen Fall waere der Chip in den

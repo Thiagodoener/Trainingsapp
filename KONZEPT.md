@@ -558,6 +558,27 @@ Und für die Browser-Prüfung gilt ab jetzt: Ein Skript, das an einer Bedienung 
 Befund, kein Skriptproblem – bis nachgesehen wurde. Zur Prüfung gehört, mindestens eine Übung jedes
 Typs zu öffnen (mit Gewicht, Körpergewicht, Zeit).
 
+**Der Statistik-Reiter war eine Wand aus neun Blöcken.**
+Gemeldet als „zu viel auf einmal". Jeder Block für sich war richtig, zusammen war der Reiter nicht
+mehr zu überblicken – man scrollt an dem vorbei, was einen interessiert. Aufgeräumt wurde in zwei
+Schritten, ohne dass etwas verschwindet:
+
+- **„Sätze pro Muskelgruppe" und „Belastung pro Muskelgruppe" sind eine Karte geworden**, mit einem
+  Umschalter. Vorher standen sie untereinander: dieselbe Liste Muskelgruppen, zweimal, mit
+  denselben Zeitraum-Chips – von außen zwei Meinungen zur selben Frage. Es sind aber zwei **Maße**
+  für dieselbe Sache: Sätze zählen, Belastung gewichtet nach Gewicht und Reserve. Dafür ist ein
+  Umschalter die ehrlichere Form als zwei Karten. Jedes Maß behält seinen **eigenen Zeitraum**
+  (`setsCompareWeeks` / `loadCompareWeeks`), damit Umschalten die Auswahl nicht wegwirft.
+- **„Entlastungen", „Gefühl und Leistung" und „Eichsätze" fangen zugeklappt an** (`CollapsibleCard`).
+  Was man jede Woche anschaut, steht offen da; was man gelegentlich braucht, ist einen Fingertipp
+  entfernt. Der Zustand wird bewusst **nicht** gemerkt: Beim nächsten Öffnen soll der Reiter wieder
+  so aussehen wie gedacht, nicht wie beim letzten Stöbern. Pfeil und Titel klappen auf, das
+  Info-Zeichen rechts bleibt die Erklärung – zwei getrennte Flächen, sonst weiß man beim Antippen
+  nicht, was passiert.
+
+Entschieden wurde außerdem, was **nicht** passiert: Keine Karte wird gelöscht. Eine Karte, die
+keiner mehr findet, wäre schlimmer als eine Karte zu viel.
+
 **Die Prozentzahlen neben den Muskelgruppen rechneten leere Wochen als Nullen mit.**
 Gemeldet als „die wirken falsch" – und sie waren es. `muscleLoadChange` vergleicht die aktuelle
 Woche gegen den Schnitt der gewählten Wochen davor; in diesem Schnitt zählten auch die Wochen mit,

@@ -5798,6 +5798,39 @@ function TrainingAppInner() {
            sie aus wie jede andere Überschrift und niemand käme auf die Idee,
            sie anzutippen. Bewusst gedämpft: es ist ein Angebot, kein
            Bedienelement, das nach Aufmerksamkeit verlangt. */
+        /* Kopfzeile einer zuklappbaren Karte: Pfeil und Titel schalten auf,
+           das Info-Zeichen rechts bleibt die Erklaerung. Zwei getrennte
+           Flaechen - sonst weiss man beim Antippen nicht, was passiert. */
+        .collapsible-head {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          gap: 8px;
+        }
+        .collapsible-toggle {
+          display: flex;
+          align-items: center;
+          gap: 6px;
+          flex: 1;
+          min-width: 0;
+          background: none;
+          border: none;
+          padding: 0;
+          margin: 0;
+          color: var(--text);
+          cursor: pointer;
+          text-align: left;
+        }
+        .collapsible-info {
+          background: none;
+          border: none;
+          padding: 4px;
+          margin: -4px;
+          color: var(--text-faint);
+          cursor: pointer;
+          flex-shrink: 0;
+          display: inline-flex;
+        }
         .plan-title-explain {
           display: inline-flex;
           align-items: center;
@@ -17818,6 +17851,46 @@ function Sparkline({ values, height = 24 }) {
 // (siehe STAT_EXPLANATIONS). Als <button>, nicht als <span> mit onClick,
 // damit sie auch per Tastatur erreichbar ist und Screenreader sie als
 // bedienbar ansagen.
+// Eine Karte, die zugeklappt anfaengt.
+//
+// Der Statistik-Reiter war eine Wand aus neun Bloecken untereinander - jeder
+// fuer sich richtig, zusammen aber nicht mehr zu ueberblicken. Was man jede
+// Woche anschaut, steht weiter offen da; was man gelegentlich braucht, steht
+// zugeklappt darunter und ist einen Fingertipp entfernt. Weggenommen wird
+// nichts - eine Karte, die keiner mehr findet, waere schlimmer als eine
+// Karte zu viel.
+//
+// Bewusst kein gemerkter Zustand: Beim naechsten Oeffnen der App soll der
+// Reiter wieder so aussehen wie gedacht, nicht wie beim letzten Stoebern.
+function CollapsibleCard({ title, onExplain, children }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="card">
+      <div className="collapsible-head">
+        <button type="button" className="collapsible-toggle" onClick={() => setOpen((o) => !o)}>
+          {open ? (
+            <ChevronDown size={15} color="var(--text-dim)" />
+          ) : (
+            <ChevronRight size={15} color="var(--text-dim)" />
+          )}
+          <span className="plan-title">{title}</span>
+        </button>
+        {onExplain && (
+          <button
+            type="button"
+            className="collapsible-info"
+            onClick={onExplain}
+            title="Antippen: Was steht hier und wie wird es gerechnet?"
+          >
+            <Info size={14} />
+          </button>
+        )}
+      </div>
+      {open && children}
+    </div>
+  );
+}
+
 function ExplainableTitle({ children, onExplain }) {
   return (
     <button
@@ -18186,6 +18259,8 @@ function ProgressView({
     [deloadWeeks, muscleLoadSeries]
   );
   const [loadCompareWeeks, setLoadCompareWeeks] = useState(1);
+  // Welches der beiden Maße die Muskelgruppen-Karte gerade zeigt.
+  const [muscleMode, setMuscleMode] = useState("sets");
   const [expandedLoadGroups, setExpandedLoadGroups] = useState({});
   const toggleLoadGroupExpanded = (id) =>
     setExpandedLoadGroups((s) => ({ ...s, [id]: !s[id] }));
@@ -18406,133 +18481,164 @@ function ProgressView({
           </div>
       </div>
 
+      {/* Muskelgruppen - eine Karte, zwei Maße.
+          Vorher standen "Sätze pro Muskelgruppe" und "Belastung pro
+          Muskelgruppe" als zwei Karten untereinander: dieselbe Liste
+          Muskelgruppen, zweimal, mit denselben Zeitraum-Chips. Von außen sah
+          das aus wie zwei Meinungen zur selben Frage. Es sind aber zwei MASSE
+          für dieselbe Sache - Sätze zählen, Belastung gewichtet nach Gewicht
+          und Reserve -, und dafür ist ein Umschalter die ehrlichere Form als
+          zwei Karten.
+          Jedes Maß behält seinen eigenen Zeitraum (setsCompareWeeks /
+          loadCompareWeeks): Umschalten wirft die Auswahl nicht weg. */}
       <div className="card">
-        <ExplainableTitle onExplain={() => setExplain(STAT_EXPLANATIONS.weeklySets)}>
-          Sätze pro Muskelgruppe (7 Tage)
+        <ExplainableTitle
+          onExplain={() =>
+            setExplain(
+              muscleMode === "sets" ? STAT_EXPLANATIONS.weeklySets : STAT_EXPLANATIONS.muscleLoad
+            )
+          }
+        >
+          Muskelgruppen
         </ExplainableTitle>
-        <div className="chip-row" style={{ marginTop: 10, marginBottom: 4 }}>
-          {MUSCLE_COMPARE_OPTIONS.map(([weeks, label]) => (
-            <span
-              key={weeks}
-              className={`chip chip-sm ${setsCompareWeeks === weeks ? "active" : ""}`}
-              onClick={() => setSetsCompareWeeks(weeks)}
-            >
-              {label}
-            </span>
-          ))}
+        <div className="sub-tab-row" style={{ marginTop: 10 }}>
+          <button
+            className={`sub-tab ${muscleMode === "sets" ? "active" : ""}`}
+            onClick={() => setMuscleMode("sets")}
+          >
+            Sätze (7 Tage)
+          </button>
+          <button
+            className={`sub-tab ${muscleMode === "load" ? "active" : ""}`}
+            onClick={() => setMuscleMode("load")}
+          >
+            Belastung
+          </button>
         </div>
-        {weeklySetsTotal === 0 ? (
-          <div className="empty-state" style={{ padding: "14px 0" }}>
-            Noch keine abgehakten Sätze in dieser Woche.
-          </div>
-        ) : (
-          <div style={{ marginTop: 8 }}>
-            {weeklySetsByGroup.map((g) => {
-              const isExpanded = !!expandedGroups[g.id];
-              const change = muscleLoadChange(g.values, setsCompareWeeks, setsHistoryWeeks);
-              return (
-                <div key={g.id}>
-                  <div
-                    className="muscle-week-row-v2 muscle-week-row-v2-clickable"
-                    onClick={() => setChartGroup(g)}
-                    title="Tippen für den Verlauf im gewählten Zeitraum"
-                  >
-                    <span className="muscle-week-label">{g.label}</span>
-                    <Sparkline values={compareWindowSeries(g.values, setsCompareWeeks)} />
-                    <span className="muscle-week-value">{fmtDecimal(g.sets)}</span>
-                    <LoadChangeBadge change={change} />
-                    <span
-                      className="muscle-week-chevron"
-                      onClick={(e) => { e.stopPropagation(); toggleGroupExpanded(g.id); }}
-                    >
-                      {isExpanded ? (
-                        <ChevronDown size={14} color="var(--text-dim)" />
-                      ) : (
-                        <ChevronRight size={14} color="var(--text-dim)" />
-                      )}
-                    </span>
-                  </div>
-                  {isExpanded && (
-                    <div className="muscle-week-subs">
-                      {g.subs.map((sg) => (
-                        <div className="muscle-week-row-v2 muscle-week-row-v2-sub" key={sg.id}>
-                          <span className="muscle-week-label">{sg.label}</span>
-                          <Sparkline values={compareWindowSeries(sg.values, setsCompareWeeks)} />
-                          <span className="muscle-week-value">{fmtDecimal(sg.sets)}</span>
-                          <LoadChangeBadge change={muscleLoadChange(sg.values, setsCompareWeeks, setsHistoryWeeks)} />
+        {muscleMode === "sets" ? (
+          <>
+            <div className="chip-row" style={{ marginTop: 10, marginBottom: 4 }}>
+              {MUSCLE_COMPARE_OPTIONS.map(([weeks, label]) => (
+                <span
+                  key={weeks}
+                  className={`chip chip-sm ${setsCompareWeeks === weeks ? "active" : ""}`}
+                  onClick={() => setSetsCompareWeeks(weeks)}
+                >
+                  {label}
+                </span>
+              ))}
+            </div>
+            {weeklySetsTotal === 0 ? (
+              <div className="empty-state" style={{ padding: "14px 0" }}>
+                Noch keine abgehakten Sätze in dieser Woche.
+              </div>
+            ) : (
+              <div style={{ marginTop: 8 }}>
+                {weeklySetsByGroup.map((g) => {
+                  const isExpanded = !!expandedGroups[g.id];
+                  const change = muscleLoadChange(g.values, setsCompareWeeks, setsHistoryWeeks);
+                  return (
+                    <div key={g.id}>
+                      <div
+                        className="muscle-week-row-v2 muscle-week-row-v2-clickable"
+                        onClick={() => setChartGroup(g)}
+                        title="Tippen für den Verlauf im gewählten Zeitraum"
+                      >
+                        <span className="muscle-week-label">{g.label}</span>
+                        <Sparkline values={compareWindowSeries(g.values, setsCompareWeeks)} />
+                        <span className="muscle-week-value">{fmtDecimal(g.sets)}</span>
+                        <LoadChangeBadge change={change} />
+                        <span
+                          className="muscle-week-chevron"
+                          onClick={(e) => { e.stopPropagation(); toggleGroupExpanded(g.id); }}
+                        >
+                          {isExpanded ? (
+                            <ChevronDown size={14} color="var(--text-dim)" />
+                          ) : (
+                            <ChevronRight size={14} color="var(--text-dim)" />
+                          )}
+                        </span>
+                      </div>
+                      {isExpanded && (
+                        <div className="muscle-week-subs">
+                          {g.subs.map((sg) => (
+                            <div className="muscle-week-row-v2 muscle-week-row-v2-sub" key={sg.id}>
+                              <span className="muscle-week-label">{sg.label}</span>
+                              <Sparkline values={compareWindowSeries(sg.values, setsCompareWeeks)} />
+                              <span className="muscle-week-value">{fmtDecimal(sg.sets)}</span>
+                              <LoadChangeBadge change={muscleLoadChange(sg.values, setsCompareWeeks, setsHistoryWeeks)} />
+                            </div>
+                          ))}
                         </div>
-                      ))}
-                    </div>
-                  )}
-                </div>
-              );
-            })}
-          </div>
-        )}
-      </div>
-
-      <div className="card">
-        <ExplainableTitle onExplain={() => setExplain(STAT_EXPLANATIONS.muscleLoad)}>
-          Belastung pro Muskelgruppe
-        </ExplainableTitle>
-        <div className="chip-row" style={{ marginTop: 10, marginBottom: 4 }}>
-          {MUSCLE_COMPARE_OPTIONS.map(([weeks, label]) => (
-            <span
-              key={weeks}
-              className={`chip chip-sm ${loadCompareWeeks === weeks ? "active" : ""}`}
-              onClick={() => setLoadCompareWeeks(weeks)}
-            >
-              {label}
-            </span>
-          ))}
-        </div>
-        {muscleLoadSeries.every((g) => g.current === 0) ? (
-          <div className="empty-state" style={{ padding: "14px 0" }}>
-            Noch keine Trainingsdaten für diese Auswertung.
-          </div>
-        ) : (
-          <div style={{ marginTop: 8 }}>
-            {muscleLoadSeries.map((g) => {
-              const isExpanded = !!expandedLoadGroups[g.id];
-              const change = muscleLoadChange(g.values, loadCompareWeeks, loadHistoryWeeks);
-              return (
-                <div key={g.id}>
-                  <div
-                    className="muscle-load-row muscle-load-row-clickable"
-                    onClick={() => setLoadChartGroup(g)}
-                    title="Tippen für den Verlauf im gewählten Zeitraum"
-                  >
-                    <span className="muscle-week-label">{g.label}</span>
-                    <Sparkline values={compareWindowSeries(g.values, loadCompareWeeks)} />
-                    <LoadChangeBadge change={change} />
-                    <LoadSignalBadge signal={detectLoadSignal(g.values, loadHistoryWeeks, loadDeloadFlags)} />
-                    <span
-                      className="muscle-week-chevron"
-                      onClick={(e) => { e.stopPropagation(); toggleLoadGroupExpanded(g.id); }}
-                    >
-                      {isExpanded ? (
-                        <ChevronDown size={14} color="var(--text-dim)" />
-                      ) : (
-                        <ChevronRight size={14} color="var(--text-dim)" />
                       )}
-                    </span>
-                  </div>
-                  {isExpanded && (
-                    <div className="muscle-week-subs">
-                      {g.subs.map((sg) => (
-                        <div className="muscle-load-row muscle-load-row-sub" key={sg.id}>
-                          <span className="muscle-week-label">{sg.label}</span>
-                          <Sparkline values={compareWindowSeries(sg.values, loadCompareWeeks)} />
-                          <LoadChangeBadge change={muscleLoadChange(sg.values, loadCompareWeeks, loadHistoryWeeks)} />
-                          <LoadSignalBadge signal={detectLoadSignal(sg.values, loadHistoryWeeks, loadDeloadFlags)} />
-                        </div>
-                      ))}
                     </div>
-                  )}
-                </div>
-              );
-            })}
-          </div>
+                  );
+                })}
+              </div>
+            )}
+          </>
+        ) : (
+          <>
+            <div className="chip-row" style={{ marginTop: 10, marginBottom: 4 }}>
+              {MUSCLE_COMPARE_OPTIONS.map(([weeks, label]) => (
+                <span
+                  key={weeks}
+                  className={`chip chip-sm ${loadCompareWeeks === weeks ? "active" : ""}`}
+                  onClick={() => setLoadCompareWeeks(weeks)}
+                >
+                  {label}
+                </span>
+              ))}
+            </div>
+            {muscleLoadSeries.every((g) => g.current === 0) ? (
+              <div className="empty-state" style={{ padding: "14px 0" }}>
+                Noch keine Trainingsdaten für diese Auswertung.
+              </div>
+            ) : (
+              <div style={{ marginTop: 8 }}>
+                {muscleLoadSeries.map((g) => {
+                  const isExpanded = !!expandedLoadGroups[g.id];
+                  const change = muscleLoadChange(g.values, loadCompareWeeks, loadHistoryWeeks);
+                  return (
+                    <div key={g.id}>
+                      <div
+                        className="muscle-load-row muscle-load-row-clickable"
+                        onClick={() => setLoadChartGroup(g)}
+                        title="Tippen für den Verlauf im gewählten Zeitraum"
+                      >
+                        <span className="muscle-week-label">{g.label}</span>
+                        <Sparkline values={compareWindowSeries(g.values, loadCompareWeeks)} />
+                        <LoadChangeBadge change={change} />
+                        <LoadSignalBadge signal={detectLoadSignal(g.values, loadHistoryWeeks, loadDeloadFlags)} />
+                        <span
+                          className="muscle-week-chevron"
+                          onClick={(e) => { e.stopPropagation(); toggleLoadGroupExpanded(g.id); }}
+                        >
+                          {isExpanded ? (
+                            <ChevronDown size={14} color="var(--text-dim)" />
+                          ) : (
+                            <ChevronRight size={14} color="var(--text-dim)" />
+                          )}
+                        </span>
+                      </div>
+                      {isExpanded && (
+                        <div className="muscle-week-subs">
+                          {g.subs.map((sg) => (
+                            <div className="muscle-load-row muscle-load-row-sub" key={sg.id}>
+                              <span className="muscle-week-label">{sg.label}</span>
+                              <Sparkline values={compareWindowSeries(sg.values, loadCompareWeeks)} />
+                              <LoadChangeBadge change={muscleLoadChange(sg.values, loadCompareWeeks, loadHistoryWeeks)} />
+                              <LoadSignalBadge signal={detectLoadSignal(sg.values, loadHistoryWeeks, loadDeloadFlags)} />
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </>
         )}
       </div>
 
@@ -18703,10 +18809,10 @@ function ProgressView({
           Vergleichskarte, keine Empfehlung: Der Rhythmus ist die Zahl, die
           der Mensch selbst eingetragen hat, und die Auswertung steht erst
           nach der eigenen Schätzung da (KONZEPT.md, Regeln 1 und 3). */}
-      <div className="card">
-        <ExplainableTitle onExplain={() => setExplain(STAT_EXPLANATIONS.deload)}>
-          Entlastungen
-        </ExplainableTitle>
+      <CollapsibleCard
+        title="Entlastungen"
+        onExplain={() => setExplain(STAT_EXPLANATIONS.deload)}
+      >
 
         {!deloadInfo ? (
           <div className="empty-state" style={{ padding: "12px 0 4px" }}>
@@ -18830,12 +18936,12 @@ function ProgressView({
             </p>
           </div>
         )}
-      </div>
+      </CollapsibleCard>
 
-      <div className="card">
-        <ExplainableTitle onExplain={() => setExplain(STAT_EXPLANATIONS.feelingPerformance)}>
-          Gefühl und Leistung
-        </ExplainableTitle>
+      <CollapsibleCard
+        title="Gefühl und Leistung"
+        onExplain={() => setExplain(STAT_EXPLANATIONS.feelingPerformance)}
+      >
         {feelingPerformance.rows.length === 0 ? (
           // Auch ohne Ergebnis sichtbar, und zwar mit Zählerstand: Wer nach
           // jedem Training eine Angabe macht, soll sehen, dass sie ankommt
@@ -18872,12 +18978,12 @@ function ProgressView({
             ))}
           </div>
         )}
-      </div>
+      </CollapsibleCard>
 
-      <div className="card">
-        <ExplainableTitle onExplain={() => setExplain(STAT_EXPLANATIONS.calibration)}>
-          Eichsätze
-        </ExplainableTitle>
+      <CollapsibleCard
+        title="Eichsätze"
+        onExplain={() => setExplain(STAT_EXPLANATIONS.calibration)}
+      >
         {calibration.ready ? (
           <div style={{ marginTop: 10 }}>
             <div className="calibration-headline">
@@ -18913,7 +19019,7 @@ function ProgressView({
               : `Bisher ${calibration.count} ${calibration.count === 1 ? "Eichsatz" : "Eichsätze"} – ab ${CALIBRATION_MIN_SETS} steht hier, wie gut du dich einschätzt.`}
           </div>
         )}
-      </div>
+      </CollapsibleCard>
 
       <span className="stat-section-title">Einzelne Übung ansehen</span>
       <div className="search-box">

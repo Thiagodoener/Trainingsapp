@@ -74,7 +74,6 @@ import {
   getStrengthVolumeSeries,
   halfPeriodChange,
   typicalWeekFloor,
-  strengthVolumeNote,
   plural,
   shortSet,
   isTimeBasedInLogs,
@@ -1696,7 +1695,6 @@ describe("Kraft gegen Volumen", () => {
     const volumen = halfPeriodChange(r.volume, 7)!;
     expect(Math.round(kraft.change)).toBe(0);
     expect(Math.round(volumen.change)).toBe(100);
-    expect(strengthVolumeNote(kraft.change, volumen.change)).toMatch(/Kraft steht/);
   });
 
   it("erkennt: mehr Kraft bei gleicher Arbeit", () => {
@@ -1712,7 +1710,6 @@ describe("Kraft gegen Volumen", () => {
     const volumen = halfPeriodChange(r.volume, 7)!;
     expect(kraft.change).toBeGreaterThan(10);
     expect(Math.abs(volumen.change)).toBeLessThan(3);
-    expect(strengthVolumeNote(kraft.change, volumen.change)).toMatch(/Mehr Kraft/);
   });
 
   it("Wochen ohne Training sind eine Luecke, keine Null", () => {
@@ -1791,19 +1788,6 @@ describe("Kraft gegen Volumen", () => {
     const r: any = getStrengthVolumeSeries(logs, 4, jetzt)["klimmzug"];
     expect(Math.max(...r.strength)).toBe(0);
     expect(Math.max(...r.volume)).toBe(0);
-  });
-
-  it("der Hinweis schweigt, wenn die Zahlen nichts Auffaelliges zeigen", () => {
-    expect(strengthVolumeNote(1, 1)).toBeNull();
-    expect(strengthVolumeNote(null, 20)).toBeNull();
-  });
-
-  it("Regression: der Hinweis richtet sich nach der angezeigten Zahl", () => {
-    // 9,6 % steht als "+10 %" da. Ohne Runden bekaeme diese Zeile keinen
-    // Satz, die Zeile daneben mit exakt 10,0 aber schon - bei identischer
-    // Anzeige.
-    expect(strengthVolumeNote(9.6, -26)).toBe(strengthVolumeNote(10, -26));
-    expect(strengthVolumeNote(9.6, -26)).toMatch(/Mehr Kraft/);
   });
 });
 

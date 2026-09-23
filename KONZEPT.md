@@ -528,13 +528,10 @@ leistet und dabei gleich stark bleibt, sieht in jeder Zahl für sich nichts Auff
   fast nichts gemacht wurde. Deshalb entscheidet eine Reihe (das Volumen) für beide, statt dass
   jede über sich selbst entscheidet.
 
-Der Satz unter einer Zeile ist die einzige Stelle in der App, an der über die reine Beschreibung
-hinausgegangen wird: „Deutlich mehr Arbeit, aber die Kraft steht – der Punkt, an dem sich
-Mehrarbeit oft nicht mehr in Kraft übersetzt." Das ist eine bewusste Entscheidung von Max, weil
-genau dieser Fall der Grund für die Karte war. Was daraus folgt, sagt die App trotzdem nicht: Das
-hängt von Ziel, Zeit und Erholung ab, und davon weiß sie nichts (Regel 3). Der Satz rechnet mit
-denselben gerundeten Zahlen, die daneben stehen – sonst bekäme eine Zeile mit „+10 %" keinen Satz,
-weil dahinter 9,6 steht, und die daneben mit derselben Anzeige schon.
+Unter den Zeilen steht kein Satz mehr, der die beiden Zahlen einordnet (früher etwa „Deutlich
+mehr Arbeit, aber die Kraft steht"). Auf Max' Wunsch entfernt: Die Karte war damit zu voll, und
+die beiden Zahlen nebeneinander sagen das schon. Auch der Erklärabsatz unter der Liste ist weg –
+was man zum Lesen braucht, steht knapp hinter dem i.
 
 **Ein fehlender Name hat die Übungsansicht zum Absturz gebracht.**
 Beim Antippen einer beliebigen Übung erschien nur noch „Da ist etwas schiefgelaufen –
@@ -588,6 +585,9 @@ untergehen. Jetzt stehen oben höchstens fünf, und nur in drei Fällen (`streng
   ist Stillstand normal und keine Nachricht; über ein Vierteljahr ist er eine.
 - **deutlich stärker** – 10 % mehr oder darüber. Auch das fällt aus der Reihe, und nur das Schlechte
   hervorzuheben wäre einseitig.
+
+Der Grund steht nicht als Text unter der Übung – Farbe und Prozentzahl zeigen die Richtung schon,
+ein „deutlich stärker" darunter war nur Wiederholung. Die Regel selbst steht hinter dem i.
 
 Stetiger Fortschritt dazwischen ist der Normalfall und steht erst beim Aufklappen. Dieselben
 Schwellen (`SV_FLAT`, `SV_CLEAR`) wie in „Kraft und Volumen", damit dieselbe Veränderung nicht in

@@ -983,6 +983,16 @@ Nachgemessen: Ein Training mit 3 Sätzen Bankdrücken und 3 Sätzen Seitheben we
 bleiben 1,5 – der halbe Satz je Nebengruppe also, und nur der. Die Belastungs-Karte zeigt
 unverändert dieselbe Zahl.
 
+**Tags je Übung sind nur zum Wiederfinden – sie ändern keine Zahl.**
+Übungen lassen sich mit selbst angelegten Tags versehen (z. B. „Reha", „Zuhause"), eine Übung
+kann mehrere tragen. Gefiltert wird in der Übungsliste und beim Zusammenstellen eines Plans, eine
+Zeile unter den Geräten. Die Tags stehen in einer eigenen Liste mit Name und Farbe, die Übungen
+verweisen nur darauf: Eine Umbenennung gilt damit überall, und „Reha" neben „reha" kann nicht
+entstehen, weil man einen bestehenden Tag antippt statt ihn neu zu tippen. Erwogen war ein festes
+Feld „Zweck" (Training/Reha/Mobilität), das zugleich die Statistik steuert – verworfen, weil es
+ums Finden geht und nicht ums Rechnen. Wer eine Reha-Übung aus „Sätze pro Muskelgruppe" nehmen
+will, nutzt dafür weiter „Ohne Statistik"; zwei Wege zur selben Wirkung wären nicht erklärbar.
+
 ---
 
 ## Offene Punkte

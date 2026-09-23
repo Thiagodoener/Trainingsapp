@@ -45,7 +45,7 @@ Daraus folgen drei Regeln:
 |---|---|---|
 | Überbelastung | gut | Zusätzlich zum Belastungssignal je Muskelgruppe gibt es die Frühwarnung aus Gefühl **und** steigender Belastung (`getFatigueWarning`), gemessen gegen den eigenen Normalwert statt gegen einen Bevölkerungsschnitt. Geplante Entlastungswochen sind markierbar und fallen aus allen Warnungen heraus. |
 | Unterbelastung | fehlt | `detectLoadSignal` kennt nur `overload`, `overload-watch`, `plateau`. Alles wird nur relativ zum eigenen jüngsten Schnitt gemessen – sinkt der Schnitt langsam mit, fällt schleichender Abbau nie auf. |
-| Progressive Overload | Rohdaten da, Zusammenfassung fehlt | Charts und Plateau-Signal existieren, aber nirgends steht in Klartext „Kraft seit X Wochen flach". Kraft und Volumen werden in einer Kennzahl vermischt, obwohl es zwei verschiedene Wege sind, zu progressieren. |
+| Progressive Overload | gut | Beantwortet in „Werde ich stärker?" (je Übung, oberste Karte) und „Kraft und Volumen" (je Muskelgruppe). Kraft und Volumen sind getrennt, statt in einer Kennzahl vermischt. |
 | Vergleich früher/heute | gut | Zeiträume, Sparklines, %-Vergleiche, Verlauf. |
 
 Damit ist die Unterbelastung die letzte offene der drei – und sie hängt am Fortschritts-Signal:
@@ -557,6 +557,39 @@ genau die vier Zeilen.
 Und für die Browser-Prüfung gilt ab jetzt: Ein Skript, das an einer Bedienung scheitert, ist ein
 Befund, kein Skriptproblem – bis nachgesehen wurde. Zur Prüfung gehört, mindestens eine Übung jedes
 Typs zu öffnen (mit Gewicht, Körpergewicht, Zeit).
+
+**„Werde ich stärker?" – die oberste Karte, je Übung, mit dem Satz dahinter.**
+Auf die Frage „welche eine Frage soll oben stehen?" hat Max geantwortet: *Werde ich stärker?* Die
+Antwort darauf gab es bis dahin nur verstreut – Charts pro Übung, „Kraft und Volumen" pro
+Muskelgruppe. Beides beantwortet sie nicht direkt: **Stärker wird man in Übungen.** „Die Kraft der
+Beine" ist ein Mittelwert, an dem sich nichts festmachen lässt.
+
+- **Gemessen** wird am besten geschätzten 1RM (mit Reserve) – derselbe Maßstab wie in „Kraft und
+  Volumen", nur nicht gemittelt, sondern als **Maximum je Hälfte**: Kraft ist das, was einmal ging,
+  nicht was im Schnitt ging. Ein Mittelwert würde eine bewusst leichte Woche als Kraftverlust lesen.
+- **Das Beste einer halben Periode** statt „erste gegen letzte Trainingswoche": Ein einzelner
+  schwacher Tag am Anfang oder Ende würde sonst die ganze Aussage bestimmen. Im Test: durchgehend
+  100 kg mit einem 70-kg-Tag am Schluss ergibt 0 %, nicht −30 %.
+- **Jede Zeile lässt sich antippen**, und dann stehen die beiden Sätze da, aus denen die Zahl kommt:
+  Gewicht, Wiederholungen, Reserve, Datum, geschätztes Maximum. Das ist der eigentliche Grund für
+  die Karte, keine Zugabe – und die Antwort auf „ich traue den Zahlen nicht".
+
+Daraus die Regel für alles Weitere: **Keine Prozentzahl, die man nicht bis zu den Sätzen dahinter
+aufklappen kann.** Eine Zahl, die man nachrechnen kann, muss man nicht glauben. Bei „Bestes gesch.
+1RM" gab es das schon; ab hier ist es der Maßstab.
+
+**Oben gestrichen: „Volumen diese Woche" und „Trainings (7 Tage)".**
+Beide standen an der auffälligsten Stelle des Reiters. Das Wochenvolumen in Kilogramm hängt vor
+allem davon ab, ob gerade Beintag war – als erste Zahl im Blickfeld bekam es mehr Aufmerksamkeit,
+als es verdient. Und wie oft trainiert wurde, steht im Kalender, wo es hingehört. Übrig bleiben die
+beiden Zahlen, die auf einen bestimmten Satz zeigen und sich antippen lassen.
+
+**Die Muskelgruppen stehen jetzt überall in derselben Reihenfolge.**
+„Sätze pro Muskelgruppe" sortierte nach Menge (die Gruppe mit den meisten Sätzen zuerst), alle
+anderen Karten nach `MUSCLE_GROUPS`. Dieselbe Gruppe stand also in zwei Karten an zwei Plätzen, und
+beim Umschalten zwischen den beiden Maßen sprang die Liste. Die Sortierung nach Menge ist weg – auch
+bei den Untergruppen. Eine Reihenfolge, die sich mit den Daten ändert, ist keine Ordnung: Man findet
+nichts wieder.
 
 **Der Statistik-Reiter war eine Wand aus neun Blöcken.**
 Gemeldet als „zu viel auf einmal". Jeder Block für sich war richtig, zusammen war der Reiter nicht

@@ -20,6 +20,8 @@ import {
   describeSetPRs,
   getFatigueWarning,
   getMuscleLoadSeries,
+  getStrengthWeeksByExercise,
+  strengthTrend,
   canBeCalibration,
   canBeDropset,
   weekStartKey,
@@ -2585,5 +2587,77 @@ describe("Warum eine Muskelgruppe faellt, waehrend ihre Untergruppen steigen", (
     // Ohne Dips ist die Gruppe genau die Bankdrueck-Arbeit - die
     // Untergruppen zusammen das Doppelte davon.
     expect(oben.current + mitte.current).toBeCloseTo(brust.current * 2, 10);
+  });
+});
+
+describe("Werde ich staerker? - je Uebung, mit dem Satz dahinter", () => {
+  const WOCHE = 7 * 86400000;
+  const jetzt = Date.now();
+  const log = (wochenZurueck: number, saetze: any[]) => ({
+    id: "l" + wochenZurueck,
+    date: new Date(jetzt - wochenZurueck * WOCHE - 86400000).toISOString(),
+    entries: [{ id: "e", exerciseId: "bankdruecken", rir: 2, sets: saetze }],
+  });
+
+  it("merkt sich je Woche den besten Satz, nicht nur die Zahl", () => {
+    const logs = [log(0, [satz({ weight: 60, reps: 10 }), satz({ weight: 100, reps: 5 })])];
+    const wochen: any = getStrengthWeeksByExercise(logs, 8, jetzt)["bankdruecken"];
+    const letzte = wochen[wochen.length - 1];
+    // Der 100x5-Satz gewinnt, und er steht mit Gewicht, Wiederholungen und
+    // Reserve da - sonst liesse sich die Prozentzahl nicht nachrechnen.
+    expect(letzte.weight).toBe(100);
+    expect(letzte.reps).toBe(5);
+    expect(letzte.rir).toBe(2); // die Reserve gilt dem letzten Arbeitssatz
+    expect(letzte.oneRM).toBeCloseTo(estimate1RM(100, 7), 10);
+    // Wochen ohne Satz sind eine Luecke, keine Null.
+    expect(wochen[0]).toBeNull();
+  });
+
+  it("vergleicht den besten Satz beider Haelften und nennt beide", () => {
+    // 8 Wochen: erste Haelfte 100 kg, zweite Haelfte 110 kg.
+    const logs = [7, 6, 5, 4, 3, 2, 1, 0].map((w) =>
+      log(w, [satz({ weight: w >= 4 ? 100 : 110, reps: 5 })])
+    );
+    const wochen: any = getStrengthWeeksByExercise(logs, 12, jetzt)["bankdruecken"];
+    const t: any = strengthTrend(wochen, 7);
+    expect(t.von.weight).toBe(100);
+    expect(t.bis.weight).toBe(110);
+    expect(Math.round(t.change)).toBe(10);
+    // Die Herkunft haengt am Satz: Datum, Gewicht, Wiederholungen, Reserve.
+    expect(new Date(t.bis.date).getTime()).toBeGreaterThan(new Date(t.von.date).getTime());
+  });
+
+  it("eine einzelne schwache Woche kippt die Aussage nicht", () => {
+    // Durchgehend 100 kg, nur in der letzten Woche ein leichter Tag.
+    const logs = [7, 6, 5, 4, 3, 2, 1, 0].map((w) =>
+      log(w, [satz({ weight: w === 0 ? 70 : 100, reps: 5 })])
+    );
+    const wochen: any = getStrengthWeeksByExercise(logs, 12, jetzt)["bankdruecken"];
+    // Das Beste der Haelfte zaehlt, nicht der letzte Tag: kein "-30 %".
+    expect(Math.round(strengthTrend(wochen, 7)!.change)).toBe(0);
+  });
+
+  it("ohne Satz in einer Haelfte gibt es keine Zahl", () => {
+    // Nur in den letzten beiden Wochen trainiert.
+    const logs = [1, 0].map((w) => log(w, [satz({ weight: 100, reps: 5 })]));
+    const wochen: any = getStrengthWeeksByExercise(logs, 12, jetzt)["bankdruecken"];
+    expect(strengthTrend(wochen, 7)).toBeNull();
+    expect(strengthTrend([], 7)).toBeNull();
+  });
+
+  it("Koerpergewichts- und Zeituebungen tauchen gar nicht auf", () => {
+    const logs = [
+      {
+        id: "a",
+        date: new Date(jetzt - 86400000).toISOString(),
+        entries: [
+          { id: "e1", exerciseId: "klimmzug", sets: [satz({ weight: 0, reps: 10 })] },
+          { id: "e2", exerciseId: "plank", targetUseTime: true, sets: [satz({ weight: 20, reps: 1 })] },
+        ],
+      },
+    ];
+    const alle = getStrengthWeeksByExercise(logs, 8, jetzt);
+    expect(alle["klimmzug"]).toBeUndefined();
+    expect(alle["plank"]).toBeUndefined();
   });
 });

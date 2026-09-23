@@ -1837,6 +1837,21 @@ const STAT_EXPLANATIONS = {
       "Änderung = (diese Woche − Schnitt der gewählten Wochen davor) ÷ Schnitt × 100. Wochen, in denen diese Gruppe gar nicht drankam, zählen dabei nicht mit: Sie sind eine Lücke, keine Null. Sonst würde bei einer Gruppe, die du jede zweite Woche trainierst, eine ganz normale Woche als „+83 %\" dastehen – verglichen wird mit einer Woche, in der du sie trainiert hast, nicht mit einer durchschnittlichen Kalenderwoche.",
     ],
   },
+  strengthTrend: {
+    title: "Werde ich stärker?",
+    paragraphs: [
+      "Die Frage, für die die App gebaut wurde – und zwar je ÜBUNG, nicht je Muskelgruppe. Stärker wird man in Übungen; „die Kraft der Beine\" ist ein Mittelwert, an dem sich nichts festmachen lässt.",
+      "Der Zeitraum wird in zwei gleich lange Hälften geteilt. Aus jeder Hälfte wird der BESTE Satz genommen und in ein geschätztes Einer-Maximum umgerechnet (mit deiner Reserve, siehe set1RM). Die Prozentzahl ist der Unterschied zwischen diesen beiden Sätzen.",
+      "Das Beste einer Hälfte statt „erste gegen letzte Trainingswoche\": Ein einzelner schwacher Tag am Anfang oder Ende würde sonst die ganze Aussage bestimmen. Und das Beste statt eines Durchschnitts, weil Kraft das ist, was einmal ging – ein Schnitt würde eine bewusst leichte Woche als Kraftverlust lesen.",
+      "Jede Zeile lässt sich antippen. Dann stehen die beiden Sätze da, aus denen die Zahl kommt: Gewicht, Wiederholungen, Reserve und Datum. Eine Prozentzahl, deren Herkunft man nicht sehen kann, muss man glauben – eine, hinter der zwei echte Sätze stehen, kann man nachrechnen.",
+      "Körpergewichts- und Bandübungen tauchen nicht auf, genauso wenig wie Zeit-Übungen: Für sie gibt es kein Gewicht, aus dem sich ein Maximum schätzen ließe, und eine erfundene Zahl wäre schlechter als keine.",
+    ],
+    formula: [
+      "Kraft eines Satzes = geschätztes 1RM aus Gewicht und Wiederholungen, plus der Reserve des letzten Arbeitssatzes.",
+      "Veränderung = bester Satz der späteren Hälfte ÷ bester Satz der früheren Hälfte − 1. Bei ungerader Wochenzahl fällt die mittlere Woche heraus, damit beide Hälften gleich lang sind.",
+      "Ein Strich statt einer Zahl heißt: In einer der beiden Hälften gibt es keinen Satz mit Gewicht – zum Beispiel, weil du die Übung erst seit Kurzem machst.",
+    ],
+  },
   strengthVolume: {
     title: "Kraft und Volumen",
     paragraphs: [
@@ -2270,14 +2285,12 @@ export function getWeeklySetSeries(logs, exBy, subgroupOverrides, weekCount = 21
     const subDefs = SUBGROUPS[g.id] || [];
     const subs = subDefs
       .map((sg) => ({ id: sg.id, label: sg.label, values: toSeries(subWeeks[g.id]?.[sg.id]) }))
-      .map((sg) => ({ ...sg, current: sg.values[sg.values.length - 1] || 0 }))
-      .sort((a, b) => b.current - a.current);
-    // "Sonstige" hängt immer unsortiert hinten dran, auch bei 0 - siehe
-    // getMuscleLoadSeries/weeklySetsByGroup für die Begründung.
+      .map((sg) => ({ ...sg, current: sg.values[sg.values.length - 1] || 0 }));
+    // "Sonstige" hängt immer hinten dran, auch bei 0.
     const sonstige = { id: "sonstige", label: "Sonstige", values: toSeries(subWeeks[g.id]?.sonstige) };
     subs.push({ ...sonstige, current: sonstige.values[sonstige.values.length - 1] || 0 });
     return { id: g.id, label: g.label, values, current: values[values.length - 1] || 0, subs };
-  }).sort((a, b) => b.current - a.current);
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -2935,6 +2948,81 @@ export function typicalWeekFloor(values) {
   const mitte = Math.floor(aktiv.length / 2);
   const median = aktiv.length % 2 ? aktiv[mitte] : (aktiv[mitte - 1] + aktiv[mitte]) / 2;
   return median * WEEK_MIN_SHARE;
+}
+
+// ---------------------------------------------------------------------------
+// "Werde ich stärker?" - je Übung, mit dem Satz dahinter
+//
+// Die Frage, für die die App gebaut wurde, wird hier zum ersten Mal DIREKT
+// beantwortet: nicht je Muskelgruppe, sondern je Übung. Stärker wird man in
+// Übungen; "die Kraft der Beine" ist ein Mittelwert, an dem man nichts
+// festmachen kann.
+//
+// Gemessen wird am besten geschätzten 1RM (mit Reserve, siehe set1RM) -
+// derselbe Maßstab wie in "Kraft und Volumen", nur nicht gemittelt, sondern
+// als MAXIMUM je Hälfte: Kraft ist das, was einmal ging, nicht was im Schnitt
+// ging. Ein Mittelwert über eine Hälfte würde eine leichte Woche als
+// Kraftverlust lesen.
+//
+// Und, der eigentliche Punkt: Gemerkt wird nicht nur die Zahl, sondern der
+// SATZ - Gewicht, Wiederholungen, Reserve, Datum. Eine Prozentzahl, deren
+// Herkunft man nicht sehen kann, muss man glauben; eine, hinter der zwei
+// echte Sätze stehen, kann man nachrechnen. Das ist der Grund für diese
+// Karte, nicht eine Zugabe.
+// ---------------------------------------------------------------------------
+
+// Für ALLE Übungen in einem Durchgang: je Woche der beste Satz. Rückgabe wie
+// überall alt -> neu; Wochen ohne Satz sind null (eine Lücke, keine Null).
+export function getStrengthWeeksByExercise(logs, weekCount = 53, nowTs = Date.now()) {
+  const out = {};
+  (Array.isArray(logs) ? logs : []).forEach((log) => {
+    const ts = new Date(log?.date).getTime();
+    if (!Number.isFinite(ts)) return;
+    const idx = Math.max(0, Math.floor((nowTs - ts) / LOAD_WEEK_MS));
+    if (idx >= weekCount) return;
+    logEntries(log).forEach((entry) => {
+      // Zeit-Übungen haben kein Gewicht, das sich in ein 1RM umrechnen ließe.
+      if (entry.targetUseTime) return;
+      forEachPerformedSet(entry, (set, rir) => {
+        const oneRM = set1RM(set, rir);
+        if (!(oneRM > 0)) return;
+        const wochen = out[entry.exerciseId] || (out[entry.exerciseId] = new Array(weekCount).fill(null));
+        if (!wochen[idx] || oneRM > wochen[idx].oneRM) {
+          wochen[idx] = {
+            oneRM,
+            weight: toNum(set.weight),
+            reps: toNum(set.reps),
+            rir: rir == null ? null : toNum(rir),
+            date: log.date,
+          };
+        }
+      });
+    });
+  });
+  Object.values(out).forEach((w) => w.reverse());
+  return out;
+}
+
+// Der beste Satz der späteren Hälfte des Zeitraums gegen den besten der
+// früheren. Gleich lange Hälften; bei ungerader Wochenzahl fällt die mittlere
+// Woche heraus - dieselbe Aufteilung wie in halfPeriodChange.
+//
+// Bewusst nicht "erste gegen letzte Trainingswoche": Ein einzelner schwacher
+// Tag am Anfang oder Ende würde die ganze Aussage bestimmen. Über eine halbe
+// Periode hinweg das Beste zu nehmen federt das ab, ohne den Wert zu einem
+// Mittelwert zu machen.
+//
+// null heißt: In einer der beiden Hälften gibt es keinen Satz mit Gewicht.
+export function strengthTrend(weeks, compareWeeks) {
+  const reihe = compareWindowSeries(Array.isArray(weeks) ? weeks : [], compareWeeks);
+  const haelfte = Math.floor(reihe.length / 2);
+  if (haelfte < 1) return null;
+  const bester = (teil) =>
+    teil.reduce((b, w) => (w && (!b || w.oneRM > b.oneRM) ? w : b), null);
+  const von = bester(reihe.slice(0, haelfte));
+  const bis = bester(reihe.slice(reihe.length - haelfte));
+  if (!von || !bis) return null;
+  return { von, bis, change: (bis.oneRM / von.oneRM - 1) * 100 };
 }
 
 // Wie hat sich eine Reihe über den gewählten Zeitraum verändert: die zweite
@@ -5467,6 +5555,11 @@ function TrainingAppInner() {
         .stats-grid-secondary {
           grid-template-columns: repeat(3, 1fr);
         }
+        /* Seit "Volumen" und "Trainings" oben weg sind, stehen hier nur noch
+           zwei Kacheln - drei Spalten liessen die letzte leer stehen. */
+        .stats-grid-zwei {
+          grid-template-columns: repeat(2, 1fr);
+        }
         .stats-grid-secondary .stat-value {
           font-size: 24px;
         }
@@ -6543,6 +6636,55 @@ function TrainingAppInner() {
         }
         /* Kraft und Volumen: zwei Zahlen nebeneinander, damit man sie
            gegeneinander lesen kann - das ist der ganze Zweck der Karte. */
+        /* "Werde ich staerker?" - je Muskelgruppe eine kleine Ueberschrift,
+           darunter die Uebungen. Reihenfolge der Gruppen wie ueberall
+           (MUSCLE_GROUPS), damit man sie in jeder Karte am selben Platz
+           sucht. */
+        .strong-group-label {
+          display: block;
+          margin: 14px 0 7px;
+          font-size: 10.5px;
+          letter-spacing: 0.09em;
+          text-transform: uppercase;
+          color: var(--text-faint);
+        }
+        .strong-row {
+          display: grid;
+          grid-template-columns: 1fr auto 46px 14px;
+          align-items: center;
+          gap: 8px;
+          margin-bottom: 9px;
+        }
+        .strong-row-clickable { cursor: pointer; }
+        .strong-kg {
+          font-size: 12px;
+          color: var(--text-dim);
+          white-space: nowrap;
+          font-variant-numeric: tabular-nums;
+        }
+        /* Die beiden Saetze, aus denen die Prozentzahl kommt. */
+        .strong-proof-row {
+          display: flex;
+          flex-direction: column;
+          gap: 2px;
+          padding: 10px 0;
+          border-bottom: 1px solid var(--border);
+        }
+        .strong-proof-row:last-child { border-bottom: none; }
+        .strong-proof-label {
+          font-size: 10.5px;
+          letter-spacing: 0.09em;
+          text-transform: uppercase;
+          color: var(--text-faint);
+        }
+        .strong-proof-set {
+          font-size: 17px;
+          color: var(--text);
+        }
+        .strong-proof-meta {
+          font-size: 12.5px;
+          color: var(--text-dim);
+        }
         .sv-row {
           display: grid;
           grid-template-columns: 1fr 52px 52px 14px;
@@ -18197,6 +18339,41 @@ function ProgressView({
     ),
     [enduranceLogs, pulsProfil, loadHistoryWeeks]
   );
+  // "Werde ich stärker?" - siehe getStrengthWeeksByExercise. Je Übung, nach
+  // Muskelgruppen geordnet, und zwar in der Reihenfolge von MUSCLE_GROUPS:
+  // dieselbe wie in jeder anderen Karte, damit man eine Gruppe überall am
+  // selben Platz sucht.
+  const [strongCompareWeeks, setStrongCompareWeeks] = useState(12);
+  // Welche Zeile gerade ihre beiden Sätze zeigt - null heißt: keine.
+  const [strongInfo, setStrongInfo] = useState(null);
+  const strengthWeeks = useMemo(
+    () => getStrengthWeeksByExercise(logs, muscleSeriesWeekCount(loadHistoryWeeks)),
+    [logs, loadHistoryWeeks]
+  );
+  const strongGroups = useMemo(() => {
+    const gruppen = {};
+    Object.entries(strengthWeeks).forEach(([exId, wochen]) => {
+      const ex = exBy[exId];
+      if (!ex?.group) return;
+      // Im gewählten Zeitraum gar nicht trainiert: Die Übung gehört nicht in
+      // eine Karte, die "wohin läuft das gerade" beantwortet.
+      if (!compareWindowSeries(wochen, strongCompareWeeks).some(Boolean)) return;
+      (gruppen[ex.group] || (gruppen[ex.group] = [])).push({
+        id: exId,
+        name: ex.name,
+        trend: strengthTrend(wochen, strongCompareWeeks),
+      });
+    });
+    return MUSCLE_GROUPS.filter((mg) => gruppen[mg.id]?.length).map((mg) => ({
+      id: mg.id,
+      label: mg.label,
+      exercises: gruppen[mg.id].sort((a, b) => a.name.localeCompare(b.name, "de")),
+    }));
+  }, [strengthWeeks, exBy, strongCompareWeeks]);
+  // Zeiträume wie in den anderen Karten, nur ohne "Vorwoche": Eine Hälfte aus
+  // einer halben Woche gibt es nicht.
+  const STRONG_COMPARE_OPTIONS = MUSCLE_COMPARE_OPTIONS.filter(([weeks]) => weeks >= 4);
+
   // Kraft gegen Volumen (siehe getStrengthVolumeSeries). Je Muskelgruppe
   // zusammengefasst, mit den Übungen darunter beim Aufklappen.
   const [svCompareWeeks, setSvCompareWeeks] = useState(12);
@@ -18434,27 +18611,18 @@ function ProgressView({
 
   const selectedIsTimeBased = isTimeBasedInLogs(logs, selected, timeBasedExercises);
 
-  const weeklyWorkouts = logs.filter((l) => Date.now() - new Date(l.date).getTime() <= 7 * 86400000).length;
-  const last7Volume = logs.filter((l) => Date.now() - new Date(l.date).getTime() <= 7 * 86400000).reduce((sum, l) => sum + logEntries(l).reduce((s, e) => s + entrySets(e).filter((x) => x.done && !x.warmup).reduce((a, x) => a + toNum(x.weight) * toNum(x.reps), 0), 0), 0);
-
-
   return (
     <div>
       {subTabs}
 
-      <div className="stat-hero">
-        <span className="stat-hero-label">Volumen diese Woche</span>
-        <span className="stat-hero-value">
-          {Math.round(last7Volume).toLocaleString("de-DE")}
-          <small>kg</small>
-        </span>
-      </div>
-
-      <div className="stats-grid stats-grid-secondary">
-          <div className="stat-item">
-            <span className="stat-value">{weeklyWorkouts}</span>
-            <span className="stat-label">Trainings (7 Tage)</span>
-          </div>
+      {/* Oben standen früher "Volumen diese Woche" und "Trainings (7 Tage)".
+          Beide sind bewusst weg: Das Wochenvolumen in Kilogramm ist eine
+          Zahl, die vor allem davon abhängt, ob gerade Beintag war - als
+          erstes im Blickfeld hat sie mehr Aufmerksamkeit bekommen, als sie
+          verdient. Und wie oft trainiert wurde, steht im Kalender, wo es
+          hingehört. Was bleibt, sind die beiden Zahlen, die auf einen
+          bestimmten Satz zeigen und sich antippen lassen. */}
+      <div className="stats-grid stats-grid-secondary stats-grid-zwei">
           <div
             className={`stat-item ${stats.best1RMSource ? "stat-item-clickable" : ""}`}
             onClick={() => stats.best1RMSource && setBest1RMInfo(stats.best1RMSource)}
@@ -18479,6 +18647,68 @@ function ProgressView({
               )}
             </span>
           </div>
+      </div>
+
+      {/* Die Karte, die als erstes im Blick sein soll: "Werde ich stärker?".
+          Je Übung, weil man in Übungen stärker wird - siehe
+          getStrengthWeeksByExercise für die Herleitung. Jede Zeile lässt sich
+          antippen und zeigt dann die beiden Sätze, aus denen die Zahl kommt. */}
+      <div className="card">
+        <ExplainableTitle onExplain={() => setExplain(STAT_EXPLANATIONS.strengthTrend)}>
+          Werde ich stärker?
+        </ExplainableTitle>
+        <div className="chip-row" style={{ marginTop: 10, marginBottom: 4 }}>
+          {STRONG_COMPARE_OPTIONS.map(([weeks, label]) => (
+            <span
+              key={weeks}
+              className={`chip chip-sm ${strongCompareWeeks === weeks ? "active" : ""}`}
+              onClick={() => setStrongCompareWeeks(weeks)}
+            >
+              {label}
+            </span>
+          ))}
+        </div>
+        {strongGroups.length === 0 ? (
+          <div className="empty-state" style={{ padding: "14px 0" }}>
+            In diesem Zeitraum gibt es keine Übung mit Gewicht. Bei
+            Körpergewichts-, Band- und Zeit-Übungen lässt sich kein Maximum
+            schätzen.
+          </div>
+        ) : (
+          <div style={{ marginTop: 8 }}>
+            {strongGroups.map((g) => (
+              <div key={g.id}>
+                <span className="strong-group-label">{g.label}</span>
+                {g.exercises.map((ex) => (
+                  <div
+                    key={ex.id}
+                    className={`strong-row ${ex.trend ? "strong-row-clickable" : ""}`}
+                    onClick={() => ex.trend && setStrongInfo({ id: ex.id, name: ex.name, ...ex.trend })}
+                    title={ex.trend ? "Antippen: aus welchen Sätzen kommt diese Zahl?" : undefined}
+                  >
+                    <span className="muscle-week-label">{ex.name}</span>
+                    <span className="strong-kg">
+                      {ex.trend
+                        ? `${Math.round(ex.trend.von.oneRM)} → ${Math.round(ex.trend.bis.oneRM)} kg`
+                        : ""}
+                    </span>
+                    <LoadChangeBadge change={ex.trend ? ex.trend.change : null} />
+                    <span className="muscle-week-chevron">
+                      {ex.trend && <ChevronRight size={14} color="var(--text-dim)" />}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            ))}
+            <p className="deload-basis">
+              Die Kilogramm sind das geschätzte Maximum aus dem besten Satz –
+              nicht das Gewicht, das auf der Stange lag. Verglichen wird die
+              spätere Hälfte des Zeitraums gegen die frühere; Antippen zeigt
+              beide Sätze. Ein Strich heißt: In einer der beiden Hälften gibt
+              es keinen Satz mit Gewicht.
+            </p>
+          </div>
+        )}
       </div>
 
       {/* Muskelgruppen - eine Karte, zwei Maße.
@@ -19138,6 +19368,49 @@ function ProgressView({
               </div>
             ))}
           </div>
+        </Modal>
+      )}
+
+      {/* Die beiden Sätze hinter einer Prozentzahl aus "Werde ich stärker?".
+          Ohne diese Ansicht bliebe die Zahl etwas, das man glauben muss. */}
+      {strongInfo && (
+        <Modal title="Woher kommt diese Zahl?" onClose={() => setStrongInfo(null)} width={380}>
+          <div className="plan-title" style={{ marginBottom: 6 }}>{strongInfo.name}</div>
+          {[
+            ["Früher", strongInfo.von],
+            ["Zuletzt", strongInfo.bis],
+          ].map(([titel, beleg]) => (
+            <div className="strong-proof-row" key={titel}>
+              <span className="strong-proof-label">{titel}</span>
+              <span className="strong-proof-set">
+                {fmtDecimal(beleg.weight)} kg × {beleg.reps}
+                {fmtRir(beleg.rir) ? `, ${fmtRir(beleg.rir)}` : ""}
+              </span>
+              <span className="strong-proof-meta">
+                {fmtDate(beleg.date)} · geschätzt {Math.round(beleg.oneRM)} kg
+              </span>
+            </div>
+          ))}
+          <div className="explain-formula" style={{ marginTop: 12 }}>
+            <span className="explain-formula-label">So wird gerechnet</span>
+            <div>
+              Der Zeitraum wird halbiert. Aus jeder Hälfte wird der beste Satz
+              genommen und daraus geschätzt, was einmal maximal gegangen wäre.
+              Der Unterschied zwischen diesen beiden Schätzungen ist die
+              Prozentzahl – mehr steckt nicht dahinter.
+            </div>
+          </div>
+          <button
+            className="btn btn-ghost btn-block btn-sm"
+            style={{ marginTop: 12 }}
+            onClick={() => {
+              setExerciseSheetTab("history");
+              setSelectedExerciseId(strongInfo.id);
+              setStrongInfo(null);
+            }}
+          >
+            Verlauf dieser Übung ansehen
+          </button>
         </Modal>
       )}
 

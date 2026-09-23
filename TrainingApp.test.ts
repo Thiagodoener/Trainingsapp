@@ -2519,3 +2519,71 @@ describe("Jedes Gym behält überall dieselbe Farbe", () => {
     expect(gymColor("geloescht", gyms)).toBe(gymColor("none", gyms));
   });
 });
+
+describe("Warum eine Muskelgruppe faellt, waehrend ihre Untergruppen steigen", () => {
+  const WOCHE = 7 * 86400000;
+  const jetzt = Date.now();
+  // Bankdruecken: Hauptgruppe Brust, zugeordnet zu oberer und mittlerer Brust.
+  // Dips: Hauptgruppe Arme, Brust nur NEBENmuskel - zaehlt halb in die
+  // Gruppe Brust, aber in keine ihrer Untergruppen.
+  const exBy: any = {
+    bankdruecken: { id: "bankdruecken", name: "Bankdrücken", group: "brust" },
+    dips: { id: "dips", name: "Dips", group: "arme", secondary: ["brust"] },
+  };
+  const ueberschreibungen: any = { bankdruecken: ["brust-oben", "brust-mitte"] };
+  const log = (wochenZurueck: number, eintraege: any[]) => ({
+    id: "l" + wochenZurueck,
+    date: new Date(jetzt - wochenZurueck * WOCHE - 86400000).toISOString(),
+    entries: eintraege,
+  });
+  const e = (exerciseId: string, anzahl: number) => ({
+    id: "e-" + exerciseId + "-" + anzahl,
+    exerciseId,
+    sets: new Array(anzahl).fill(0).map(() => satz({ weight: 80, reps: 8 })),
+  });
+
+  it("Nebenmuskel-Arbeit steckt in der Gruppe, aber in keiner Untergruppe", () => {
+    const logs = [
+      // Vorwoche: wenig Bankdruecken, viel Dips.
+      log(1, [e("bankdruecken", 2), e("dips", 12)]),
+      // Diese Woche: mehr Bankdruecken, kaum noch Dips.
+      log(0, [e("bankdruecken", 4), e("dips", 2)]),
+    ];
+    const reihen: any = getMuscleLoadSeries(logs, exBy, ueberschreibungen, {}, 12, jetzt);
+    const brust = reihen.find((g: any) => g.id === "brust");
+    const oben = brust.subs.find((s: any) => s.id === "brust-oben");
+    const sonstige = brust.subs.find((s: any) => s.id === "sonstige");
+
+    // Genau das gemeldete Bild: Die Gruppe faellt, die Untergruppe steigt -
+    // und beides ist fuer sich richtig gerechnet.
+    expect(Math.round(muscleLoadChange(brust.values, 1)!)).toBe(-37); // genau -37,5 %
+    expect(Math.round(muscleLoadChange(oben.values, 1)!)).toBe(100);
+
+    // Der Grund: Die Untergruppen ergeben zusammen nicht die Gruppe.
+    // Diese Woche: 4 Saetze Bankdruecken = 4, dazu die halbe Dips-Arbeit
+    // (2 Saetze x 0,5) = 1 -> Gruppe 5.
+    expect(brust.current).toBeCloseTo(5, 10);
+    // Die Dips-Arbeit taucht in KEINER Untergruppe auf, auch nicht in
+    // "Sonstige" - eine Nebenmuskel-Zuweisung ohne gewaehlte Untergruppe
+    // soll nicht still in eine Untergruppe rutschen.
+    expect(sonstige.current).toBe(0);
+    // Vorwoche: 2 Saetze Bankdruecken = 2, dazu 12 Saetze Dips x 0,5 = 6
+    // -> Gruppe 8. Die Dips-Haelfte war also der groesste Teil der
+    // "Brust"-Belastung, und genau die ist weggefallen.
+    expect(brust.values[brust.values.length - 2]).toBeCloseTo(8, 10);
+  });
+
+  it("eine Uebung in zwei Untergruppen zaehlt in beiden voll mit", () => {
+    const logs = [log(0, [e("bankdruecken", 3)])];
+    const reihen: any = getMuscleLoadSeries(logs, exBy, ueberschreibungen, {}, 12, jetzt);
+    const brust = reihen.find((g: any) => g.id === "brust");
+    const oben = brust.subs.find((s: any) => s.id === "brust-oben");
+    const mitte = brust.subs.find((s: any) => s.id === "brust-mitte");
+    // Beide tragen die volle Arbeit - zusammen also das Doppelte der Gruppe.
+    expect(oben.current).toBeCloseTo(brust.current, 10);
+    expect(mitte.current).toBeCloseTo(brust.current, 10);
+    // Ohne Dips ist die Gruppe genau die Bankdrueck-Arbeit - die
+    // Untergruppen zusammen das Doppelte davon.
+    expect(oben.current + mitte.current).toBeCloseTo(brust.current * 2, 10);
+  });
+});

@@ -1780,141 +1780,120 @@ const MUSCLE_COMPARE_OPTIONS = [
 // Erklärtexte hinter den Überschriften der Statistik-Karten (antippen).
 // Umsetzung von Regel 4 aus KONZEPT.md aus der Leserichtung: eine Kennzahl,
 // deren Rechenweg man nicht nachvollziehen kann, ist so wenig wert wie ein
-// Eingabefeld ohne Rückmeldung. Beantwortet werden bewusst zwei Fragen -
-// "was sehe ich hier?" und "wie wird das gerechnet?" - und zwar in derselben
-// Sprache wie die Herleitungen im Code darüber, nur ohne Fachbegriffe.
+// Eingabefeld ohne Rückmeldung. Bewusst knapp: ein Satz, was die Karte
+// zeigt, ein paar Stichpunkte, die Rechnung in Kurzform. Die ausführliche
+// Herleitung steht im Code an den jeweiligen Funktionen.
 const STAT_EXPLANATIONS = {
   weeklySets: {
     title: "Sätze pro Muskelgruppe",
-    paragraphs: [
-      "Zeigt, wie viele Arbeitssätze jede Muskelgruppe in den letzten 7 Tagen abbekommen hat - und ob das mehr oder weniger ist als sonst.",
-      "Eine Übung zählt nicht nur auf eine Gruppe: Bankdrücken trainiert die Brust, aber Schultern und Trizeps arbeiten deutlich mit. Deshalb zählt jeder Satz voll auf die Hauptgruppe und mit einem halben Satz auf jede beteiligte Nebengruppe. Bankdrücken heißt also 1 Satz Brust, ein halber Satz Schultern, ein halber Satz Arme - daher auch die krummen Zahlen wie 12,5.",
-      "Der halbe Satz ist eine grobe, in der Trainingsplanung übliche Verrechnung, keine Messung. Wie stark ein Muskel wirklich mitarbeitet, hängt von Ausführung, Griffweite und Körperbau ab - das weiß die App nicht. Sie stellt damit die Größenordnung richtig, nicht mehr.",
-      "Die Untergruppen darunter bekommen nur die Hauptgruppe ab. Welcher Teil der Schulter beim Bankdrücken mitarbeitet, kann diese Zuordnung nicht beantworten, und eine erfundene Antwort wäre schlechter als keine. Ausnahme: Hast du bei einer Übung selbst eine Untergruppe für eine Nebenmuskelgruppe gewählt (im Übungs-Detail unter \"Nebenmuskelgruppen\"), zählt genau diese Wahl mit - weil sie dann von dir stammt, nicht erraten ist.",
-      "Gezählt wird nur, was du auch abgehakt hast. Ein vorbelegter, aber nie ausgeführter Satz zählt nicht mit, sonst würde die Statistik Trainings behaupten, die nie stattgefunden haben. Aufwärmsätze zählen ebenfalls nicht.",
-      "Dropsätze zählen hier bewusst nicht als eigener Satz: Die Zahl bildet Trainingsreize mit Erholung dazwischen ab, und zwischen einem Satz und seinen Drops gibt es keine Erholung. In der Belastungs-Karte darunter zählen sie dagegen voll mit - die Arbeit wurde ja geleistet.",
-      "Die Prozentzahl vergleicht die aktuelle Woche gegen den Durchschnitt der Wochen davor - wie viele, bestimmst du mit den Feldern oben. Die Linie daneben zeigt genau diesen Zeitraum.",
+    kurz: "Arbeitssätze je Muskelgruppe in den letzten 7 Tagen – und ob das mehr oder weniger ist als sonst.",
+    punkte: [
+      "Hauptgruppe zählt voll, jede Nebengruppe halb (Bankdrücken: 1 Brust, ½ Schultern, ½ Arme).",
+      "Nur abgehakte Sätze. Aufwärm- und Dropsätze zählen nicht.",
+      "Untergruppen bekommen nur die Hauptgruppe ab – außer du hast sie selbst zugeordnet.",
+      "Prozent: diese Woche gegen den Schnitt der gewählten Wochen davor.",
     ],
     formula: [
-      "Sätze = Anzahl abgehakter Sätze ohne Aufwärm- und Dropsätze, gezählt über die letzten 7 Tage. Hauptgruppe × 1, jede Nebengruppe × 0,5.",
-      "Änderung = (diese Woche − Schnitt der gewählten Wochen davor) ÷ Schnitt × 100. Wochen, in denen diese Gruppe gar nicht drankam, zählen dabei nicht mit: Sie sind eine Lücke, keine Null. Sonst würde bei einer Gruppe, die du jede zweite Woche trainierst, eine ganz normale Woche als „+83 %\" dastehen – verglichen wird mit einer Woche, in der du sie trainiert hast, nicht mit einer durchschnittlichen Kalenderwoche.",
+      "Änderung = (diese Woche − Schnitt davor) ÷ Schnitt",
+      "Wochen ohne diese Gruppe zählen als Lücke, nicht als Null.",
     ],
   },
   muscleLoad: {
     title: "Belastung pro Muskelgruppe",
-    paragraphs: [
-      "Beantwortet eine andere Frage als die Karte darüber: nicht \"wie viele Sätze?\", sondern \"wie viel Arbeit?\". Zwei getrennte Kennzahlen, mit Absicht.",
-      "Kilogramm allein taugen dafür nicht: Wer von der Langhantel auf Kurzhanteln wechselt, bewegt bei gleicher Anstrengung viel weniger Kilogramm - die Kurve würde einen Rückschritt zeigen, den es nie gab. Reine Satzzahlen taugen auch nicht: Wer bei gleicher Satzzahl schwerer wird, sähe davon nichts.",
-      "Deshalb wird jeder Satz an deinem eigenen besten Satz in genau dieser Übung gemessen: \"Wie viel von meinem Bestwert war das?\" Ein Satz auf Bestniveau zählt 1,0. Ein Kurzhantel-Satz mit 22 kg ist damit genauso viel wert wie ein Langhantel-Satz mit 60 kg, wenn beide gleich nah am jeweiligen persönlichen Bestwert liegen.",
-      "Wie bei den Sätzen darüber zählt die Arbeit voll auf die Hauptgruppe und halb auf jede Nebengruppe: Bankdrücken belastet auch Schultern und Trizeps.",
-      "Ein neuer Rekord verfälscht die Vergangenheit dabei nicht - er wird auf alle Wochen gleich angewendet und kürzt sich beim Prozentvergleich wieder heraus.",
-      "Bei Klimmzügen, Dips oder Liegestützen ist dein Körper das Gewicht, und in der App steht dort nur das Zusatzgewicht. Ohne dein Körpergewicht (Zahnrad-Menü) zählt die App deshalb die Wiederholungen und lässt den Gurt weg; mit der Angabe rechnet sie mit Körpergewicht + Zusatz. Bewusst nicht geschätzt: Ein erfundenes Körpergewicht wäre schlechter als keins.",
-      "Zusätzlich zählt, wie hart du den letzten Satz einer Übung beendet hast: Derselbe Satz ist nicht dieselbe Belastung, wenn er einmal am Limit und einmal mit vier Wiederholungen in Reserve endete. Gewichtet wird nur dieser eine Satz, denn nur für ihn gibt es die Angabe - die früheren Sätze bleiben unangetastet. Verglichen wird mit deiner eigenen üblichen Reserve für genau diese Übung; ohne Angabe ändert sich nichts.",
-      "Die Warnzeichen rechts kommen aus derselben Reihe: ein Hinweis, wenn die aktuelle Woche mehr als 15 % über dem Schnitt der 4 Wochen davor liegt, ein deutlicher Alarm ab 30 %, und ein Plateau-Zeichen, wenn die letzten zwei Wochen im Schnitt nicht über den zwei Wochen davor liegen. Das sind Fragen, keine Urteile - wie es sich anfühlt, weißt nur du.",
+    kurz: "Wie viel Arbeit jede Muskelgruppe geleistet hat – gemessen an deinem eigenen Bestwert je Übung.",
+    punkte: [
+      "Ein Satz auf Bestniveau zählt 1,0. So sind Lang- und Kurzhantel vergleichbar.",
+      "Hauptgruppe voll, Nebengruppen halb. Dropsätze zählen mit.",
+      "Der letzte Satz wird nach Reserve (RIR) leicht gewichtet.",
+      "Körpergewichtsübungen: mit eingetragenem Körpergewicht in kg, sonst Wiederholungen.",
+      "Warnzeichen: ab +15 % Hinweis, ab +30 % Alarm, Plateau bei Stillstand über 4 Wochen.",
     ],
     formula: [
-      "Wert eines Satzes = (kg × Wdh.) ÷ bester Satz dieser Übung. Bei Übungen ohne Gewicht zählen die Wiederholungen, bei Zeit-Übungen die Sekunden. Bei Körpergewichts-Übungen mit eingetragenem Körpergewicht: (Körpergewicht + Zusatz) × Wdh.",
-      "Reserve-Gewichtung = nur auf den letzten abgehakten Arbeitssatz: je Stufe RIR unter deinem Üblichen 3 % mehr, je Stufe darüber 3 % weniger, höchstens 12 % in beide Richtungen. Ohne RIR-Angabe: keine Änderung.",
-      "Wochenwert = Summe aller Satzwerte der Muskelgruppe in einem 7-Tage-Fenster. Dropsätze zählen hier voll mit.",
-      "Plateau = Schnitt der letzten 2 Wochen ≤ Schnitt der 2 Wochen davor plus 2 %. Wochen ohne Training und markierte Entlastungen zählen als Lücke; von den vier Wochen darf höchstens eine fehlen, sonst wird nichts gemeldet.",
-      "Änderung = (diese Woche − Schnitt der gewählten Wochen davor) ÷ Schnitt × 100. Wochen, in denen diese Gruppe gar nicht drankam, zählen dabei nicht mit: Sie sind eine Lücke, keine Null. Sonst würde bei einer Gruppe, die du jede zweite Woche trainierst, eine ganz normale Woche als „+83 %\" dastehen – verglichen wird mit einer Woche, in der du sie trainiert hast, nicht mit einer durchschnittlichen Kalenderwoche.",
+      "Satzwert = (kg × Wdh.) ÷ bester Satz der Übung",
+      "RIR-Gewichtung: ±3 % je Stufe, max. ±12 %",
+      "Änderung = (diese Woche − Schnitt davor) ÷ Schnitt",
     ],
   },
   enduranceLoad: {
     title: "Ausdauer-Belastung",
-    paragraphs: [
-      "Eine Stunde locker traben und eine Stunde am Limit sind nicht dieselbe Belastung – die Dauer allein sagt also wenig. Gemessen wird deshalb, wie hoch dein Puls dabei lag, im Verhältnis zu deinem eigenen Bereich zwischen Ruhe und Maximum.",
-      "Die Rechnung dahinter heißt TRIMP (nach Banister) und ist der etablierte Weg, Ausdauerbelastung aus Pulsdaten zu bestimmen. Die Härte geht dabei nicht einfach mal der Zeit ein, sondern stärker gewichtet: Doppelt so hart ist mehr als doppelt so belastend. Das bildet nach, dass der Körper im oberen Bereich überproportional mehr wegstecken muss.",
-      "Ohne Ruhe- und Maximalpuls rechnet die App hier gar nichts. Eine Faustformel wie „220 minus Alter“ liegt je nach Mensch um 10 bis 20 Schläge daneben, und weil dieser Wert die gesamte Rechnung skaliert, wäre jede Zahl darüber wertlos. Dieselbe Haltung wie beim Körpergewicht: lieber keine Zahl als eine erfundene.",
-      "Einheiten ohne Pulsaufzeichnung fehlen in dieser Zahl. Das steht unter der Karte, statt die Woche stillschweigend zu niedrig auszuweisen.",
-      "Diese Zahl wird bewusst NICHT mit „Belastung pro Muskelgruppe“ verrechnet. Die eine misst jeden Satz an deinem eigenen Bestwert derselben Übung, die andere Minuten an deinem eigenen Puls – das sind zwei verschiedene Währungen. Sie zu addieren ergäbe eine Zahl, die zwar existiert, aber nichts bedeutet.",
-      "Beim Krafttraining wird der Puls aus demselben Grund nicht zur Belastung verrechnet: Er steigt dort durch Pressatmung und kurze Spitzen, nicht im Verhältnis zur geleisteten Arbeit. Was die Uhr dazu aufgezeichnet hat, steht am Training als Zusatzinfo dabei – als Beobachtung, nicht als Bewertung.",
+    kurz: "Dauer × Härte deiner Ausdauer-Einheiten, gemessen am Puls (TRIMP nach Banister).",
+    punkte: [
+      "Braucht Ruhe- und Maximalpuls – geschätzt wird nichts.",
+      "Einheiten ohne Pulsaufzeichnung fehlen in der Zahl.",
+      "Wird bewusst nicht mit der Muskel-Belastung verrechnet.",
     ],
     formula: [
-      "Herzfrequenz-Reserve = (Ø-Puls − Ruhepuls) ÷ (Maximalpuls − Ruhepuls), begrenzt auf 0 bis 1.",
-      "Belastung einer Einheit = Dauer in Minuten × Reserve × a × e^(b × Reserve). a und b sind die Banister-Konstanten: 0,64 und 1,92 für Männer, 0,86 und 1,67 für Frauen.",
-      "Wochenwert = Summe aller Einheiten in einem 7-Tage-Fenster, dieselbe Fenster-Logik wie bei den Muskelgruppen.",
-      "Änderung = (diese Woche − Schnitt der gewählten Wochen davor) ÷ Schnitt × 100. Wochen, in denen diese Gruppe gar nicht drankam, zählen dabei nicht mit: Sie sind eine Lücke, keine Null. Sonst würde bei einer Gruppe, die du jede zweite Woche trainierst, eine ganz normale Woche als „+83 %\" dastehen – verglichen wird mit einer Woche, in der du sie trainiert hast, nicht mit einer durchschnittlichen Kalenderwoche.",
+      "Reserve = (Ø-Puls − Ruhepuls) ÷ (Max − Ruhepuls)",
+      "Belastung = Minuten × Reserve × a × e^(b × Reserve)",
+      "Änderung = (diese Woche − Schnitt davor) ÷ Schnitt",
     ],
   },
   strengthTrend: {
     title: "Werde ich stärker?",
-    paragraphs: [
-      "Die Frage, für die die App gebaut wurde – und zwar je ÜBUNG, nicht je Muskelgruppe. Stärker wird man in Übungen; „die Kraft der Beine\" ist ein Mittelwert, an dem sich nichts festmachen lässt.",
-      "Der Zeitraum wird in zwei gleich lange Hälften geteilt. Aus jeder Hälfte wird der BESTE Satz genommen und in ein geschätztes Einer-Maximum umgerechnet (mit deiner Reserve, siehe set1RM). Die Prozentzahl ist der Unterschied zwischen diesen beiden Sätzen.",
-      "Das Beste einer Hälfte statt „erste gegen letzte Trainingswoche\": Ein einzelner schwacher Tag am Anfang oder Ende würde sonst die ganze Aussage bestimmen. Und das Beste statt eines Durchschnitts, weil Kraft das ist, was einmal ging – ein Schnitt würde eine bewusst leichte Woche als Kraftverlust lesen.",
-      "Jede Zeile lässt sich antippen. Dann stehen die beiden Sätze da, aus denen die Zahl kommt: Gewicht, Wiederholungen, Reserve und Datum. Eine Prozentzahl, deren Herkunft man nicht sehen kann, muss man glauben – eine, hinter der zwei echte Sätze stehen, kann man nachrechnen.",
-      "Oben stehen nur Übungen, die gerade aus der Reihe fallen – höchstens fünf: die mehr als 3 % zurückgehen, die über mindestens 12 Wochen um höchstens 3 % schwanken (über vier Wochen ist Stillstand normal, über ein Vierteljahr nicht mehr), und die um 10 % oder mehr stärker geworden sind. Stetige Fortschritte dazwischen sind der Normalfall und stehen beim Aufklappen. Passen mehr als fünf, gehen Rückgänge vor.",
-      "Körpergewichts- und Bandübungen tauchen nicht auf, genauso wenig wie Zeit-Übungen: Für sie gibt es kein Gewicht, aus dem sich ein Maximum schätzen ließe, und eine erfundene Zahl wäre schlechter als keine.",
+    kurz: "Je Übung: bester Satz der späteren Zeitraum-Hälfte gegen den der früheren.",
+    punkte: [
+      "Oben nur Auffälliges (max. 5): Rückgang über 3 %, Stillstand ab 12 Wochen, Zuwachs ab 10 %.",
+      "Kilogramm = geschätztes Maximum (1RM), nicht das Gewicht auf der Stange.",
+      "Antippen zeigt die beiden Sätze dahinter.",
+      "Ohne Gewicht (Körpergewicht, Band, Zeit) keine Wertung.",
     ],
     formula: [
-      "Kraft eines Satzes = geschätztes 1RM aus Gewicht und Wiederholungen, plus der Reserve des letzten Arbeitssatzes.",
-      "Veränderung = bester Satz der späteren Hälfte ÷ bester Satz der früheren Hälfte − 1. Bei ungerader Wochenzahl fällt die mittlere Woche heraus, damit beide Hälften gleich lang sind.",
-      "Auffällig: Rückgang = mehr als 3 % weniger. Kein Zuwachs = höchstens 3 % Veränderung, nur ab 12 Wochen Zeitraum. Deutlich stärker = 10 % mehr oder darüber. Dieselben Schwellen wie in „Kraft und Volumen\".",
-      "Übungen, für die es in einer der beiden Hälften keinen Satz mit Gewicht gibt – zum Beispiel, weil du sie erst seit Kurzem machst –, stehen gar nicht in der Liste, auch nicht aufgeklappt.",
+      "Veränderung = bestes 1RM spätere Hälfte ÷ bestes 1RM frühere Hälfte − 1",
     ],
   },
   strengthVolume: {
     title: "Kraft und Volumen",
-    paragraphs: [
-      "Die Frage dahinter: Werde ich stärker, oder mache ich nur mehr? Beide Zahlen standen schon vorher in der App – Volumen auf der Startseite, geschätztes 1RM in den Übungs-Charts –, nur nie nebeneinander. Erst nebeneinander wird daraus eine Aussage: Wer 18 % mehr Arbeit leistet und dabei gleich stark bleibt, sieht in jeder der beiden Zahlen für sich nichts Auffälliges.",
-      "Kraft ist das beste geschätzte 1RM der Woche – der stärkste Satz, umgerechnet auf ein Einer-Maximum, mit deiner Reserve verrechnet. Bewusst nicht das reine Maximalgewicht: Das springt nur, wenn du eine Scheibe wechselst, und ist blind dafür, ob es fünf oder zehn Wiederholungen waren.",
-      "Volumen sind die bewegten Kilogramm der Woche (kg × Wdh. aller Arbeitssätze) – dieselbe Rechnung wie „Volumen diese Woche\" auf der Startseite.",
-      "Beides braucht Gewicht auf der Stange. Klimmzüge, Liegestütze und Bandübungen tauchen hier nicht auf: Für sie gibt es keine Kraftzahl, die sich vergleichen ließe, und eine erfundene wäre schlechter als keine.",
-      "Für eine Muskelgruppe wird die Kraft jeder Übung erst an ihrem eigenen Bestwert gemessen und dann gemittelt. Ohne das würde die Beinpresse mit 200 kg allein bestimmen, wie sich „die Kraft der Beine\" entwickelt, und der Beinstrecker käme gar nicht vor. Gezählt wird nur die Hauptgruppe einer Übung – anders als bei den Karten darüber, wo Nebengruppen halb mitzählen: Für eine Kraftaussage wären mitarbeitende Muskeln Rauschen.",
-      "Der Satz unter einer Zeile beschreibt, was die beiden Zahlen zusammen zeigen. Er sagt nicht, was zu tun ist – das hängt von Ziel, Zeit und Erholung ab, und davon weiß die App nichts.",
+    kurz: "Werde ich stärker – oder mache ich nur mehr? Beide Zahlen je Muskelgruppe nebeneinander.",
+    punkte: [
+      "Kraft = bestes geschätztes 1RM der Woche.",
+      "Volumen = kg × Wdh. aller Arbeitssätze.",
+      "Verglichen wird die zweite Hälfte des Zeitraums gegen die erste.",
+      "Nur Übungen mit Gewicht, nur die Hauptgruppe.",
+      "Strich = in einer Hälfte keine Vergleichswoche.",
     ],
     formula: [
-      "Kraft einer Woche = bestes geschätztes 1RM dieser Woche. Volumen einer Woche = Summe aus kg × Wdh. aller abgehakten Arbeitssätze.",
-      "Veränderung = zweite Hälfte des gewählten Zeitraums gegen die erste, jeweils als Durchschnitt über die Wochen mit Daten. Wochen ohne Training zählen in keiner Hälfte mit; bei ungerader Wochenzahl fällt die mittlere heraus.",
-      "Bewusst nicht „aktuelle Woche gegen den Schnitt davor\" wie bei der Belastung: Dort geht es um diese eine Woche, hier um die Richtung über Wochen. Eine Übung, die du diese Woche zufällig nicht gemacht hast, hätte sonst gar keinen Wert.",
-      "Eine Woche zählt nur als Vergleichswoche, wenn darin mindestens ein Fünftel der Arbeit einer normalen Trainingswoche steckt (Median aller Wochen mit Training). Ein einzelner Beiwerk-Satz für den Rücken an einem Beintag macht aus der Woche sonst eine Rückenwoche mit ein paar hundert Kilogramm - und gegen einen echten Rückentag stünde dort eine vierstellige Prozentzahl, die nur zwei völlig verschiedene Dinge nebeneinanderstellt. Über die Arbeit entschieden wird für beide Zahlen, auch für die Kraft. Entlastungswochen bleiben dabei drin: Die liegen deutlich über einem Fünftel.",
-      "Ein Strich statt einer Zahl heißt: In einer der beiden Hälften bleibt danach keine Vergleichswoche übrig.",
+      "Veränderung = Schnitt 2. Hälfte ÷ Schnitt 1. Hälfte − 1",
+      "Wochen mit weniger als ⅕ einer normalen Trainingswoche zählen nicht.",
     ],
   },
   deload: {
     title: "Entlastungen",
-    paragraphs: [
-      "Eine Entlastung ist ein absichtlich leichterer Zeitraum. Damit die App ihn nicht für einen Einbruch hält, trägst du ihn im Kalender ein: ersten Tag antippen, „Entlastung ab hier\" wählen, letzten Tag antippen. Der Zeitraum darf beliebig laufen - Mittwoch bis übernächsten Donnerstag genauso wie Montag bis Sonntag.",
-      "Was das ändert: Im markierten Zeitraum zeigt die App keine Warnzeichen, und in den Wochen danach lässt sie ihn aus dem Vergleich heraus. Sonst würde dein ganz normaler Wiedereinstieg wie ein Sprung nach oben aussehen - der Schnitt, gegen den verglichen wird, wäre ja nach unten gezogen.",
-      "Sichtbar bleibt sie trotzdem: In den Diagrammen und in den Zeitraum-Vergleichen steht die Delle unverändert da. Sie soll nur nicht kommentiert werden.",
-      "Der Zähler darunter sagt, wie lange die letzte her ist. Wann du entlastest, entscheidest du - die App schlägt von sich aus nie eine Entlastungswoche vor.",
-      "Nach jeder Entlastung vergleicht sie die zwei Wochen davor mit den zwei Wochen danach - „danach\" beginnt am Tag nach dem Ende, bei einer langen Entlastung also später. Damit die eigene Wahrnehmung nicht von der Zahl überschrieben wird, fragt sie vorher nach deiner Schätzung.",
+    kurz: "Absichtlich leichtere Zeiträume, die du im Kalender markierst.",
+    punkte: [
+      "Eintragen: Tag antippen → „Entlastung ab hier\" → letzten Tag antippen.",
+      "Keine Warnzeichen währenddessen, danach kein Vergleich gegen die Delle.",
+      "Nach jeder Entlastung: 2 Wochen davor gegen 2 Wochen danach.",
     ],
     formula: [
-      "Verglichen wird die Arbeit je Satz, getrennt für jede Übung, und dann über die Übungen gemittelt, die in beiden Zeiträumen vorkommen. Nicht die Gesamtarbeit einer Woche - sonst würde vor allem gemessen, wie viel Zeit gerade da war.",
-      "Die Entlastungswoche selbst zählt in diesem Vergleich nicht mit.",
-      "Mindestens 2 Trainings je Seite und 2 gemeinsame Übungen, sonst wird kein Ergebnis gezeigt.",
-      "Ein Durchschnitt über mehrere Entlastungen erscheint ab der dritten ausgewerteten.",
+      "Arbeit je Satz, je Übung, gemittelt über gemeinsame Übungen",
+      "Mind. 2 Trainings je Seite und 2 gemeinsame Übungen",
+      "Durchschnitt ab 3 ausgewerteten Entlastungen",
     ],
   },
   feelingPerformance: {
     title: "Gefühl und Leistung",
-    paragraphs: [
-      "Beantwortet eine Frage, die man sich sonst nur ungefähr beantworten kann: Sagt dein Gefühl nach dem Training überhaupt etwas über deine tatsächliche Leistung aus?",
-      "Bei manchen Menschen tut es das deutlich, bei anderen kaum - wer an „müde\"-Tagen genauso stark ist wie sonst, kann sich das Zögern vor solchen Einheiten sparen. Wessen Leistung dagegen spürbar einbricht, hat einen guten Grund, auf das Gefühl zu hören.",
-      "Verglichen wird nicht gegen einen festen Durchschnitt, sondern gegen die Erwartung für genau diesen Tag: das Niveau der letzten Einheiten derselben Übung. Sonst würde die Auswertung nur zeigen, dass du über die Monate stärker geworden bist - und das weißt du schon.",
-      "Gerechnet wird pro Übung statt pro Training, weil sonst zu wenige Zahlen zusammenkommen. Für die Frage „ist das belastbar?\" zählt trotzdem die Zahl der Trainings: fünf Übungen an einem müden Tag sind ein müder Tag, nicht fünf Belege.",
+    kurz: "Sagt dein Gefühl nach dem Training etwas über deine tatsächliche Leistung?",
+    punkte: [
+      "Vergleich mit dem erwarteten Niveau derselben Übung, nicht mit einem festen Schnitt.",
+      "Gezählt werden Trainings, nicht Übungen.",
     ],
     formula: [
-      "Leistung einer Übung an einem Tag = (kg × Wdh.) aller abgehakten Arbeitssätze ÷ Anzahl dieser Sätze. Also die Arbeit je Satz - ein kurzer Tag mit weniger Sätzen zählt dadurch nicht als schwach.",
-      "Erwartung = Schnitt derselben Übung über die bis zu 2 Einheiten davor und 2 danach. Beide Seiten, weil ein Schnitt nur aus der Vergangenheit einem steigenden Niveau hinterherhinkt und dadurch jeden Tag zu gut aussehen ließe.",
-      "Abweichung = (Leistung − Erwartung) ÷ Erwartung × 100, danach gemittelt über alle Übungen mit derselben Gefühlsangabe.",
-      "Ab 3 Trainings je Stufe erscheint eine Tendenz, ab 5 eine Prozentzahl.",
+      "Leistung = (kg × Wdh.) ÷ Anzahl Sätze",
+      "Erwartung = Schnitt der 2 Einheiten davor und danach",
+      "Tendenz ab 3 Trainings je Stufe, Prozentzahl ab 5",
     ],
   },
   calibration: {
     title: "Eichsätze",
-    paragraphs: [
-      "Ein Eichsatz ist ein letzter Satz bis zum echten Muskelversagen – und davor die Schätzung, wie viele Wiederholungen du schaffen wirst. Danach steht beides nebeneinander: „8 geschätzt, 11 geschafft\".",
-      "Das ist die einzige Stelle in der App, an der eine Selbsteinschätzung gegen eine überprüfte Zahl gehalten wird. Bei jedem normalen Satz bleibt die RIR-Angabe eine Vermutung, die niemand nachprüft – hier gehst du wirklich bis zur Grenze und siehst, wo sie lag.",
-      "Was du davon hast: Zeigt sich über mehrere Eichsätze, dass du dich um zwei Wiederholungen unterschätzt, dann heißt dein Gefühl von „2 in Reserve\" in Wirklichkeit eher „gleich ist Schluss\". Dieses Wissen nimmst du in jedes Training mit.",
-      "Die App rechnet damit bewusst nichts automatisch um: Weder deine bisherigen RIR-Angaben noch die Belastung werden nachträglich korrigiert. Wie nah man bei einem All-out-Satz an die eigene Grenze schätzt, ist verwandt mit dem RIR-Schätzen im Alltag, aber nicht dasselbe – eine automatische Umrechnung wäre geraten.",
-      "Gerechnet wird über alle Übungen zusammen. Eichsätze kosten Überwindung und sind selten; je Übung getrennt käme auf Jahre hinaus keine tragfähige Zahl zustande. Wie gut man die eigene Grenze kennt, ist ohnehin eher eine Eigenschaft der Person als der Übung.",
+    kurz: "Ein letzter Satz bis zum Versagen – vorher geschätzt, danach gezählt. Zeigt, wie gut du deine Grenze kennst.",
+    punkte: [
+      "Auswahl im Training über das Menü am letzten Satz.",
+      "Über alle Übungen zusammen gerechnet.",
+      "Es wird nichts automatisch umgerechnet.",
     ],
     formula: [
-      "Abweichung eines Eichsatzes = tatsächliche Wiederholungen − vorher geschätzte Wiederholungen. Positiv heißt: mehr geschafft als gedacht, also unterschätzt.",
-      `Angezeigt wird der Durchschnitt aller Eichsätze, sobald mindestens ${CALIBRATION_MIN_SETS} vorliegen.`,
+      "Abweichung = geschafft − geschätzt (positiv = unterschätzt)",
+      `Durchschnitt ab ${CALIBRATION_MIN_SETS} Eichsätzen`,
     ],
   },
 };
@@ -3162,39 +3141,6 @@ export function pickNotableStrength(rows, max = STRONG_NOTICE_MAX) {
       .slice(0, max)
       .map((r) => r.id)
   );
-}
-
-// Ein Satz zu dem, was da steht - und zwar nur für die Fälle, in denen die
-// beiden Zahlen zusammen etwas sagen, das keine von beiden allein sagt.
-// Beschreibend, kein Rat: WAS zu tun ist, hängt von Ziel, Zeit und Erholung
-// ab, und davon weiß die App nichts (Regel 3). Der auffällige Fall - viel
-// mehr Arbeit bei stehender Kraft - ist der einzige, bei dem eine Einordnung
-// über die reine Beschreibung hinausgeht; das ist eine bewusste Entscheidung
-// (siehe KONZEPT.md), weil genau dieser Fall der Grund für die Karte war.
-export function strengthVolumeNote(rohKraft, rohVolumen) {
-  if (rohKraft == null || rohVolumen == null) return null;
-  // Gerechnet wird mit denselben gerundeten Zahlen, die daneben stehen.
-  // Sonst bekommt eine Zeile mit "+10 %" keinen Satz, weil dahinter 9,6
-  // stehen - und die daneben mit derselben Anzeige schon.
-  const kraft = Math.round(rohKraft);
-  const volumen = Math.round(rohVolumen);
-  const kraftSteht = Math.abs(kraft) <= SV_FLAT;
-  if (volumen >= SV_CLEAR && kraft <= SV_FLAT) {
-    return "Deutlich mehr Arbeit, aber die Kraft steht – der Punkt, an dem sich Mehrarbeit oft nicht mehr in Kraft übersetzt.";
-  }
-  if (kraft >= SV_CLEAR && volumen <= SV_FLAT) {
-    return "Mehr Kraft bei gleicher oder weniger Arbeit.";
-  }
-  if (kraft >= SV_FLAT && volumen >= SV_FLAT) {
-    return "Kraft und Arbeit steigen zusammen.";
-  }
-  if (volumen <= -SV_CLEAR && kraftSteht) {
-    return "Deutlich weniger Arbeit, die Kraft hält sich.";
-  }
-  if (volumen <= -SV_FLAT && kraft <= -SV_FLAT) {
-    return "Weniger Arbeit, und die Kraft geht mit.";
-  }
-  return null;
 }
 
 // Wöchentliche relative Belastung einer einzelnen Übung - dieselbe
@@ -6048,6 +5994,18 @@ function TrainingAppInner() {
           color: var(--text-dim);
         }
         .explain-body p:last-child { margin-bottom: 0; }
+        .explain-body .explain-kurz {
+          font-size: 15px;
+          color: var(--text);
+        }
+        .explain-punkte {
+          margin: 0;
+          padding-left: 18px;
+          font-size: 13.5px;
+          line-height: 1.45;
+          color: var(--text-dim);
+        }
+        .explain-punkte li + li { margin-top: 5px; }
 
         /* Die Karte "Letztes Training" führt in den Verlauf. position:
            relative steht hier bewusst: der Pfeil rechts wird daran
@@ -6754,13 +6712,6 @@ function TrainingAppInner() {
           flex-direction: column;
           min-width: 0;
         }
-        /* Warum die Uebung oben steht - leise, nicht als Alarm: Die Richtung
-           zeigt schon die Prozentzahl daneben in Farbe. */
-        .strong-notice {
-          font-size: 11.5px;
-          color: var(--text-dim);
-          margin-top: 1px;
-        }
         .strong-kg {
           font-size: 12px;
           color: var(--text-dim);
@@ -6812,13 +6763,6 @@ function TrainingAppInner() {
         }
         .sv-head span { text-align: right; }
         .sv-head span:first-child { text-align: left; }
-        .sv-note {
-          font-size: 12px;
-          line-height: 1.45;
-          color: var(--text-dim);
-          margin: -3px 0 10px;
-          padding-left: 2px;
-        }
         .muscle-load-row-sub {
           grid-template-columns: 80px 1fr 46px 18px;
           margin-bottom: 7px;
@@ -18818,7 +18762,6 @@ function ProgressView({
                   >
                     <span className="strong-name">
                       <span className="muscle-week-label">{ex.name}</span>
-                      {ex.notice && <span className="strong-notice">{ex.notice.text}</span>}
                     </span>
                     <span className="strong-kg">
                       {`${Math.round(ex.trend.von.oneRM)} → ${Math.round(ex.trend.bis.oneRM)} kg`}
@@ -18843,13 +18786,6 @@ function ProgressView({
                   : `Alle ${strong.total} Übungen zeigen`}
               </button>
             )}
-            <p className="deload-basis">
-              Oben stehen nur Übungen, die gerade auffallen: die zurückgehen,
-              die über ein Vierteljahr keinen Zuwachs haben, oder die deutlich
-              stärker geworden sind. Die Kilogramm sind das geschätzte Maximum
-              aus dem besten Satz – nicht das Gewicht, das auf der Stange lag.
-              Antippen zeigt die beiden Sätze dahinter.
-            </p>
           </div>
         )}
       </div>
@@ -19092,8 +19028,8 @@ function ProgressView({
             {enduranceSeries.ohnePuls > 0 && (
               <p className="deload-basis" style={{ marginTop: 10 }}>
                 {enduranceSeries.ohnePuls === 1
-                  ? "Eine Einheit hat keine Pulsaufzeichnung und fehlt deshalb in dieser Zahl."
-                  : `${enduranceSeries.ohnePuls} Einheiten haben keine Pulsaufzeichnung und fehlen deshalb in dieser Zahl.`}
+                  ? "1 Einheit ohne Puls nicht mitgezählt."
+                  : `${enduranceSeries.ohnePuls} Einheiten ohne Puls nicht mitgezählt.`}
               </p>
             )}
           </>
@@ -19132,7 +19068,6 @@ function ProgressView({
             </div>
             {strengthVolume.map((g) => {
               const offen = !!expandedSvGroups[g.id];
-              const hinweis = strengthVolumeNote(g.strength?.change ?? null, g.volume?.change ?? null);
               return (
                 <div key={g.id}>
                   <div
@@ -19151,7 +19086,6 @@ function ProgressView({
                       )}
                     </span>
                   </div>
-                  {hinweis && <div className="sv-note">{hinweis}</div>}
                   {offen && (
                     <div className="muscle-week-subs">
                       {g.exercises.map((ex) => (
@@ -19167,13 +19101,6 @@ function ProgressView({
                 </div>
               );
             })}
-            <p className="deload-basis">
-              Verglichen wird die zweite Hälfte des gewählten Zeitraums gegen
-              die erste. Wochen, in denen für eine Gruppe fast nichts
-              passiert ist, zählen dabei nicht als Vergleichswoche. Ein
-              Strich heißt: In einer der beiden Hälften bleibt danach nichts
-              übrig, womit sich vergleichen ließe.
-            </p>
           </div>
         )}
       </div>
@@ -19601,14 +19528,17 @@ function ProgressView({
       {explain && (
         <Modal title={explain.title} onClose={() => setExplain(null)} width={420}>
           <div className="explain-body">
-            {explain.paragraphs.map((text, i) => (
-              <p key={i}>{text}</p>
-            ))}
+            <p className="explain-kurz">{explain.kurz}</p>
+            <ul className="explain-punkte">
+              {explain.punkte.map((text, i) => (
+                <li key={i}>{text}</li>
+              ))}
+            </ul>
             {explain.formula && (
               <div className="explain-formula">
                 <span className="explain-formula-label">So wird gerechnet</span>
                 {explain.formula.map((line, i) => (
-                  <div key={i} style={{ marginTop: i === 0 ? 0 : 6 }}>{line}</div>
+                  <div key={i} style={{ marginTop: i === 0 ? 0 : 4 }}>{line}</div>
                 ))}
               </div>
             )}

@@ -1,6 +1,9 @@
 import { describe, it, expect } from "vitest";
 import {
   toNum,
+  getExerciseTags,
+  exerciseHasTag,
+  withoutTag,
   exerciseName,
   fmtDecimal,
   fmtRir,
@@ -2706,5 +2709,36 @@ describe("Werde ich staerker? - oben steht nur, was auffaellt", () => {
   it("faellt nichts auf, steht oben nichts", () => {
     const zeilen = [{ id: "a", trend: t(5), notice: strengthNotice(t(5), 12) }];
     expect(pickNotableStrength(zeilen).size).toBe(0);
+  });
+});
+
+describe("Tags je Übung", () => {
+  const tags = [
+    { id: "reha", name: "Reha", color: "#000" },
+    { id: "home", name: "Zuhause", color: "#fff" },
+  ];
+
+  it("liefert die Tags in der Reihenfolge der Tag-Liste", () => {
+    const assignments = { plank: ["home", "reha"] };
+    expect(getExerciseTags("plank", assignments, tags).map((t) => t.id)).toEqual(["reha", "home"]);
+    expect(getExerciseTags("bankdruecken", assignments, tags)).toEqual([]);
+  });
+
+  it("uebergeht Verweise auf geloeschte Tags", () => {
+    expect(getExerciseTags("plank", { plank: ["weg", "reha"] }, tags).map((t) => t.id)).toEqual(["reha"]);
+  });
+
+  it("erkennt, ob eine Uebung einen Tag traegt", () => {
+    const assignments = { plank: ["reha"] };
+    expect(exerciseHasTag("plank", assignments, "reha")).toBe(true);
+    expect(exerciseHasTag("plank", assignments, "home")).toBe(false);
+    expect(exerciseHasTag("plank", undefined, "reha")).toBe(false);
+  });
+
+  it("nimmt einen geloeschten Tag aus allen Uebungen", () => {
+    const assignments = { plank: ["reha", "home"], dehnen: ["reha"] };
+    expect(withoutTag(assignments, "reha")).toEqual({ plank: ["home"] });
+    // Das Original bleibt unangetastet.
+    expect(assignments.dehnen).toEqual(["reha"]);
   });
 });

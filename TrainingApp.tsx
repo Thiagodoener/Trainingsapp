@@ -505,6 +505,49 @@ function exerciseHasSubgroup(exercise, subgroupOverrides, subgroupId) {
   return getExerciseSubgroups(exercise, subgroupOverrides).includes(subgroupId);
 }
 
+// ---------------------------------------------------------------------------
+// Tags je Übung
+//
+// Frei angelegte Etiketten ("Reha", "Zuhause", ...) zum Wiederfinden und
+// Filtern. Eine Übung kann mehrere tragen. Die Tags selbst stehen in einer
+// eigenen Liste und die Übungen verweisen nur per ID darauf - so gilt eine
+// Umbenennung oder neue Farbe überall, und "Reha"/"reha" kann nicht doppelt
+// entstehen, weil man einen bestehenden Tag nur antippt statt neu tippt.
+// ---------------------------------------------------------------------------
+
+export const KEINE_TAGS = {
+  tags: [],
+  assignments: {},
+  onSetExerciseTags: () => {},
+  onCreateTag: async () => null,
+  onUpdateTag: () => {},
+  onDeleteTag: () => {},
+};
+
+// Die Tags einer Übung in der Reihenfolge der Tag-Liste. Verweise auf
+// gelöschte Tags fallen dabei heraus, statt als leere Pille aufzutauchen.
+export function getExerciseTags(exerciseId, assignments, tags) {
+  const ids = assignments?.[exerciseId];
+  if (!Array.isArray(ids) || ids.length === 0) return [];
+  return (Array.isArray(tags) ? tags : []).filter((t) => ids.includes(t.id));
+}
+
+export function exerciseHasTag(exerciseId, assignments, tagId) {
+  const ids = assignments?.[exerciseId];
+  return Array.isArray(ids) && ids.includes(tagId);
+}
+
+// Nimmt einen gelöschten Tag aus allen Übungen. Übungen ohne übrige Tags
+// verschwinden ganz aus der Zuordnung.
+export function withoutTag(assignments, tagId) {
+  const next = {};
+  Object.entries(assignments || {}).forEach(([exerciseId, ids]) => {
+    const rest = (Array.isArray(ids) ? ids : []).filter((id) => id !== tagId);
+    if (rest.length > 0) next[exerciseId] = rest;
+  });
+  return next;
+}
+
 export const EXERCISES = [
   // Brust
   { id: "bankdruecken", name: "Bankdrücken", group: "brust", equipment: "Langhantel", secondary: ["schultern", "arme"] },
@@ -3603,6 +3646,8 @@ const BACKUP_KEYS = [
   "exercise-time-based",
   "exercise-gym-independent",
   "exercise-stats-excluded",
+  "exercise-tags",
+  "exercise-tag-assignments",
   "breathing-exercises",
   "breathing-logs",
   "endurance-logs",
@@ -3913,6 +3958,11 @@ function TrainingAppInner() {
   // Übungen, die aus "Sätze pro Muskelgruppe" herausgehalten werden -
   // dasselbe wie "ohne Statistik" bei den Ordnern, nur je Übung.
   const [statsExcludedExercises, setStatsExcludedExercises] = useState({});
+  // Selbst angelegte Tags ({ id, name, color }) und welche Übung welche trägt
+  // ({ [exerciseId]: [tagId, ...] }). Nur zum Wiederfinden und Filtern -
+  // auf Statistik und Rechnungen haben Tags keinen Einfluss.
+  const [exerciseTags, setExerciseTags] = useState([]);
+  const [exerciseTagAssignments, setExerciseTagAssignments] = useState({});
   const [breathingExercises, setBreathingExercises] = useState([]);
   const [breathingLogs, setBreathingLogs] = useState([]);
   // Ausdauer-Einheiten (Laufen, Rad, ...) - eigene Datenart neben den
@@ -3991,7 +4041,7 @@ function TrainingAppInner() {
 
   useEffect(() => {
     (async () => {
-      const [p, l, c, f, en, no, tb, gi, statsEx, active, prog, activeProg, sg, ce, cc, eq, th, gy, activeGy, restEnd, brEx, brLogs, dw, di, dsh, bnd, snd, bw, sec, secSub, ausdauer, puls, abgleichSet, abgleichKey, externKraft] = await Promise.all([
+      const [p, l, c, f, en, no, tb, gi, statsEx, active, prog, activeProg, sg, ce, cc, eq, th, gy, activeGy, restEnd, brEx, brLogs, dw, di, dsh, bnd, snd, bw, sec, secSub, ausdauer, puls, abgleichSet, abgleichKey, externKraft, exTags, exTagAssign] = await Promise.all([
         loadJSON("training-plans", []),
         loadJSON("workout-logs", []),
         loadJSON("custom-exercises", []),
@@ -4027,6 +4077,8 @@ function TrainingAppInner() {
         loadJSON("ausdauer-abgleich", null),
         loadJSON("ausdauer-schluessel", ""),
         loadJSON("externe-kraft-aktivitaeten", []),
+        loadJSON("exercise-tags", []),
+        loadJSON("exercise-tag-assignments", {}),
       ]);
       // Migration: users who already had folders before "programs" existed
       // get one default program that all their existing folders are
@@ -4058,6 +4110,8 @@ function TrainingAppInner() {
       setTimeBasedExercises(tb);
       setGymIndependentExercises(gi);
       setStatsExcludedExercises(statsEx && typeof statsEx === "object" ? statsEx : {});
+      setExerciseTags(Array.isArray(exTags) ? exTags : []);
+      setExerciseTagAssignments(exTagAssign && typeof exTagAssign === "object" ? exTagAssign : {});
       setBreathingExercises(Array.isArray(brEx) ? brEx : []);
       setBreathingLogs(Array.isArray(brLogs) ? brLogs : []);
       setEnduranceLogs(Array.isArray(ausdauer) ? ausdauer : []);
@@ -4283,6 +4337,14 @@ function TrainingAppInner() {
   const persistStatsExcludedExercises = async (next) => {
     setStatsExcludedExercises(next);
     await saveJSON("exercise-stats-excluded", next);
+  };
+  const persistExerciseTags = async (next) => {
+    setExerciseTags(next);
+    await saveJSON("exercise-tags", next);
+  };
+  const persistExerciseTagAssignments = async (next) => {
+    setExerciseTagAssignments(next);
+    await saveJSON("exercise-tag-assignments", next);
   };
   const persistBreathingExercises = async (next) => {
     setBreathingExercises(next);
@@ -5000,6 +5062,45 @@ function TrainingAppInner() {
         calendarEntries.map((ce) => (ce.categoryId === id ? { ...ce, categoryId: null } : ce))
       );
     });
+  };
+  const handleSetExerciseTags = async (exerciseId, tagIds) => {
+    const next = { ...exerciseTagAssignments };
+    if (tagIds.length > 0) next[exerciseId] = tagIds;
+    else delete next[exerciseId];
+    await persistExerciseTagAssignments(next);
+  };
+  // Gibt den neuen Tag zurück, damit die Übung, bei der er angelegt wurde,
+  // ihn gleich tragen kann.
+  const createExerciseTag = async (name, color) => {
+    const tag = { id: uid(), name, color };
+    await persistExerciseTags([...exerciseTags, tag]);
+    return tag;
+  };
+  const updateExerciseTag = async (id, changes) => {
+    await persistExerciseTags(exerciseTags.map((t) => (t.id === id ? { ...t, ...changes } : t)));
+  };
+  const deleteExerciseTag = (id) => {
+    const tag = exerciseTags.find((t) => t.id === id);
+    const affected = Object.values(exerciseTagAssignments).filter(
+      (ids) => Array.isArray(ids) && ids.includes(id)
+    ).length;
+    const suffix = affected
+      ? ` ${affected} ${affected === 1 ? "Übung verliert" : "Übungen verlieren"} ihn dann – die Übungen selbst bleiben.`
+      : "";
+    askConfirm(`Tag „${tag?.name || ""}“ wirklich löschen?${suffix}`, async () => {
+      await persistExerciseTags(exerciseTags.filter((t) => t.id !== id));
+      await persistExerciseTagAssignments(withoutTag(exerciseTagAssignments, id));
+    });
+  };
+  // Ein Bündel statt sechs einzelner Props: Tags werden durch dieselben
+  // fünf Ansichten bis zur Übungs-Detailansicht durchgereicht.
+  const exerciseTagging = {
+    tags: exerciseTags,
+    assignments: exerciseTagAssignments,
+    onSetExerciseTags: handleSetExerciseTags,
+    onCreateTag: createExerciseTag,
+    onUpdateTag: updateExerciseTag,
+    onDeleteTag: deleteExerciseTag,
   };
   const toggleTheme = async () => {
     const next = theme === "dark" ? "light" : "dark";
@@ -5762,6 +5863,15 @@ function TrainingAppInner() {
         .ex-row .tag {
           white-space: nowrap;
           flex-shrink: 0;
+        }
+        .ex-tag-dots {
+          display: inline-flex;
+          gap: 3px;
+          flex-shrink: 0;
+        }
+        .ex-tag-dots .folder-dot {
+          width: 8px;
+          height: 8px;
         }
         /* A very long subgroup name is shortened rather than pushing the
            exercise name out of the row. */
@@ -7997,6 +8107,7 @@ function TrainingAppInner() {
               onToggleGymIndependent={handleToggleGymIndependent}
             statsExcludedExercises={statsExcludedExercises}
             onToggleStatsExcluded={handleToggleStatsExcluded}
+            exerciseTagging={exerciseTagging}
               onStartFromPlan={(plan) => requestStart(plan)}
               onUpdateSession={updateSession}
               onRequestConfirm={askConfirm}
@@ -8333,6 +8444,7 @@ function TrainingAppInner() {
             onToggleGymIndependent={handleToggleGymIndependent}
             statsExcludedExercises={statsExcludedExercises}
             onToggleStatsExcluded={handleToggleStatsExcluded}
+            exerciseTagging={exerciseTagging}
             onRequestConfirm={askConfirm}
             laufendeUebungsIds={session ? logEntries(session).map((e) => e.exerciseId) : []}
           />
@@ -8363,6 +8475,7 @@ function TrainingAppInner() {
               onToggleGymIndependent={handleToggleGymIndependent}
             statsExcludedExercises={statsExcludedExercises}
             onToggleStatsExcluded={handleToggleStatsExcluded}
+            exerciseTagging={exerciseTagging}
               onCancel={() => { setBuilding(false); setEditingPlan(null); }}
               onSave={async (plan) => {
                 const next = editingPlan
@@ -8484,6 +8597,7 @@ function TrainingAppInner() {
             onToggleGymIndependent={handleToggleGymIndependent}
             statsExcludedExercises={statsExcludedExercises}
             onToggleStatsExcluded={handleToggleStatsExcluded}
+            exerciseTagging={exerciseTagging}
             breathingExercises={breathingExercises}
             breathingLogs={breathingLogs}
             deloadWeeks={deloadWeeks}
@@ -11813,6 +11927,227 @@ function NewExerciseForm({ exercises, onAddCustom, onSetExerciseSubgroups, onDon
 }
 
 // ---------------------------------------------------------------------------
+// Tags: Filterzeile, Punkte in der Liste, Bearbeitung in der Detailansicht
+// ---------------------------------------------------------------------------
+
+// Wie die Geräte-Zeile: eine Auswahl auf einmal, nochmal antippen hebt sie
+// auf. Ohne angelegte Tags erscheint die Zeile gar nicht erst.
+function TagFilterRow({ tags, value, onChange, style }) {
+  if (!Array.isArray(tags) || tags.length === 0) return null;
+  return (
+    <div className="chip-row" style={style}>
+      <span
+        className={`chip chip-sm ${value === "alle" ? "active" : ""}`}
+        onClick={() => onChange("alle")}
+      >
+        Alle Tags
+      </span>
+      {tags.map((t) => {
+        const aktiv = value === t.id;
+        return (
+          <span
+            key={t.id}
+            className={`chip chip-sm folder-chip ${aktiv ? "active" : ""}`}
+            style={aktiv ? { background: t.color } : undefined}
+            onClick={() => onChange(aktiv ? "alle" : t.id)}
+          >
+            {!aktiv && <span className="folder-dot" style={{ background: t.color }} />}
+            {t.name}
+          </span>
+        );
+      })}
+    </div>
+  );
+}
+
+// In der Übungszeile nur Punkte statt Namen - die Zeile ist mit Name und
+// Gerät schon voll. Welcher Punkt was ist, steht in der Filterzeile darüber.
+function ExerciseTagDots({ tags }) {
+  if (!tags || tags.length === 0) return null;
+  return (
+    <span className="ex-tag-dots" title={tags.map((t) => t.name).join(", ")}>
+      {tags.map((t) => (
+        <span key={t.id} className="folder-dot" style={{ background: t.color }} />
+      ))}
+    </span>
+  );
+}
+
+// Tags einer Übung setzen, neue anlegen und bestehende pflegen - alles an
+// einer Stelle, damit man für einen neuen Tag nicht erst woanders hin muss.
+function ExerciseTagEditor({ exerciseId, tagging }) {
+  const { tags, assignments, onSetExerciseTags, onCreateTag, onUpdateTag, onDeleteTag } = tagging;
+  const [creating, setCreating] = useState(false);
+  const [managing, setManaging] = useState(false);
+  const [newName, setNewName] = useState("");
+  const [newColor, setNewColor] = useState(CATEGORY_COLORS[0]);
+  // Welcher Tag beim Verwalten gerade seine Farbauswahl offen hat.
+  const [colorFor, setColorFor] = useState(null);
+  const current = Array.isArray(assignments?.[exerciseId]) ? assignments[exerciseId] : [];
+
+  const toggle = (tagId) => {
+    onSetExerciseTags(
+      exerciseId,
+      current.includes(tagId) ? current.filter((id) => id !== tagId) : [...current, tagId]
+    );
+  };
+
+  const nameTaken = (name, exceptId) =>
+    tags.some((t) => t.id !== exceptId && t.name.trim().toLowerCase() === name.trim().toLowerCase());
+
+  const create = async () => {
+    const name = newName.trim();
+    if (!name) return;
+    // Ein Tag, den es unter diesem Namen schon gibt, wird einfach gesetzt
+    // statt ein zweites Mal angelegt.
+    const existing = tags.find((t) => t.name.trim().toLowerCase() === name.toLowerCase());
+    const tag = existing || (await onCreateTag(name, newColor));
+    if (tag && !current.includes(tag.id)) onSetExerciseTags(exerciseId, [...current, tag.id]);
+    setNewName("");
+    setCreating(false);
+  };
+
+  return (
+    <div className="card">
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+        <label className="field-label" style={{ margin: 0 }}>Tags</label>
+        {tags.length > 0 && (
+          <button
+            className="btn btn-ghost btn-sm"
+            onClick={() => { setManaging((m) => !m); setColorFor(null); }}
+          >
+            {managing ? "Fertig" : <><Pencil size={12} /> Verwalten</>}
+          </button>
+        )}
+      </div>
+
+      {managing ? (
+        <div style={{ marginTop: 10, display: "flex", flexDirection: "column", gap: 8 }}>
+          {tags.map((t) => (
+            <div key={t.id}>
+              <div className="cal-category-row">
+                <span
+                  className="color-swatch"
+                  style={{ background: t.color, width: 20, height: 20, flexShrink: 0 }}
+                  onClick={() => setColorFor((c) => (c === t.id ? null : t.id))}
+                  title="Farbe ändern"
+                />
+                <TagNameInput
+                  tag={t}
+                  isTaken={(name) => nameTaken(name, t.id)}
+                  onRename={(name) => onUpdateTag(t.id, { name })}
+                />
+                <button className="btn-icon" onClick={() => onDeleteTag(t.id)} title="Tag löschen">
+                  <Trash2 size={14} />
+                </button>
+              </div>
+              {colorFor === t.id && (
+                <div className="color-swatch-grid" style={{ marginTop: 8 }}>
+                  {CATEGORY_COLORS.map((c) => (
+                    <span
+                      key={c}
+                      className={`color-swatch ${t.color === c ? "active" : ""}`}
+                      style={{ background: c }}
+                      onClick={() => { onUpdateTag(t.id, { color: c }); setColorFor(null); }}
+                    />
+                  ))}
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+      ) : (
+        <div className="chip-row chip-row-wrap" style={{ marginTop: 8, marginBottom: 0 }}>
+          {tags.map((t) => {
+            const aktiv = current.includes(t.id);
+            return (
+              <span
+                key={t.id}
+                className={`chip chip-sm folder-chip ${aktiv ? "active" : ""}`}
+                style={aktiv ? { background: t.color } : undefined}
+                onClick={() => toggle(t.id)}
+              >
+                {!aktiv && <span className="folder-dot" style={{ background: t.color }} />}
+                {t.name}
+              </span>
+            );
+          })}
+          {!creating && (
+            <span className="chip chip-sm" onClick={() => setCreating(true)}>
+              <Plus size={11} /> Neuer Tag
+            </span>
+          )}
+        </div>
+      )}
+
+      {creating && !managing && (
+        <div style={{ marginTop: 10 }}>
+          <input
+            type="text"
+            placeholder="z. B. Reha"
+            value={newName}
+            autoFocus
+            onChange={(e) => setNewName(e.target.value)}
+            onKeyDown={(e) => { if (e.key === "Enter") create(); }}
+          />
+          <div className="color-swatch-grid" style={{ marginTop: 8 }}>
+            {CATEGORY_COLORS.map((c) => (
+              <span
+                key={c}
+                className={`color-swatch ${newColor === c ? "active" : ""}`}
+                style={{ background: c }}
+                onClick={() => setNewColor(c)}
+              />
+            ))}
+          </div>
+          <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
+            <button
+              className="btn btn-ghost btn-sm"
+              style={{ flex: 1 }}
+              onClick={() => { setCreating(false); setNewName(""); }}
+            >
+              Abbrechen
+            </button>
+            <button
+              className="btn btn-primary btn-sm"
+              style={{ flex: 2 }}
+              disabled={!newName.trim()}
+              onClick={create}
+            >
+              <Plus size={14} /> Tag anlegen
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// Umbenennen erst beim Verlassen des Feldes: sonst würde jeder Tastendruck
+// gespeichert, und ein kurz leerer Name wäre schon ein gespeicherter.
+function TagNameInput({ tag, isTaken, onRename }) {
+  const [draft, setDraft] = useState(tag.name);
+  const commit = () => {
+    const name = draft.trim();
+    if (!name || name === tag.name || isTaken(name)) {
+      setDraft(tag.name);
+      return;
+    }
+    onRename(name);
+  };
+  return (
+    <input
+      type="text"
+      style={{ flex: 1, minWidth: 0 }}
+      value={draft}
+      onChange={(e) => setDraft(e.target.value)}
+      onBlur={commit}
+      onKeyDown={(e) => { if (e.key === "Enter") e.currentTarget.blur(); }}
+    />
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Exercises view
 // ---------------------------------------------------------------------------
 
@@ -11837,6 +12172,7 @@ function ExercisesView({
   onToggleGymIndependent,
   statsExcludedExercises = {},
   onToggleStatsExcluded = () => {},
+  exerciseTagging = KEINE_TAGS,
   onRequestConfirm,
   gyms = [],
   laufendeUebungsIds = [],
@@ -11845,6 +12181,7 @@ function ExercisesView({
   const [group, setGroup] = useState("alle");
   const [subgroupFilter, setSubgroupFilter] = useState("alle");
   const [equipmentFilter, setEquipmentFilter] = useState("alle");
+  const [tagFilter, setTagFilter] = useState("alle");
   const [creating, setCreating] = useState(false);
   const [selectedExerciseId, setSelectedExerciseId] = useState(null);
 
@@ -11907,8 +12244,10 @@ function ExercisesView({
     const matchesEquipment =
       equipmentFilter === "alle" ||
       getExerciseEquipment(e, exerciseEquipmentOverrides) === equipmentFilter;
+    const matchesTag =
+      tagFilter === "alle" || exerciseHasTag(e.id, exerciseTagging.assignments, tagFilter);
     const matchesQuery = e.name.toLowerCase().includes(query.toLowerCase());
-    return matchesGroup && matchesSubgroup && matchesEquipment && matchesQuery;
+    return matchesGroup && matchesSubgroup && matchesEquipment && matchesTag && matchesQuery;
   })
     // Zuletzt Trainiertes zuerst: die Liste soll die eigene Praxis abbilden,
     // nicht die Reihenfolge des Katalogs. Sortiert wird auf der Kopie aus
@@ -11988,6 +12327,13 @@ function ExercisesView({
         ))}
       </div>
 
+      <TagFilterRow
+        tags={exerciseTagging.tags}
+        value={tagFilter}
+        onChange={setTagFilter}
+        style={{ marginTop: 4 }}
+      />
+
       {creating ? (
         <NewExerciseForm
           exercises={exercises}
@@ -12021,6 +12367,7 @@ function ExercisesView({
                     zugewiesenen Untergruppen wurde die Zeile zu voll und
                     quetschte den Namen zusammen. Die Übungs-Detailansicht
                     (ein Tap entfernt) zeigt und bearbeitet sie weiterhin. */}
+                <ExerciseTagDots tags={getExerciseTags(e.id, exerciseTagging.assignments, exerciseTagging.tags)} />
                 <span className="tag tag-equipment">{getExerciseEquipment(e, exerciseEquipmentOverrides)}</span>
                 {e.custom && (
                   <button
@@ -12063,6 +12410,7 @@ function ExercisesView({
           onToggleGymIndependent={onToggleGymIndependent}
           statsExcludedExercises={statsExcludedExercises}
           onToggleStatsExcluded={onToggleStatsExcluded}
+          exerciseTagging={exerciseTagging}
           onClose={() => setSelectedExerciseId(null)}
         />
       )}
@@ -12094,6 +12442,7 @@ function ExerciseDetailSheet({
   onToggleGymIndependent,
   statsExcludedExercises = {},
   onToggleStatsExcluded = () => {},
+  exerciseTagging = KEINE_TAGS,
   onClose,
   gyms = [],
   initialTab = "stats",
@@ -12506,6 +12855,7 @@ function ExerciseDetailSheet({
               </button>
             )}
           </div>
+          <ExerciseTagEditor exerciseId={exercise.id} tagging={exerciseTagging} />
           <div className="card">
             <label className="field-label">Notizen zu dieser Übung</label>
             <textarea
@@ -12701,6 +13051,7 @@ function PlanBuilder({
   onToggleGymIndependent,
   statsExcludedExercises = {},
   onToggleStatsExcluded = () => {},
+  exerciseTagging = KEINE_TAGS,
   onCancel,
   onSave,
   onCreateFolder,
@@ -12734,6 +13085,7 @@ function PlanBuilder({
   const [expandedItemId, setExpandedItemId] = useState(null);
   const [searchOpen, setSearchOpen] = useState(false);
   const [equipmentFilter, setEquipmentFilter] = useState("alle");
+  const [tagFilter, setTagFilter] = useState("alle");
   // Rest times are set here so a workout starts with the right pause
   // instead of having to be adjusted mid-session every time.
   const [planRest, setPlanRest] = useState(initialPlan?.restSeconds ?? 90);
@@ -12870,6 +13222,7 @@ function PlanBuilder({
           (subgroupFilter === "alle" || exerciseHasSubgroup(e, exerciseSubgroupOverrides, subgroupFilter)) &&
           (equipmentFilter === "alle" ||
             getExerciseEquipment(e, exerciseEquipmentOverrides) === equipmentFilter) &&
+          (tagFilter === "alle" || exerciseHasTag(e.id, exerciseTagging.assignments, tagFilter)) &&
           e.name.toLowerCase().includes(query.toLowerCase())
       );
       const BOTTOM = Number.MAX_SAFE_INTEGER;
@@ -12881,7 +13234,8 @@ function PlanBuilder({
       });
     },
     [exercises, group, subgroupFilter, exerciseSubgroupOverrides,
-     equipmentFilter, exerciseEquipmentOverrides, query, sortRank]
+     equipmentFilter, exerciseEquipmentOverrides, tagFilter, exerciseTagging.assignments,
+     query, sortRank]
   );
   // Rendering every one of the ~150 exercises made each tap on "Add"
   // redraw the whole list, which felt sluggish. Only a screenful is
@@ -13227,6 +13581,12 @@ function PlanBuilder({
           </span>
         ))}
       </div>
+      <TagFilterRow
+        tags={exerciseTagging.tags}
+        value={tagFilter}
+        onChange={setTagFilter}
+        style={{ marginBottom: 10 }}
+      />
       <div className="card exercise-picker-list">
         {filtered.length === 0 && (
           <div className="empty-state" style={{ padding: "14px 0" }}>Keine Übung gefunden.</div>
@@ -13241,6 +13601,7 @@ function PlanBuilder({
               >
                 {e.name}
               </span>
+              <ExerciseTagDots tags={getExerciseTags(e.id, exerciseTagging.assignments, exerciseTagging.tags)} />
               {addedCount > 0 && (
                 <span className="tag" title="So oft ist die Übung schon im Plan">
                   {addedCount}×
@@ -13772,6 +14133,7 @@ function PlanBuilder({
           onToggleGymIndependent={onToggleGymIndependent}
           statsExcludedExercises={statsExcludedExercises}
           onToggleStatsExcluded={onToggleStatsExcluded}
+          exerciseTagging={exerciseTagging}
           onClose={() => setSelectedExerciseId(null)}
         />
       )}
@@ -14420,6 +14782,7 @@ function LogView({
   onToggleGymIndependent,
   statsExcludedExercises = {},
   onToggleStatsExcluded = () => {},
+  exerciseTagging = KEINE_TAGS,
   onStartFromPlan,
   onUpdateSession,
   onFinish,
@@ -16397,6 +16760,7 @@ function LogView({
           onToggleGymIndependent={onToggleGymIndependent}
           statsExcludedExercises={statsExcludedExercises}
           onToggleStatsExcluded={onToggleStatsExcluded}
+          exerciseTagging={exerciseTagging}
           onClose={() => setSelectedExerciseId(null)}
         />
       )}
@@ -18176,6 +18540,7 @@ function ProgressView({
   onToggleGymIndependent,
   statsExcludedExercises = {},
   onToggleStatsExcluded = () => {},
+  exerciseTagging = KEINE_TAGS,
   gyms = [],
   onResumeLog,
   focusLogId,
@@ -18673,6 +19038,7 @@ function ProgressView({
           onToggleGymIndependent={onToggleGymIndependent}
           statsExcludedExercises={statsExcludedExercises}
           onToggleStatsExcluded={onToggleStatsExcluded}
+          exerciseTagging={exerciseTagging}
         />
       </div>
     );
@@ -19411,6 +19777,7 @@ function ProgressView({
           onToggleGymIndependent={onToggleGymIndependent}
           statsExcludedExercises={statsExcludedExercises}
           onToggleStatsExcluded={onToggleStatsExcluded}
+          exerciseTagging={exerciseTagging}
           initialTab={exerciseSheetTab}
           onClose={() => setSelectedExerciseId(null)}
         />
@@ -19970,6 +20337,7 @@ function HistoryView({
   onToggleGymIndependent,
   statsExcludedExercises = {},
   onToggleStatsExcluded = () => {},
+  exerciseTagging = KEINE_TAGS,
   gyms = [],
   onResumeLog,
   focusLogId,
@@ -20226,6 +20594,7 @@ function HistoryView({
           onToggleGymIndependent={onToggleGymIndependent}
           statsExcludedExercises={statsExcludedExercises}
           onToggleStatsExcluded={onToggleStatsExcluded}
+          exerciseTagging={exerciseTagging}
           onClose={() => setSelectedExerciseId(null)}
         />
       )}

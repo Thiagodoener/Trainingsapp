@@ -1844,12 +1844,14 @@ const STAT_EXPLANATIONS = {
       "Der Zeitraum wird in zwei gleich lange Hälften geteilt. Aus jeder Hälfte wird der BESTE Satz genommen und in ein geschätztes Einer-Maximum umgerechnet (mit deiner Reserve, siehe set1RM). Die Prozentzahl ist der Unterschied zwischen diesen beiden Sätzen.",
       "Das Beste einer Hälfte statt „erste gegen letzte Trainingswoche\": Ein einzelner schwacher Tag am Anfang oder Ende würde sonst die ganze Aussage bestimmen. Und das Beste statt eines Durchschnitts, weil Kraft das ist, was einmal ging – ein Schnitt würde eine bewusst leichte Woche als Kraftverlust lesen.",
       "Jede Zeile lässt sich antippen. Dann stehen die beiden Sätze da, aus denen die Zahl kommt: Gewicht, Wiederholungen, Reserve und Datum. Eine Prozentzahl, deren Herkunft man nicht sehen kann, muss man glauben – eine, hinter der zwei echte Sätze stehen, kann man nachrechnen.",
+      "Oben stehen nur Übungen, die gerade aus der Reihe fallen – höchstens fünf: die mehr als 3 % zurückgehen, die über mindestens 12 Wochen um höchstens 3 % schwanken (über vier Wochen ist Stillstand normal, über ein Vierteljahr nicht mehr), und die um 10 % oder mehr stärker geworden sind. Stetige Fortschritte dazwischen sind der Normalfall und stehen beim Aufklappen. Passen mehr als fünf, gehen Rückgänge vor.",
       "Körpergewichts- und Bandübungen tauchen nicht auf, genauso wenig wie Zeit-Übungen: Für sie gibt es kein Gewicht, aus dem sich ein Maximum schätzen ließe, und eine erfundene Zahl wäre schlechter als keine.",
     ],
     formula: [
       "Kraft eines Satzes = geschätztes 1RM aus Gewicht und Wiederholungen, plus der Reserve des letzten Arbeitssatzes.",
       "Veränderung = bester Satz der späteren Hälfte ÷ bester Satz der früheren Hälfte − 1. Bei ungerader Wochenzahl fällt die mittlere Woche heraus, damit beide Hälften gleich lang sind.",
-      "Ein Strich statt einer Zahl heißt: In einer der beiden Hälften gibt es keinen Satz mit Gewicht – zum Beispiel, weil du die Übung erst seit Kurzem machst.",
+      "Auffällig: Rückgang = mehr als 3 % weniger. Kein Zuwachs = höchstens 3 % Veränderung, nur ab 12 Wochen Zeitraum. Deutlich stärker = 10 % mehr oder darüber. Dieselben Schwellen wie in „Kraft und Volumen\".",
+      "Übungen, für die es in einer der beiden Hälften keinen Satz mit Gewicht gibt – zum Beispiel, weil du sie erst seit Kurzem machst –, stehen gar nicht in der Liste, auch nicht aufgeklappt.",
     ],
   },
   strengthVolume: {
@@ -3100,6 +3102,67 @@ export function halfPeriodChange(values, compareWeeks, gate = null) {
 // nur über einen längeren Zeitraum gelesen.
 const SV_FLAT = 3;   // bis hierhin gilt eine Kennzahl als unverändert
 const SV_CLEAR = 10; // ab hier gilt sie als deutlich verändert
+
+// Wann eine Übung in "Werde ich stärker?" oben steht, statt erst beim
+// Aufklappen.
+//
+// Die Karte zeigte zuerst jede trainierte Übung - bei 15 bis 25 Übungen eine
+// Liste, in der die zwei, um die es gerade geht, untergehen. Oben steht jetzt
+// nur, was aus der Reihe fällt, und zwar in drei Fällen:
+//
+//   geht zurück     - mehr als SV_FLAT weniger. Innerhalb von SV_FLAT ist ein
+//                     geschätztes Maximum Rauschen: ein Satz mit einer
+//                     Wiederholung weniger verschiebt es schon um 2-3 %.
+//   kein Zuwachs    - innerhalb von SV_FLAT, aber nur über mindestens
+//                     STRONG_PLATEAU_MIN_WEEKS Wochen. Über vier Wochen ist
+//                     Stillstand normal und keine Nachricht; über ein
+//                     Vierteljahr ist er eine.
+//   deutlich stärker - ab SV_CLEAR mehr. Auch das fällt aus der Reihe, und es
+//                     wäre seltsam, nur das Schlechte hervorzuheben.
+//
+// Alles dazwischen - ein paar Prozent mehr, stetig - ist der Normalfall und
+// steht erst beim Aufklappen. Dieselben Schwellen wie in "Kraft und Volumen",
+// damit dieselbe Veränderung nicht in einer Karte auffällt und in der anderen
+// nicht.
+//
+// Beschreibend, kein Rat (Regel 3): "geht zurück" sagt, was ist - nicht, was
+// zu tun wäre.
+const STRONG_PLATEAU_MIN_WEEKS = 12;
+// Höchstens so viele stehen oben. Sonst wird aus "was fällt auf?" nach einer
+// Pause wieder die ganze Liste; der Rest bleibt einen Fingertipp entfernt.
+const STRONG_NOTICE_MAX = 5;
+
+export function strengthNotice(trend, compareWeeks) {
+  if (!trend || !Number.isFinite(trend.change)) return null;
+  const r = Math.round(trend.change);
+  if (r < -SV_FLAT) return { type: "faellt", rank: 0, text: "geht zurück" };
+  if (Math.abs(r) <= SV_FLAT) {
+    if (!(compareWeeks >= STRONG_PLATEAU_MIN_WEEKS)) return null;
+    const ueber = Number.isFinite(compareWeeks) ? `über ${compareWeeks} Wochen` : "über den ganzen Zeitraum";
+    return { type: "steht", rank: 1, text: `kein Zuwachs ${ueber}` };
+  }
+  if (r >= SV_CLEAR) return { type: "steigt", rank: 2, text: "deutlich stärker" };
+  return null;
+}
+
+// Welche Übungen oben stehen: die auffälligen, höchstens STRONG_NOTICE_MAX.
+// Reicht der Platz nicht, gehen Rückgänge vor Stillstand vor deutlichem
+// Zuwachs, und innerhalb davon die größere Veränderung vor der kleineren.
+// Die Reihenfolge, in der sie dann DASTEHEN, ist trotzdem die der
+// Muskelgruppen - ausgewählt wird nach Dringlichkeit, angezeigt wie überall.
+export function pickNotableStrength(rows, max = STRONG_NOTICE_MAX) {
+  const staerke = (r) =>
+    r.notice.type === "faellt" ? r.trend.change
+      : r.notice.type === "steigt" ? -r.trend.change
+      : Math.abs(r.trend.change);
+  return new Set(
+    (Array.isArray(rows) ? rows : [])
+      .filter((r) => r && r.notice && r.trend)
+      .sort((a, b) => a.notice.rank - b.notice.rank || staerke(a) - staerke(b))
+      .slice(0, max)
+      .map((r) => r.id)
+  );
+}
 
 // Ein Satz zu dem, was da steht - und zwar nur für die Fälle, in denen die
 // beiden Zahlen zusammen etwas sagen, das keine von beiden allein sagt.
@@ -6686,6 +6749,18 @@ function TrainingAppInner() {
           margin-bottom: 9px;
         }
         .strong-row-clickable { cursor: pointer; }
+        .strong-name {
+          display: flex;
+          flex-direction: column;
+          min-width: 0;
+        }
+        /* Warum die Uebung oben steht - leise, nicht als Alarm: Die Richtung
+           zeigt schon die Prozentzahl daneben in Farbe. */
+        .strong-notice {
+          font-size: 11.5px;
+          color: var(--text-dim);
+          margin-top: 1px;
+        }
         .strong-kg {
           font-size: 12px;
           color: var(--text-dim);
@@ -18380,25 +18455,45 @@ function ProgressView({
     () => getStrengthWeeksByExercise(logs, muscleSeriesWeekCount(loadHistoryWeeks)),
     [logs, loadHistoryWeeks]
   );
-  const strongGroups = useMemo(() => {
-    const gruppen = {};
+  // Aufgeklappt = alle Übungen mit Daten, zugeklappt = nur die auffälligen
+  // (siehe strengthNotice). Bewusst nicht gemerkt, wie CollapsibleCard.
+  const [strongShowAll, setStrongShowAll] = useState(false);
+  const strong = useMemo(() => {
+    // Nur Übungen, für die es in BEIDEN Hälften einen Satz gibt. Eine Zeile
+    // mit einem Strich sagt "hier gibt es nichts zu sagen" - dann gehört sie
+    // auch nicht in die Liste, weder oben noch aufgeklappt.
+    const zeilen = [];
     Object.entries(strengthWeeks).forEach(([exId, wochen]) => {
       const ex = exBy[exId];
       if (!ex?.group) return;
-      // Im gewählten Zeitraum gar nicht trainiert: Die Übung gehört nicht in
-      // eine Karte, die "wohin läuft das gerade" beantwortet.
-      if (!compareWindowSeries(wochen, strongCompareWeeks).some(Boolean)) return;
-      (gruppen[ex.group] || (gruppen[ex.group] = [])).push({
+      const trend = strengthTrend(wochen, strongCompareWeeks);
+      if (!trend) return;
+      zeilen.push({
         id: exId,
         name: ex.name,
-        trend: strengthTrend(wochen, strongCompareWeeks),
+        group: ex.group,
+        trend,
+        notice: strengthNotice(trend, strongCompareWeeks),
       });
     });
-    return MUSCLE_GROUPS.filter((mg) => gruppen[mg.id]?.length).map((mg) => ({
-      id: mg.id,
-      label: mg.label,
-      exercises: gruppen[mg.id].sort((a, b) => a.name.localeCompare(b.name, "de")),
-    }));
+    const oben = pickNotableStrength(zeilen);
+    // Gruppiert in der Reihenfolge von MUSCLE_GROUPS - dieselbe wie in jeder
+    // anderen Karte -, darin alphabetisch.
+    const gruppiert = (liste) => {
+      const nachGruppe = {};
+      liste.forEach((z) => (nachGruppe[z.group] || (nachGruppe[z.group] = [])).push(z));
+      return MUSCLE_GROUPS.filter((mg) => nachGruppe[mg.id]?.length).map((mg) => ({
+        id: mg.id,
+        label: mg.label,
+        exercises: nachGruppe[mg.id].sort((a, b) => a.name.localeCompare(b.name, "de")),
+      }));
+    };
+    return {
+      total: zeilen.length,
+      notableCount: oben.size,
+      notable: gruppiert(zeilen.filter((z) => oben.has(z.id))),
+      all: gruppiert(zeilen),
+    };
   }, [strengthWeeks, exBy, strongCompareWeeks]);
   // Zeiträume wie in den anderen Karten, nur ohne "Vorwoche": Eine Hälfte aus
   // einer halben Woche gibt es nicht.
@@ -18698,44 +18793,62 @@ function ProgressView({
             </span>
           ))}
         </div>
-        {strongGroups.length === 0 ? (
+        {strong.total === 0 ? (
           <div className="empty-state" style={{ padding: "14px 0" }}>
-            In diesem Zeitraum gibt es keine Übung mit Gewicht. Bei
-            Körpergewichts-, Band- und Zeit-Übungen lässt sich kein Maximum
-            schätzen.
+            Für diesen Zeitraum gibt es noch keine Übung mit Gewicht in beiden
+            Hälften. Bei Körpergewichts-, Band- und Zeit-Übungen lässt sich
+            kein Maximum schätzen.
           </div>
         ) : (
           <div style={{ marginTop: 8 }}>
-            {strongGroups.map((g) => (
+            {!strongShowAll && strong.notableCount === 0 && (
+              <div className="empty-state" style={{ padding: "10px 0 4px" }}>
+                Gerade fällt keine Übung aus der Reihe.
+              </div>
+            )}
+            {(strongShowAll ? strong.all : strong.notable).map((g) => (
               <div key={g.id}>
                 <span className="strong-group-label">{g.label}</span>
                 {g.exercises.map((ex) => (
                   <div
                     key={ex.id}
-                    className={`strong-row ${ex.trend ? "strong-row-clickable" : ""}`}
-                    onClick={() => ex.trend && setStrongInfo({ id: ex.id, name: ex.name, ...ex.trend })}
-                    title={ex.trend ? "Antippen: aus welchen Sätzen kommt diese Zahl?" : undefined}
+                    className="strong-row strong-row-clickable"
+                    onClick={() => setStrongInfo({ id: ex.id, name: ex.name, ...ex.trend })}
+                    title="Antippen: aus welchen Sätzen kommt diese Zahl?"
                   >
-                    <span className="muscle-week-label">{ex.name}</span>
-                    <span className="strong-kg">
-                      {ex.trend
-                        ? `${Math.round(ex.trend.von.oneRM)} → ${Math.round(ex.trend.bis.oneRM)} kg`
-                        : ""}
+                    <span className="strong-name">
+                      <span className="muscle-week-label">{ex.name}</span>
+                      {ex.notice && <span className="strong-notice">{ex.notice.text}</span>}
                     </span>
-                    <LoadChangeBadge change={ex.trend ? ex.trend.change : null} />
+                    <span className="strong-kg">
+                      {`${Math.round(ex.trend.von.oneRM)} → ${Math.round(ex.trend.bis.oneRM)} kg`}
+                    </span>
+                    <LoadChangeBadge change={ex.trend.change} />
                     <span className="muscle-week-chevron">
-                      {ex.trend && <ChevronRight size={14} color="var(--text-dim)" />}
+                      <ChevronRight size={14} color="var(--text-dim)" />
                     </span>
                   </div>
                 ))}
               </div>
             ))}
+            {/* Nur anbieten, wenn Aufklappen auch etwas Neues zeigt. */}
+            {strong.total > strong.notableCount && (
+              <button
+                className="btn btn-ghost btn-block btn-sm"
+                style={{ marginTop: 10 }}
+                onClick={() => setStrongShowAll((v) => !v)}
+              >
+                {strongShowAll
+                  ? "Nur Auffälliges zeigen"
+                  : `Alle ${strong.total} Übungen zeigen`}
+              </button>
+            )}
             <p className="deload-basis">
-              Die Kilogramm sind das geschätzte Maximum aus dem besten Satz –
-              nicht das Gewicht, das auf der Stange lag. Verglichen wird die
-              spätere Hälfte des Zeitraums gegen die frühere; Antippen zeigt
-              beide Sätze. Ein Strich heißt: In einer der beiden Hälften gibt
-              es keinen Satz mit Gewicht.
+              Oben stehen nur Übungen, die gerade auffallen: die zurückgehen,
+              die über ein Vierteljahr keinen Zuwachs haben, oder die deutlich
+              stärker geworden sind. Die Kilogramm sind das geschätzte Maximum
+              aus dem besten Satz – nicht das Gewicht, das auf der Stange lag.
+              Antippen zeigt die beiden Sätze dahinter.
             </p>
           </div>
         )}

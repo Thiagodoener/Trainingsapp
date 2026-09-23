@@ -22,6 +22,8 @@ import {
   getMuscleLoadSeries,
   getStrengthWeeksByExercise,
   strengthTrend,
+  strengthNotice,
+  pickNotableStrength,
   canBeCalibration,
   canBeDropset,
   weekStartKey,
@@ -2669,5 +2671,56 @@ describe("Werde ich staerker? - je Uebung, mit dem Satz dahinter", () => {
     const alle = getStrengthWeeksByExercise(logs, 8, jetzt);
     expect(alle["klimmzug"]).toBeUndefined();
     expect(alle["plank"]).toBeUndefined();
+  });
+});
+
+describe("Werde ich staerker? - oben steht nur, was auffaellt", () => {
+  const t = (change: number) => ({ change, von: {}, bis: {} });
+
+  it("Rueckgang faellt auf - aber erst ueber das Rauschen hinaus", () => {
+    // Ein Satz mit einer Wiederholung weniger verschiebt das geschaetzte
+    // Maximum schon um 2-3 % - das ist keine Nachricht.
+    expect(strengthNotice(t(-3), 4)).toBeNull();
+    expect(strengthNotice(t(-4), 4)!.type).toBe("faellt");
+    expect(strengthNotice(t(-12), 26)!.text).toBe("geht zurück");
+  });
+
+  it("Stillstand faellt erst ueber einen langen Zeitraum auf", () => {
+    // Ueber vier Wochen ist 0 % normal, ueber ein Vierteljahr nicht mehr.
+    expect(strengthNotice(t(0), 4)).toBeNull();
+    expect(strengthNotice(t(2), 12)!.type).toBe("steht");
+    expect(strengthNotice(t(-2), 26)!.text).toBe("kein Zuwachs über 26 Wochen");
+    expect(strengthNotice(t(1), Infinity)!.text).toBe("kein Zuwachs über den ganzen Zeitraum");
+  });
+
+  it("deutlicher Zuwachs faellt auf, stetiger nicht", () => {
+    expect(strengthNotice(t(6), 12)).toBeNull();   // der Normalfall
+    expect(strengthNotice(t(10), 12)!.type).toBe("steigt");
+    expect(strengthNotice(t(25), 4)!.text).toBe("deutlich stärker");
+  });
+
+  it("ohne Vergleich keine Auffaelligkeit", () => {
+    expect(strengthNotice(null, 12)).toBeNull();
+  });
+
+  it("hoechstens fuenf oben, Rueckgaenge zuerst, dann die groessere Veraenderung", () => {
+    const zeile = (id: string, change: number, weeks = 12) => ({
+      id, trend: t(change), notice: strengthNotice(t(change), weeks),
+    });
+    const zeilen = [
+      zeile("a", 15), zeile("b", 12), zeile("c", 0), zeile("d", -5),
+      zeile("e", -20), zeile("f", 1), zeile("g", 5), zeile("h", 30),
+    ];
+    const oben = pickNotableStrength(zeilen);
+    expect(oben.size).toBe(5);
+    // Beide Rueckgaenge, beide Stillstaende, und vom Zuwachs nur der groesste.
+    expect([...oben].sort()).toEqual(["c", "d", "e", "f", "h"]);
+    // Der stetige Fortschritt (+5 %) ist nie dabei - er faellt nicht auf.
+    expect(oben.has("g")).toBe(false);
+  });
+
+  it("faellt nichts auf, steht oben nichts", () => {
+    const zeilen = [{ id: "a", trend: t(5), notice: strengthNotice(t(5), 12) }];
+    expect(pickNotableStrength(zeilen).size).toBe(0);
   });
 });

@@ -578,6 +578,28 @@ Daraus die Regel für alles Weitere: **Keine Prozentzahl, die man nicht bis zu d
 aufklappen kann.** Eine Zahl, die man nachrechnen kann, muss man nicht glauben. Bei „Bestes gesch.
 1RM" gab es das schon; ab hier ist es der Maßstab.
 
+**Oben steht nur, was auffällt.** Nachgereicht auf Max' Wunsch: Die erste Fassung zeigte jede
+trainierte Übung – bei 15 bis 25 Übungen eine Liste, in der die zwei, um die es gerade geht,
+untergehen. Jetzt stehen oben höchstens fünf, und nur in drei Fällen (`strengthNotice`):
+
+- **geht zurück** – mehr als 3 % weniger. Innerhalb von 3 % ist ein geschätztes Maximum Rauschen:
+  Eine Wiederholung weniger verschiebt es schon um 2–3 %.
+- **kein Zuwachs** – höchstens 3 % Veränderung, aber **nur ab 12 Wochen** Zeitraum. Über vier Wochen
+  ist Stillstand normal und keine Nachricht; über ein Vierteljahr ist er eine.
+- **deutlich stärker** – 10 % mehr oder darüber. Auch das fällt aus der Reihe, und nur das Schlechte
+  hervorzuheben wäre einseitig.
+
+Stetiger Fortschritt dazwischen ist der Normalfall und steht erst beim Aufklappen. Dieselben
+Schwellen (`SV_FLAT`, `SV_CLEAR`) wie in „Kraft und Volumen", damit dieselbe Veränderung nicht in
+einer Karte auffällt und in der anderen nicht. Passen mehr als fünf, gehen Rückgänge vor Stillstand
+vor Zuwachs – **ausgewählt** wird nach Dringlichkeit, **angezeigt** trotzdem in der festen
+Muskelgruppen-Reihenfolge wie überall. Fällt nichts auf, steht das so da („Gerade fällt keine Übung
+aus der Reihe") – das ist selbst eine Aussage.
+
+Übungen ohne Vergleich – in einer Hälfte kein Satz mit Gewicht, etwa weil sie neu sind – stehen
+**gar nicht** in der Liste, auch aufgeklappt nicht. Eine Zeile mit einem Strich sagt „hier gibt es
+nichts zu sagen"; dann gehört sie auch nicht hin.
+
 **Oben gestrichen: „Volumen diese Woche" und „Trainings (7 Tage)".**
 Beide standen an der auffälligsten Stelle des Reiters. Das Wochenvolumen in Kilogramm hängt vor
 allem davon ab, ob gerade Beintag war – als erste Zahl im Blickfeld bekam es mehr Aufmerksamkeit,

@@ -1216,6 +1216,34 @@ describe("Prozent-Achse im Belastungs-Diagramm", () => {
     expect(muscleLoadBasis([10, 10, 10, 10, 20], 4)).toBe(10);
     expect(muscleLoadChange([10, 10, 10, 10, 20], 4)).toBeCloseTo(100, 10);
   });
+
+  it("Wochen ohne Training sind eine Luecke, keine Null", () => {
+    // Eine Muskelgruppe, die jede zweite Woche drankommt. Die aktuelle Woche
+    // ist eine voellig normale Woche - trotzdem stand hier frueher "+83 %",
+    // weil die sechs leeren Wochen den Schnitt halbiert haben.
+    const jedeZweite = [10, 0, 10, 0, 10, 0, 10, 0, 10, 0, 10, 10];
+    expect(muscleLoadBasis(jedeZweite, 12)).toBe(10);
+    expect(muscleLoadChange(jedeZweite, 12)).toBeCloseTo(0, 10);
+    // So sah es vorher aus (Schnitt ueber alle elf Wochen, leere eingerechnet):
+    const alteRechnung = jedeZweite.slice(0, 11).reduce((a, b) => a + b, 0) / 11;
+    expect(Math.round((10 / alteRechnung - 1) * 100)).toBe(83);
+  });
+
+  it("nach einer Pause steht kein Sprung da", () => {
+    // Fuenf Wochen nichts, dann eine ganz normale Woche. "+100 %" waere
+    // falsch: Es war genauso viel wie in jeder Woche davor auch.
+    expect(muscleLoadChange([10, 10, 10, 10, 10, 10, 0, 0, 0, 0, 0, 10], 12)).toBeCloseTo(0, 10);
+  });
+
+  it("Zahl und Warnzeichen rechnen jetzt gegen denselben Schnitt", () => {
+    // detectLoadSignal laesst leere Wochen seit jeher heraus. Die Prozentzahl
+    // daneben tat es nicht - Zeichen und Zahl kamen aus verschiedenen Wochen.
+    const werte = [100, 102, 0, 106, 108];
+    expect(muscleLoadBasis(werte, 4)).toBeCloseTo((100 + 102 + 106) / 3, 10);
+    // Kein Ueberlastungs-Alarm, und die Zahl daneben bleibt einstellig.
+    expect(detectLoadSignal(werte, 52)).toBeNull();
+    expect(Math.round(muscleLoadChange(werte, 4)!)).toBe(5);
+  });
 });
 
 describe("Pokale: Rekorde im Nachhinein", () => {

@@ -1797,7 +1797,7 @@ const STAT_EXPLANATIONS = {
     ],
     formula: [
       "Sätze = Anzahl abgehakter Sätze ohne Aufwärm- und Dropsätze, gezählt über die letzten 7 Tage. Hauptgruppe × 1, jede Nebengruppe × 0,5.",
-      "Änderung = (diese Woche − Schnitt der gewählten Wochen davor) ÷ Schnitt × 100.",
+      "Änderung = (diese Woche − Schnitt der gewählten Wochen davor) ÷ Schnitt × 100. Wochen, in denen diese Gruppe gar nicht drankam, zählen dabei nicht mit: Sie sind eine Lücke, keine Null. Sonst würde bei einer Gruppe, die du jede zweite Woche trainierst, eine ganz normale Woche als „+83 %\" dastehen – verglichen wird mit einer Woche, in der du sie trainiert hast, nicht mit einer durchschnittlichen Kalenderwoche.",
     ],
   },
   muscleLoad: {
@@ -1817,7 +1817,7 @@ const STAT_EXPLANATIONS = {
       "Reserve-Gewichtung = nur auf den letzten abgehakten Arbeitssatz: je Stufe RIR unter deinem Üblichen 3 % mehr, je Stufe darüber 3 % weniger, höchstens 12 % in beide Richtungen. Ohne RIR-Angabe: keine Änderung.",
       "Wochenwert = Summe aller Satzwerte der Muskelgruppe in einem 7-Tage-Fenster. Dropsätze zählen hier voll mit.",
       "Plateau = Schnitt der letzten 2 Wochen ≤ Schnitt der 2 Wochen davor plus 2 %. Wochen ohne Training und markierte Entlastungen zählen als Lücke; von den vier Wochen darf höchstens eine fehlen, sonst wird nichts gemeldet.",
-      "Änderung = (diese Woche − Schnitt der gewählten Wochen davor) ÷ Schnitt × 100.",
+      "Änderung = (diese Woche − Schnitt der gewählten Wochen davor) ÷ Schnitt × 100. Wochen, in denen diese Gruppe gar nicht drankam, zählen dabei nicht mit: Sie sind eine Lücke, keine Null. Sonst würde bei einer Gruppe, die du jede zweite Woche trainierst, eine ganz normale Woche als „+83 %\" dastehen – verglichen wird mit einer Woche, in der du sie trainiert hast, nicht mit einer durchschnittlichen Kalenderwoche.",
     ],
   },
   enduranceLoad: {
@@ -1834,7 +1834,7 @@ const STAT_EXPLANATIONS = {
       "Herzfrequenz-Reserve = (Ø-Puls − Ruhepuls) ÷ (Maximalpuls − Ruhepuls), begrenzt auf 0 bis 1.",
       "Belastung einer Einheit = Dauer in Minuten × Reserve × a × e^(b × Reserve). a und b sind die Banister-Konstanten: 0,64 und 1,92 für Männer, 0,86 und 1,67 für Frauen.",
       "Wochenwert = Summe aller Einheiten in einem 7-Tage-Fenster, dieselbe Fenster-Logik wie bei den Muskelgruppen.",
-      "Änderung = (diese Woche − Schnitt der gewählten Wochen davor) ÷ Schnitt × 100.",
+      "Änderung = (diese Woche − Schnitt der gewählten Wochen davor) ÷ Schnitt × 100. Wochen, in denen diese Gruppe gar nicht drankam, zählen dabei nicht mit: Sie sind eine Lücke, keine Null. Sonst würde bei einer Gruppe, die du jede zweite Woche trainierst, eine ganz normale Woche als „+83 %\" dastehen – verglichen wird mit einer Woche, in der du sie trainiert hast, nicht mit einer durchschnittlichen Kalenderwoche.",
     ],
   },
   strengthVolume: {
@@ -2721,8 +2721,27 @@ export function muscleLoadBasis(values, compareWeeks, maxLookback = Infinity, de
   const usableWeeks = Math.min(compareWeeks, maxLookback);
   if (usableWeeks <= 0) return null;
   const reference = weeksBefore(values, values.length - 1, usableWeeks, deloadFlags);
-  if (reference.length === 0) return null;
-  const avg = reference.reduce((sum, v) => sum + (v || 0), 0) / reference.length;
+  // Wochen ohne Training sind eine Luecke, keine Null - dieselbe Regel, die
+  // KONZEPT.md fuer ausgefallene Einheiten aufstellt und die detectLoadSignal
+  // (direkt darunter) fuer sein Warnzeichen laengst anwendet. Die Prozentzahl
+  // NEBEN diesem Zeichen rechnete trotzdem weiter durch alle Wochen, auch
+  // durch die leeren - Zahl und Zeichen kamen also aus verschiedenen
+  // Vergleichswochen, genau das, was der Kommentar oben ausschliessen soll.
+  //
+  // Der Unterschied ist kein Detail: Wer eine Muskelgruppe jede zweite Woche
+  // trainiert, hat bei "12 Wochen" sechs leere Wochen im Vergleich. Der
+  // Schnitt faellt dadurch auf die Haelfte, und eine ganz normale Woche steht
+  // als "+83 %" da. Gemeint ist aber "so viel wie sonst", nicht "doppelt so
+  // viel wie ueblich".
+  //
+  // Gefragt wird damit: "wie viel war diese Woche, verglichen mit einer Woche,
+  // in der du diese Gruppe trainiert hast?" - und nicht "verglichen mit einer
+  // durchschnittlichen Kalenderwoche". Nur die erste Frage laesst sich
+  // beantworten, ohne den eigenen Trainingsrhythmus mit in die Zahl zu
+  // ziehen.
+  const trainiert = reference.filter((v) => v > 0);
+  if (trainiert.length === 0) return null;
+  const avg = trainiert.reduce((sum, v) => sum + v, 0) / trainiert.length;
   return avg > 0 ? avg : null;
 }
 

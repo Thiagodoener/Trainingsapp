@@ -558,6 +558,26 @@ Und für die Browser-Prüfung gilt ab jetzt: Ein Skript, das an einer Bedienung 
 Befund, kein Skriptproblem – bis nachgesehen wurde. Zur Prüfung gehört, mindestens eine Übung jedes
 Typs zu öffnen (mit Gewicht, Körpergewicht, Zeit).
 
+**Die Prozentzahlen neben den Muskelgruppen rechneten leere Wochen als Nullen mit.**
+Gemeldet als „die wirken falsch" – und sie waren es. `muscleLoadChange` vergleicht die aktuelle
+Woche gegen den Schnitt der gewählten Wochen davor; in diesem Schnitt zählten auch die Wochen mit,
+in denen die Gruppe gar nicht drankam. Wer Brust jede zweite Woche trainiert, hatte bei „12 Wochen"
+sechs leere Wochen im Vergleich: Der Schnitt fiel auf die Hälfte, und eine völlig normale Woche
+stand als **+100 %** da. Im Browser nachgestellt mit einem Rhythmus, der sich nie geändert hat –
+vorher Brust, Schultern und Arme je „+100 %", nachher überall „0 %".
+
+Bemerkenswert ist, dass `detectLoadSignal` direkt darunter genau diesen Fehler längst behoben
+hatte, mit einem ausführlichen Kommentar über den Falschalarm nach einer Urlaubswoche. Das
+**Warnzeichen** rechnete also ohne die leeren Wochen, die **Prozentzahl daneben** mit ihnen – und
+das, obwohl über `muscleLoadChange` selbst steht, dass Zahl und Zeichen aus denselben Wochen
+kommen müssen, „sonst widersprechen sich Zahl und Zeichen". Der Satz stand da, nur galt er bis
+dahin allein für markierte Entlastungswochen.
+
+Die Regel gilt jetzt überall gleich: **Lücken, keine Nullen.** Gefragt wird damit „wie viel war
+diese Woche, verglichen mit einer Woche, in der du diese Gruppe trainiert hast?" – nicht
+„verglichen mit einer durchschnittlichen Kalenderwoche". Nur die erste Frage lässt sich
+beantworten, ohne den eigenen Trainingsrhythmus mit in die Zahl zu ziehen.
+
 **Eine gelöschte Übung hat die App beim Öffnen abgestürzt.**
 Statt der App erschien „Da ist etwas schiefgelaufen – undefined is not an object (evaluating
 'A.name')". Ursache: Ein Trainings- oder Planeintrag merkt sich nur die Übungs-**ID**. Wird die

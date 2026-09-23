@@ -270,6 +270,16 @@ describe("Zeitraum-Ausschnitt der Kurven", () => {
     expect(zoomWeekSeries(reihe, Infinity)).toEqual(reihe);
   });
 
+  it("'Gesamt' beginnt bei der ersten Woche mit Daten, nicht bei einem beliebigen Zeitpunkt", () => {
+    // Die Reihe ist immer mindestens 52 Wochen lang aufgefuellt. Vor der
+    // ersten Trainingswoche liegt nichts - das gehoert nicht in die Grafik.
+    expect(zoomWeekSeries([0, 0, null, 0, 8, 0, 12, 10], Infinity)).toEqual([8, 0, 12, 10]);
+    expect(compareWindowSeries([0, 0, 3, 4], Infinity)).toEqual([3, 4]);
+    expect(zoomWeekSeries([0, 0, 0], Infinity)).toEqual([]);
+    // Feste Zeitraeume bleiben unveraendert, auch mit Nullen vorne.
+    expect(zoomWeekSeries([0, 0, 0, 5], 3)).toEqual([0, 0, 5]);
+  });
+
   it("Regression: die Grafik zeigt eine Woche mehr als der Vergleich", () => {
     // Der Prozentwert vergleicht die aktuelle Woche gegen die N davor. Die
     // Grafik dazu braucht N+1 Wochen, sonst bliebe bei "Vorwoche" ein

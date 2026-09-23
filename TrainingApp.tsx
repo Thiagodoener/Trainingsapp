@@ -1926,11 +1926,20 @@ function muscleSeriesWeekCount(historyWeeks) {
 }
 
 // Schneidet eine Wochenreihe (alt -> neu) auf die letzten `weeks` Wochen
-// zurecht - für den Zoom im Modal-Chart. Infinity ("Gesamt") liefert die
-// komplette Reihe unverändert.
+// zurecht - für den Zoom im Modal-Chart. Infinity ("Gesamt") beginnt bei der
+// ersten Woche, in der es für DIESE Reihe überhaupt Daten gibt.
+//
+// Vorher kam bei "Gesamt" die komplette Reihe zurück - und die ist immer
+// mindestens 52 Wochen lang (siehe muscleSeriesWeekCount), weil sie jeden
+// festen Zeitraum bedienen muss. Wer erst seit zwei Monaten trainiert, sah
+// ein Jahr lang eine Nulllinie und ganz rechts die echten Werte: Der Anfang
+// der Grafik war ein beliebiger Zeitpunkt, nicht der Beginn der Daten.
 export function zoomWeekSeries(values, weeks) {
   if (!Array.isArray(values)) return [];
-  if (!Number.isFinite(weeks)) return values;
+  if (!Number.isFinite(weeks)) {
+    const start = values.findIndex(Boolean);
+    return start < 0 ? [] : values.slice(start);
+  }
   return values.slice(Math.max(0, values.length - weeks));
 }
 
@@ -3057,8 +3066,13 @@ export function halfPeriodChange(values, compareWeeks, gate = null) {
   const voll = Array.isArray(values) ? values : [];
   const tor = Array.isArray(gate) && gate.length === voll.length ? gate : voll;
   const mindest = typicalWeekFloor(tor);
-  const reihe = compareWindowSeries(voll, compareWeeks);
-  const torReihe = compareWindowSeries(tor, compareWeeks);
+  // Bei "Gesamt" schneidet jede Reihe an ihrer eigenen ersten Datenwoche ab -
+  // beide auf dieselbe Länge bringen, damit Woche i in beiden dieselbe ist.
+  const rohReihe = compareWindowSeries(voll, compareWeeks);
+  const rohTor = compareWindowSeries(tor, compareWeeks);
+  const laenge = Math.max(rohReihe.length, rohTor.length);
+  const reihe = voll.slice(voll.length - laenge);
+  const torReihe = tor.slice(tor.length - laenge);
   const haelfte = Math.floor(reihe.length / 2);
   if (haelfte < 1) return null;
   const nimm = (von, bis) => {
@@ -4990,6 +5004,12 @@ function TrainingAppInner() {
     const meta = document.querySelector('meta[name="theme-color"]');
     const color = theme === "dark" ? "#000000" : "#ffffff";
     if (meta) meta.setAttribute("content", color);
+    // Siehe index.html: Weisse Statusleisten-Schrift (black-translucent) legt
+    // iOS auf heller App einen dunklen, verschwommenen Verlauf unter - der
+    // graue Schleier oben. iOS liest das nur beim Start; index.html setzt es
+    // deshalb schon vorher aus dem gespeicherten Farbschema.
+    const bar = document.querySelector('meta[name="apple-mobile-web-app-status-bar-style"]');
+    if (bar) bar.setAttribute("content", theme === "dark" ? "black-translucent" : "default");
     // Auch der Seitengrund hinter der App muss mitziehen: iOS legt oben
     // unter der Statusleiste einen Unschaerfe-Verlauf an, der sich an der
     // Hintergrundfarbe von html/body orientiert. Stand dort noch das

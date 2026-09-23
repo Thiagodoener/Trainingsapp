@@ -4988,7 +4988,17 @@ function TrainingAppInner() {
   // Nachfuehren bliebe oben ein dunkler Streifen ueber der hellen App stehen.
   useEffect(() => {
     const meta = document.querySelector('meta[name="theme-color"]');
-    if (meta) meta.setAttribute("content", theme === "dark" ? "#000000" : "#ffffff");
+    const color = theme === "dark" ? "#000000" : "#ffffff";
+    if (meta) meta.setAttribute("content", color);
+    // Auch der Seitengrund hinter der App muss mitziehen: iOS legt oben
+    // unter der Statusleiste einen Unschaerfe-Verlauf an, der sich an der
+    // Hintergrundfarbe von html/body orientiert. Stand dort noch das
+    // dunkle Grau aus app.css, lag ueber der hellen App ein grauer,
+    // verschwommener Schleier.
+    for (const el of [document.documentElement, document.body]) {
+      el.style.backgroundColor = color;
+      el.style.colorScheme = theme === "dark" ? "dark" : "light";
+    }
   }, [theme]);
   // Turns a finished workout back into an editable session. The log is
   // removed from the history for the duration - finishing writes it back,

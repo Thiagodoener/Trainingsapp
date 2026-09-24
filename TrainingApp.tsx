@@ -3630,6 +3630,219 @@ export function bandFelder(band) {
   return { bandId: band.id, bandName: bandLabel(band), bandColor: band.color || null, weight: band.kg };
 }
 
+// ---------------------------------------------------------------------------
+// Satzplan: jeder Satz eines Plan-Eintrags einzeln
+//
+// Ein Plan-Eintrag trägt seine Sätze als Liste (setPlan), so wie im Training.
+// Werte, die in Satz 1 (dem ersten Arbeitssatz) eingetragen werden, gehen an
+// die folgenden Arbeitssätze weiter - außer an Sätze, bei denen genau dieses
+// Feld schon einzeln geändert wurde (eigen). Die alten Felder sets, reps,
+// weight usw. bleiben beim Speichern als Zusammenfassung erhalten.
+// ---------------------------------------------------------------------------
+
+const SATZ_FELDER = {
+  reps: ["reps"],
+  weight: ["weight"],
+  duration: ["duration"],
+  band: ["bandId", "bandName", "bandColor", "weight"],
+};
+
+// Pläne aus der Zeit vor dem Satzplan haben nur "3 Sätze à 10" - daraus wird
+// dieselbe Liste, die der Trainingsstart früher gebaut hat.
+export function satzPlanVon(item) {
+  if (Array.isArray(item?.setPlan) && item.setPlan.length > 0) return item.setPlan;
+  const warm = Math.max(0, Math.round(toNum(item?.warmupSets)));
+  const n = Math.max(1, Math.round(toNum(item?.sets)) || 1);
+  const reps = toNum(item?.reps) > 0 ? toNum(item.reps) : 10;
+  const weight = toNum(item?.weight) > 0 ? toNum(item.weight) : 0;
+  const duration = toNum(item?.duration) > 0 ? toNum(item.duration) : 30;
+  return [
+    ...Array.from({ length: warm }, () => ({ kind: "warmup", reps, weight: 0, duration })),
+    ...Array.from({ length: n }, () => ({ kind: "normal", reps, weight, duration })),
+  ];
+}
+
+// Aus echten Sätzen (letztes Training, vergangenes Training) einen Satzplan.
+export function satzPlanAusSaetzen(sets) {
+  return (Array.isArray(sets) ? sets : []).map((s) => {
+    const kind = setKind(s);
+    return {
+      kind: kind === "calibration" ? "normal" : kind,
+      reps: toNum(s.reps) > 0 ? toNum(s.reps) : 10,
+      weight: toNum(s.weight) > 0 ? toNum(s.weight) : 0,
+      duration: toNum(s.duration) > 0 ? toNum(s.duration) : 30,
+      ...(s.bandId ? { bandId: s.bandId, bandName: s.bandName || null, bandColor: s.bandColor || null } : {}),
+    };
+  });
+}
+
+// Ein Feld eines Satzes ändern. Satz 1 gibt den Wert an die folgenden
+// Arbeitssätze weiter, jeder andere Satz merkt sich, dass er abweicht.
+export function satzPlanAendern(plan, index, feld, werte) {
+  const erster = plan.findIndex((s) => s.kind !== "warmup");
+  const schluessel = SATZ_FELDER[feld] || [feld];
+  const nur = Object.fromEntries(schluessel.map((k) => [k, werte[k] ?? null]));
+  return plan.map((s, i) => {
+    if (i === index) {
+      return i === erster || s.kind === "warmup"
+        ? { ...s, ...nur }
+        : { ...s, ...nur, eigen: { ...(s.eigen || {}), [feld]: true } };
+    }
+    if (index === erster && i > index && s.kind !== "warmup" && !s.eigen?.[feld]) {
+      return { ...s, ...nur };
+    }
+    return s;
+  });
+}
+
+// Ein neuer Satz ist eine Kopie des letzten - samt der Angabe, welche Felder
+// einzeln geändert wurden, sonst würde er beim nächsten Tipp in Satz 1
+// plötzlich andere Werte bekommen als sein Vorgänger.
+export function satzPlanPlusSatz(plan) {
+  const letzter = plan[plan.length - 1];
+  if (!letzter) return [{ kind: "normal", reps: 10, weight: 0, duration: 30 }];
+  return [...plan, { ...letzter, kind: "normal" }];
+}
+
+// Für den Rundenmodus: genau n Arbeitssätze, Aufwärmsätze bleiben.
+export function satzPlanMitArbeitssaetzen(plan, n) {
+  const ziel = Math.max(1, Math.round(n) || 1);
+  let arbeit = plan.filter((s) => s.kind !== "warmup").length;
+  let neu = [...plan];
+  while (arbeit < ziel) { neu = satzPlanPlusSatz(neu); arbeit++; }
+  while (arbeit > ziel) {
+    const idx = neu.map((s) => s.kind !== "warmup").lastIndexOf(true);
+    neu = neu.filter((_, i) => i !== idx);
+    arbeit--;
+  }
+  return neu;
+}
+
+export function satzPlanZaehlt(plan) {
+  const warm = plan.filter((s) => s.kind === "warmup").length;
+  return { warm, arbeit: plan.length - warm };
+}
+
+// "3×10 · 20 kg", "10/8/6 · 60–80 kg" oder mit Zeit "3×45 Sek.".
+export function satzPlanText(plan, { useTime = false, mitGewicht = true } = {}) {
+  const arbeit = plan.filter((s) => s.kind !== "warmup");
+  const warm = plan.length - arbeit.length;
+  const werte = arbeit.map((s) => Math.round(toNum(useTime ? s.duration : s.reps)));
+  const gleich = werte.every((w) => w === werte[0]);
+  const menge = arbeit.length === 0
+    ? "0 Sätze"
+    : gleich ? `${arbeit.length}×${werte[0]}${useTime ? " Sek." : ""}` : `${werte.join("/")}${useTime ? " Sek." : ""}`;
+  let text = `${warm > 0 ? `${warm}W + ` : ""}${menge}`;
+  if (mitGewicht && !useTime) {
+    const kg = arbeit.map((s) => toNum(s.weight)).filter((w) => w > 0);
+    if (kg.length > 0) {
+      const min = Math.min(...kg);
+      const max = Math.max(...kg);
+      text += min === max ? ` · ${fmtDecimal(min)} kg` : ` · ${fmtDecimal(min)}–${fmtDecimal(max)} kg`;
+    }
+  }
+  return text;
+}
+
+// Der Satzplan so, wie er gespeichert wird: Zahlen statt halb getippter Texte.
+export function satzPlanBereinigt(plan) {
+  return plan.map((s) => ({
+    ...s,
+    reps: Math.max(1, toNum(s.reps) || 1),
+    weight: Math.max(0, toNum(s.weight) || 0),
+    duration: Math.max(1, toNum(s.duration) || 1),
+  }));
+}
+
+// Die Sätze, mit denen ein Training startet. Die Satzzahl kommt immer aus dem
+// Plan. Die Werte kommen vom letzten Training - es sei denn, die Werte genau
+// dieser Übung wurden im Plan geändert, nachdem sie zuletzt trainiert wurde:
+// Dann gilt der Plan (z. B. "ab jetzt das grüne Band").
+export function startSaetze(item, lastSets, letztesTraining) {
+  const plan = satzPlanVon(item);
+  const useTime = !!item?.useTime;
+  const geaendert = item?.werteGeaendertAm ? new Date(item.werteGeaendertAm).getTime() : 0;
+  const zuletzt = letztesTraining ? new Date(letztesTraining).getTime() : 0;
+  const planGilt = !zuletzt || geaendert > zuletzt;
+  const alt = planGilt ? [] : (Array.isArray(lastSets) ? lastSets : []);
+  const altWarm = alt.filter((s) => s.warmup);
+  const altArbeit = alt.filter((s) => !s.warmup);
+  let w = 0;
+  let a = 0;
+  return plan.map((p) => {
+    const warm = p.kind === "warmup";
+    const quelle = warm ? altWarm : altArbeit;
+    const idx = warm ? w++ : a++;
+    const ref = quelle.length ? quelle[Math.min(idx, quelle.length - 1)] : null;
+    const reps = ref && toNum(ref.reps) > 0 ? toNum(ref.reps) : toNum(p.reps) || 10;
+    const weight = ref && toNum(ref.weight) > 0 ? toNum(ref.weight) : toNum(p.weight) || 0;
+    const duration = ref && toNum(ref.duration) > 0 ? toNum(ref.duration) : toNum(p.duration) || 30;
+    const band = ref?.bandId ? ref : p.bandId ? p : null;
+    return {
+      reps,
+      // Gleich deutsch vorbelegt, damit nicht erst "62.5" dasteht.
+      weight: fmtDecimal(weight),
+      // Eine Dauer bekommt nur, was auch in Sekunden gemessen wird - sonst
+      // tauchten 30 Sekunden bei reinen Wiederholungs-Übungen auf.
+      duration: useTime ? duration : 0,
+      done: false,
+      ...setKindFlags(p.kind),
+      ...(band ? { bandId: band.bandId, bandName: band.bandName || null, bandColor: band.bandColor || null } : {}),
+    };
+  });
+}
+
+// Nach dem Training: der Plan übernimmt, was tatsächlich geschafft wurde,
+// Satz für Satz. Das ist keine Änderung durch dich - werteGeaendertAm bleibt.
+export function satzPlanNachTraining(item, sets) {
+  const plan = satzPlanVon(item);
+  const done = (Array.isArray(sets) ? sets : []).filter((s) => s.done);
+  const warm = done.filter((s) => s.warmup);
+  const arbeit = done.filter((s) => !s.warmup);
+  let w = 0;
+  let a = 0;
+  let geaendert = false;
+  const neu = plan.map((p) => {
+    const quelle = p.kind === "warmup" ? warm : arbeit;
+    const s = quelle[p.kind === "warmup" ? w++ : a++];
+    if (!s) return p;
+    const next = { ...p };
+    if (toNum(s.reps) > 0) next.reps = Math.round(toNum(s.reps));
+    if (toNum(s.weight) > 0) next.weight = toNum(s.weight);
+    if (toNum(s.duration) > 0) next.duration = Math.round(toNum(s.duration));
+    if (s.bandId) Object.assign(next, { bandId: s.bandId, bandName: s.bandName || null, bandColor: s.bandColor || null });
+    if (["reps", "weight", "duration", "bandId"].some((k) => next[k] !== p[k])) geaendert = true;
+    return next;
+  });
+  if (!geaendert) return item;
+  return { ...item, ...planZusammenfassung(neu), setPlan: neu };
+}
+
+// Wann eine Übung zuletzt wirklich trainiert wurde (mindestens ein
+// abgehakter Satz), über alle Studios hinweg.
+export function letztesTrainingDerUebung(logs, exerciseId) {
+  let best = null;
+  (Array.isArray(logs) ? logs : []).forEach((l) => {
+    const ts = new Date(l?.date).getTime();
+    if (!Number.isFinite(ts) || (best != null && ts <= best)) return;
+    if (logEntries(l).some((e) => e.exerciseId === exerciseId && performedSets(entrySets(e)).length > 0)) best = ts;
+  });
+  return best == null ? null : new Date(best).toISOString();
+}
+
+// Die alten Einzelfelder, die andere Stellen noch lesen.
+export function planZusammenfassung(plan) {
+  const { warm, arbeit } = satzPlanZaehlt(plan);
+  const erster = plan.find((s) => s.kind !== "warmup") || plan[0] || {};
+  return {
+    sets: Math.max(1, arbeit),
+    warmupSets: warm,
+    reps: Math.max(1, toNum(erster.reps) || 1),
+    weight: Math.max(0, toNum(erster.weight) || 0),
+    duration: Math.max(1, toNum(erster.duration) || 1),
+  };
+}
+
 const LEERER_BAND_ENTWURF = { name: "", kg: "", art: "lang", color: null };
 
 // Name, kg, Art und Farbe eines Bandes - beim Anlegen und beim Bearbeiten
@@ -4509,73 +4722,23 @@ function TrainingAppInner() {
     // gesamte App in einen weissen Bildschirm, aus dem es keinen Weg zurueck
     // gibt - der Plan liegt ja weiter im Speicher.
     entries: (Array.isArray(plan?.items) ? plan.items : []).map((it) => {
-      const targetSets = it.sets || 1;
       // Start from what was actually achieved last time rather than the
-      // numbers stored in the plan - the plan holds the starting point, the
-      // last workout holds the current state. With a gym selected the search
-      // prefers that gym (weights differ between gyms) - unless the exercise
-      // is marked as being the same everywhere.
+      // numbers stored in the plan - unless the plan's values for this very
+      // exercise were changed after it was last trained (see startSaetze).
+      // With a gym selected the search prefers that gym (weights differ
+      // between gyms) - unless the exercise is marked as being the same
+      // everywhere.
       const history = getExerciseHistory(
         logs, it.exerciseId, null, !!it.useTime,
         effectiveGymId(it.exerciseId, gymId, gymIndependentExercises)
       );
-      const lastWorking = history?.lastSets?.find((set) => !set.warmup);
-      const targetReps =
-        lastWorking && toNum(lastWorking.reps) > 0 ? toNum(lastWorking.reps) : it.reps || 10;
-      const targetWeight =
-        lastWorking && toNum(lastWorking.weight) > 0
-          ? toNum(lastWorking.weight)
-          : it.weight || 0;
+      const sets = startSaetze(it, history?.lastSets, letztesTrainingDerUebung(logs, it.exerciseId));
+      const firstWorking = sets.find((s) => !s.warmup) || sets[0] || {};
+      const targetSets = Math.max(1, sets.filter((s) => !s.warmup).length);
+      const targetReps = toNum(firstWorking.reps) || it.reps || 10;
+      const targetWeight = toNum(firstWorking.weight) || 0;
       const targetUseTime = !!it.useTime;
-      const targetDuration =
-        lastWorking && toNum(lastWorking.duration) > 0
-          ? toNum(lastWorking.duration)
-          : it.duration || 0;
-      // Pre-create the number of sets the plan asks for, already filled
-      // in with the target reps/weight/duration, so a workout starts
-      // ready-to-go instead of empty every time.
-      // Planned warm-up sets come first and start already flagged, so the
-      // "W" no longer has to be tapped on every single workout.
-      const warmupCount = Math.max(0, Math.round(toNum(it.warmupSets)));
-      // Each set gets the values of the SAME set from last time - set 1 from
-      // set 1, set 2 from set 2. A pyramid (60/70/80) would otherwise start
-      // every set at the first weight. Beyond the sets done last time the
-      // last known values carry on.
-      const lastWorkingSets = (history?.lastSets || []).filter((set) => !set.warmup);
-      const makeSet = (warmup, index) => {
-        const ref = lastWorkingSets.length
-          ? lastWorkingSets[Math.min(index, lastWorkingSets.length - 1)]
-          : null;
-        const reps = ref && toNum(ref.reps) > 0 ? toNum(ref.reps) : targetReps;
-        const weight = ref && toNum(ref.weight) > 0 ? toNum(ref.weight) : targetWeight;
-        const duration = ref && toNum(ref.duration) > 0 ? toNum(ref.duration) : targetDuration;
-        return {
-          reps,
-          // Pre-filled the German way too, so a workout doesn't start showing
-          // "62.5" and only switch to "62,5" once the field has been touched.
-          weight: warmup ? 0 : fmtDecimal(weight),
-          // Eine Dauer bekommt nur, was auch in Sekunden gemessen wird.
-          //
-          // Vorher trug JEDER Satz eine Dauer mit sich - die Plan-Vorgabe
-          // steht auf 30 Sekunden, auch bei reinen Wiederholungs-Uebungen.
-          // Diese 30 landeten im Training, wurden mitgespeichert und tauchten
-          // ueberall als "30s" statt "60kg x 8" auf. Schlimmer noch: Beim
-          // naechsten Mal wurde die gespeicherte Dauer wieder vorgetragen
-          // (siehe ref oben), womit sich der Fehler selbst am Leben hielt.
-          duration: targetUseTime ? duration : 0,
-          done: false,
-          warmup,
-          // Das Band vom letzten Mal gleich mit - vorher kam nur sein
-          // kg-Wert an, und das Feld zeigte trotzdem leer "Band".
-          ...(!warmup && ref?.bandId
-            ? { bandId: ref.bandId, bandName: ref.bandName || null, bandColor: ref.bandColor || null }
-            : {}),
-        };
-      };
-      const sets = [
-        ...Array.from({ length: warmupCount }, () => makeSet(true, 0)),
-        ...Array.from({ length: targetSets }, (_, i) => makeSet(false, i)),
-      ];
+      const targetDuration = toNum(firstWorking.duration) || it.duration || 0;
       return {
         id: uid(),
         // Woher dieser Platz stammt. Ohne das liesse sich beim Beenden nicht
@@ -6746,6 +6909,95 @@ function TrainingAppInner() {
           border-color: transparent;
           box-shadow: 0 0 0 2px var(--surface), 0 0 0 4px var(--text);
         }
+        /* Satzzeilen im Workout-Editor: wie im Training, nur ohne Haken. */
+        .set-row.plan-set-row {
+          grid-template-columns: 38px minmax(0, 1fr) minmax(0, 1fr) 4px;
+        }
+        .set-row.plan-set-row.set-row-noweight,
+        .set-row.plan-set-row.is-auto {
+          grid-template-columns: 38px minmax(0, 1fr) 4px;
+        }
+        .set-row.plan-set-row.is-auto.set-row-noweight {
+          grid-template-columns: 38px 4px;
+        }
+
+        /* Übungsfilter: eine Zeile Knöpfe, Auswahl klappt darunter auf. */
+        .filter-row {
+          display: flex;
+          flex-wrap: wrap;
+          gap: 6px;
+          align-items: center;
+        }
+        .filter-pill {
+          font-family: inherit;
+          border: none;
+          white-space: nowrap;
+        }
+        .filter-pill.is-open:not(.active) {
+          background: var(--border);
+        }
+        .filter-pill-x {
+          display: inline-flex;
+          margin: -6px -6px -6px 0;
+          padding: 6px;
+        }
+        .filter-new {
+          color: var(--accent);
+          font-weight: 600;
+        }
+        .filter-panel {
+          display: grid;
+          gap: 6px;
+          margin-top: 8px;
+          padding: 6px;
+          border: 1px solid var(--border);
+          border-radius: 12px;
+          background: var(--elevated);
+        }
+        .filter-panel-2col {
+          grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+        }
+        .filter-col {
+          display: flex;
+          flex-direction: column;
+          gap: 2px;
+          min-width: 0;
+        }
+        .filter-col-sub {
+          border-left: 1px solid var(--border);
+          padding-left: 6px;
+        }
+        .filter-opt {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          gap: 6px;
+          width: 100%;
+          text-align: left;
+          padding: 9px 10px;
+          border: none;
+          border-radius: 8px;
+          background: transparent;
+          color: var(--text);
+          font-family: 'Inter', sans-serif;
+          font-size: 14px;
+          cursor: pointer;
+        }
+        .filter-opt.active {
+          background: var(--fill);
+          color: var(--accent);
+          font-weight: 600;
+        }
+        .filter-opt-label {
+          min-width: 0;
+          overflow-wrap: break-word;
+        }
+        .filter-hint {
+          font-size: 12px;
+          color: var(--text-dim);
+          padding: 9px 6px;
+        }
+
         .band-group-label {
           font-size: 11px;
           letter-spacing: 0.6px;
@@ -8422,22 +8674,13 @@ function TrainingAppInner() {
                         cleaned.entries.find((e) => item.id && e.planItemId === item.id) ||
                         cleaned.entries.find((e) => !e.planItemId && e.exerciseId === item.exerciseId);
                       if (!entry) return item;
-                      const workingSets = entry.sets.filter((s) => s.done && !s.warmup);
-                      const lastSet = workingSets[workingSets.length - 1];
-                      if (!lastSet) return item;
-                      const achievedReps = Math.round(toNum(lastSet.reps));
-                      const achievedWeight = toNum(lastSet.weight);
-                      const achievedDuration = Math.round(toNum(lastSet.duration));
-                      const isTime = !!item.useTime;
-                      const changed = isTime
-                        ? achievedDuration > 0 && achievedDuration !== item.duration
-                        : (achievedReps > 0 && achievedReps !== item.reps) ||
-                          (achievedWeight > 0 && achievedWeight !== item.weight);
-                      if (!changed) return item;
+                      // Satz für Satz, damit eine Pyramide eine Pyramide
+                      // bleibt. werteGeaendertAm wird dabei nicht angefasst:
+                      // Das hier hast nicht du im Plan geändert.
+                      const next = satzPlanNachTraining(item, entrySets(entry));
+                      if (next === item) return item;
                       planChanged = true;
-                      return isTime
-                        ? { ...item, duration: achievedDuration }
-                        : { ...item, reps: achievedReps, weight: achievedWeight };
+                      return next;
                     });
                     if (planChanged) {
                       await persistPlans(
@@ -8598,6 +8841,7 @@ function TrainingAppInner() {
           building ? (
             <PlanBuilder
               gyms={gyms}
+              bands={bands}
               activeGymId={activeGymId}
               initialPlan={editingPlan}
               exercises={allExercises}
@@ -11759,7 +12003,8 @@ function SwipeableSetRow({ className, onSwipeRight, onSwipeLeft, children }) {
       }
       if (!active) return;
       if (e && e.cancelable) e.preventDefault();
-      dx = ddx;
+      // Eine Richtung ohne Aktion bewegt die Zeile gar nicht erst.
+      dx = (ddx > 0 && !callbacks.current.onSwipeRight) || (ddx < 0 && !callbacks.current.onSwipeLeft) ? 0 : ddx;
       paint(dx);
     };
     const end = () => {
@@ -11830,8 +12075,8 @@ function SwipeableSetRow({ className, onSwipeRight, onSwipeLeft, children }) {
 // what they're doing (building a workout) just to add a missing exercise.
 // ---------------------------------------------------------------------------
 
-function NewExerciseForm({ exercises, onAddCustom, onSetExerciseSubgroups, onDone }) {
-  const [newName, setNewName] = useState("");
+function NewExerciseForm({ exercises, onAddCustom, onSetExerciseSubgroups, onDone, initialName = "" }) {
+  const [newName, setNewName] = useState(initialName);
   const [newGroup, setNewGroup] = useState(MUSCLE_GROUPS[0].id);
   // Mehrere Untergruppen möglich, wie beim Bearbeiten einer bestehenden
   // Übung ("Untergruppen wählen" in der Detailansicht) - vorher konnte man
@@ -12075,35 +12320,152 @@ function NewExerciseForm({ exercises, onAddCustom, onSetExerciseSubgroups, onDon
 }
 
 // ---------------------------------------------------------------------------
-// Tags: Filterzeile, Punkte in der Liste, Bearbeitung in der Detailansicht
+// Übungsfilter und Tags: Filterzeile, Punkte in der Liste, Bearbeitung in
+// der Detailansicht
 // ---------------------------------------------------------------------------
 
-// Wie die Geräte-Zeile: eine Auswahl auf einmal, nochmal antippen hebt sie
-// auf. Ohne angelegte Tags erscheint die Zeile gar nicht erst.
-function TagFilterRow({ tags, value, onChange, style }) {
-  if (!Array.isArray(tags) || tags.length === 0) return null;
+// Je Kategorie eine Auswahl auf einmal. Ohne angelegte Tags gibt es keinen
+// Tag-Knopf.
+export const LEERER_FILTER = { group: "alle", subgroup: "alle", equipment: "alle", tag: "alle" };
+
+export function passtZumFilter(e, f, { subgroupOverrides, equipmentOverrides, tagAssignments } = {}) {
   return (
-    <div className="chip-row" style={style}>
-      <span
-        className={`chip chip-sm ${value === "alle" ? "active" : ""}`}
-        onClick={() => onChange("alle")}
-      >
-        Alle Tags
-      </span>
-      {tags.map((t) => {
-        const aktiv = value === t.id;
-        return (
-          <span
-            key={t.id}
-            className={`chip chip-sm folder-chip ${aktiv ? "active" : ""}`}
-            style={aktiv ? { background: t.color } : undefined}
-            onClick={() => onChange(aktiv ? "alle" : t.id)}
-          >
-            {!aktiv && <span className="folder-dot" style={{ background: t.color }} />}
-            {t.name}
-          </span>
-        );
-      })}
+    (f.group === "alle" || e.group === f.group) &&
+    (f.subgroup === "alle" || exerciseHasSubgroup(e, subgroupOverrides, f.subgroup)) &&
+    (f.equipment === "alle" || getExerciseEquipment(e, equipmentOverrides) === f.equipment) &&
+    (f.tag === "alle" || exerciseHasTag(e.id, tagAssignments, f.tag))
+  );
+}
+
+// Muskel, Gerät und Tag als je ein Knopf in einer Zeile - statt bis zu vier
+// Chip-Reihen, die seitlich scrollen und Optionen verstecken. Ein Tipp klappt
+// die Auswahl als Liste darunter auf; bei den Muskeln erscheinen die
+// Untergruppen der angetippten Gruppe rechts daneben. Weitere Knöpfe (z. B.
+// "Neue Übung") kommen als children in dieselbe Zeile.
+function UebungsFilter({ filter, onChange, tags = [], children, style }) {
+  const [offen, setOffen] = useState(null);
+  const [muskelSicht, setMuskelSicht] = useState(null);
+  const ref = useRef(null);
+  useEffect(() => {
+    if (!offen) return;
+    const zu = (e) => { if (ref.current && !ref.current.contains(e.target)) setOffen(null); };
+    document.addEventListener("click", zu);
+    return () => document.removeEventListener("click", zu);
+  }, [offen]);
+
+  const set = (patch) => onChange({ ...filter, ...patch });
+  const gruppe = MUSCLE_GROUPS.find((g) => g.id === filter.group);
+  const untergruppe = (SUBGROUPS[filter.group] || []).find((sg) => sg.id === filter.subgroup);
+  const aktiverTag = tags.find((t) => t.id === filter.tag);
+  const umschalten = (name) => {
+    if (name === "muskel") setMuskelSicht(filter.group !== "alle" ? filter.group : null);
+    setOffen((o) => (o === name ? null : name));
+  };
+  const knopf = (name, aktiv, label, leeren, extraStyle) => (
+    <button
+      type="button"
+      className={`chip chip-sm filter-pill ${aktiv ? "active" : ""} ${offen === name ? "is-open" : ""}`}
+      style={extraStyle}
+      onClick={() => umschalten(name)}
+    >
+      {label}
+      {aktiv ? (
+        <span
+          className="filter-pill-x"
+          role="button"
+          title="Filter entfernen"
+          onClick={(e) => { e.stopPropagation(); leeren(); setOffen(null); }}
+        >
+          <X size={12} />
+        </span>
+      ) : (
+        <ChevronDown size={12} />
+      )}
+    </button>
+  );
+  const option = (key, aktiv, inhalt, onClick, mitPfeil = false) => (
+    <button key={key} type="button" className={`filter-opt ${aktiv ? "active" : ""}`} onClick={onClick}>
+      {/* "Adduktoren/Abduktoren" darf am Schrägstrich umbrechen, nicht mitten im Wort. */}
+      <span className="filter-opt-label">{typeof inhalt === "string" ? inhalt.replace(/\//g, "/\u200b") : inhalt}</span>
+      {mitPfeil ? <ChevronRight size={14} /> : aktiv ? <Check size={14} /> : null}
+    </button>
+  );
+  const sichtGruppe = MUSCLE_GROUPS.find((g) => g.id === muskelSicht);
+
+  return (
+    <div ref={ref} style={style}>
+      <div className="filter-row">
+        {knopf(
+          "muskel",
+          filter.group !== "alle",
+          gruppe ? (untergruppe ? `${gruppe.label} · ${untergruppe.label}` : gruppe.label) : "Muskel",
+          () => set({ group: "alle", subgroup: "alle" })
+        )}
+        {knopf("geraet", filter.equipment !== "alle", filter.equipment !== "alle" ? filter.equipment : "Gerät", () => set({ equipment: "alle" }))}
+        {tags.length > 0 &&
+          knopf(
+            "tag",
+            !!aktiverTag,
+            aktiverTag ? aktiverTag.name : "Tag",
+            () => set({ tag: "alle" }),
+            aktiverTag ? { background: aktiverTag.color } : undefined
+          )}
+        {children}
+      </div>
+      {offen === "muskel" && (
+        <div className="filter-panel filter-panel-2col">
+          <div className="filter-col">
+            {option("alle", filter.group === "alle", "Alle", () => { set({ group: "alle", subgroup: "alle" }); setOffen(null); })}
+            {MUSCLE_GROUPS.map((g) =>
+              option(g.id, muskelSicht === g.id, g.label, () => {
+                set({ group: g.id, subgroup: "alle" });
+                setMuskelSicht(g.id);
+                if (!(SUBGROUPS[g.id] || []).length) setOffen(null);
+              }, (SUBGROUPS[g.id] || []).length > 0)
+            )}
+          </div>
+          <div className="filter-col filter-col-sub">
+            {sichtGruppe ? (
+              <>
+                {option("alle", filter.group === sichtGruppe.id && filter.subgroup === "alle", `Alle ${sichtGruppe.label}`, () => {
+                  set({ group: sichtGruppe.id, subgroup: "alle" });
+                  setOffen(null);
+                })}
+                {(SUBGROUPS[sichtGruppe.id] || []).map((sg) =>
+                  option(sg.id, filter.subgroup === sg.id, sg.label, () => {
+                    set({ group: sichtGruppe.id, subgroup: sg.id });
+                    setOffen(null);
+                  })
+                )}
+              </>
+            ) : (
+              <div className="filter-hint">Links eine Muskelgruppe antippen, dann stehen hier ihre Untergruppen.</div>
+            )}
+          </div>
+        </div>
+      )}
+      {offen === "geraet" && (
+        <div className="filter-panel">
+          <div className="filter-col">
+            {option("alle", filter.equipment === "alle", "Alle Geräte", () => { set({ equipment: "alle" }); setOffen(null); })}
+            {EQUIPMENT_OPTIONS.map((opt) =>
+              option(opt, filter.equipment === opt, opt, () => { set({ equipment: opt }); setOffen(null); })
+            )}
+          </div>
+        </div>
+      )}
+      {offen === "tag" && (
+        <div className="filter-panel">
+          <div className="filter-col">
+            {option("alle", filter.tag === "alle", "Alle Tags", () => { set({ tag: "alle" }); setOffen(null); })}
+            {tags.map((t) =>
+              option(t.id, filter.tag === t.id, (
+                <span className="folder-chip"><span className="folder-dot" style={{ background: t.color }} />{t.name}</span>
+              ), () => { set({ tag: t.id }); setOffen(null); })
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -12326,10 +12688,7 @@ function ExercisesView({
   laufendeUebungsIds = [],
 }) {
   const [query, setQuery] = useState("");
-  const [group, setGroup] = useState("alle");
-  const [subgroupFilter, setSubgroupFilter] = useState("alle");
-  const [equipmentFilter, setEquipmentFilter] = useState("alle");
-  const [tagFilter, setTagFilter] = useState("alle");
+  const [filter, setFilter] = useState(LEERER_FILTER);
   const [creating, setCreating] = useState(false);
   const [selectedExerciseId, setSelectedExerciseId] = useState(null);
 
@@ -12385,17 +12744,12 @@ function ExercisesView({
   }, [logs]);
 
   const filtered = exercises.filter((e) => {
-    const matchesGroup = group === "alle" || e.group === group;
-    const matchesSubgroup =
-      subgroupFilter === "alle" ||
-      exerciseHasSubgroup(e, exerciseSubgroupOverrides, subgroupFilter);
-    const matchesEquipment =
-      equipmentFilter === "alle" ||
-      getExerciseEquipment(e, exerciseEquipmentOverrides) === equipmentFilter;
-    const matchesTag =
-      tagFilter === "alle" || exerciseHasTag(e.id, exerciseTagging.assignments, tagFilter);
     const matchesQuery = e.name.toLowerCase().includes(query.toLowerCase());
-    return matchesGroup && matchesSubgroup && matchesEquipment && matchesTag && matchesQuery;
+    return matchesQuery && passtZumFilter(e, filter, {
+      subgroupOverrides: exerciseSubgroupOverrides,
+      equipmentOverrides: exerciseEquipmentOverrides,
+      tagAssignments: exerciseTagging.assignments,
+    });
   })
     // Zuletzt Trainiertes zuerst: die Liste soll die eigene Praxis abbilden,
     // nicht die Reihenfolge des Katalogs. Sortiert wird auf der Kopie aus
@@ -12405,8 +12759,6 @@ function ExercisesView({
     // untereinander damit ihre Katalogreihenfolge (sort ist stabil), stehen
     // aber geschlossen unter den trainierten.
     .sort((a, b) => (lastPerformed[b.id] || 0) - (lastPerformed[a.id] || 0));
-  const activeGroupSubgroups = group !== "alle" ? SUBGROUPS[group] || [] : [];
-
   return (
     <div>
       <div className="search-box">
@@ -12417,69 +12769,11 @@ function ExercisesView({
           onChange={(e) => setQuery(e.target.value)}
         />
       </div>
-      <div className="chip-row">
-        <span
-          className={`chip ${group === "alle" ? "active" : ""}`}
-          onClick={() => { setGroup("alle"); setSubgroupFilter("alle"); }}
-        >
-          Alle
-        </span>
-        {MUSCLE_GROUPS.map((g) => (
-          <span
-            key={g.id}
-            className={`chip ${group === g.id ? "active" : ""}`}
-            onClick={() => {
-              setSubgroupFilter("alle");
-              setGroup((current) => (current === g.id ? "alle" : g.id));
-            }}
-          >
-            {g.label}
-          </span>
-        ))}
-      </div>
-      {activeGroupSubgroups.length > 0 && (
-        <div className="chip-row" style={{ marginTop: 4 }}>
-          <span
-            className={`chip chip-sm ${subgroupFilter === "alle" ? "active" : ""}`}
-            onClick={() => setSubgroupFilter("alle")}
-          >
-            Alle {MUSCLE_GROUPS.find((g) => g.id === group)?.label}
-          </span>
-          {activeGroupSubgroups.map((sg) => (
-            <span
-              key={sg.id}
-              className={`chip chip-sm ${subgroupFilter === sg.id ? "active" : ""}`}
-              onClick={() => setSubgroupFilter(sg.id)}
-            >
-              {sg.label}
-            </span>
-          ))}
-        </div>
-      )}
-
-      <div className="chip-row" style={{ marginTop: 4 }}>
-        <span
-          className={`chip chip-sm ${equipmentFilter === "alle" ? "active" : ""}`}
-          onClick={() => setEquipmentFilter("alle")}
-        >
-          Alle Geräte
-        </span>
-        {EQUIPMENT_OPTIONS.map((opt) => (
-          <span
-            key={opt}
-            className={`chip chip-sm ${equipmentFilter === opt ? "active" : ""}`}
-            onClick={() => setEquipmentFilter(opt)}
-          >
-            {opt}
-          </span>
-        ))}
-      </div>
-
-      <TagFilterRow
+      <UebungsFilter
+        filter={filter}
+        onChange={setFilter}
         tags={exerciseTagging.tags}
-        value={tagFilter}
-        onChange={setTagFilter}
-        style={{ marginTop: 4 }}
+        style={{ marginBottom: 12 }}
       />
 
       {creating ? (
@@ -13205,16 +13499,20 @@ function PlanBuilder({
   onCreateFolder,
   gyms = [],
   activeGymId = null,
+  bands = [],
 }) {
   const [name, setName] = useState(initialPlan?.name || "");
   // Plaene aus aelteren Versionen haben noch keine Eintrags-IDs - ohne
   // Nachreichen haetten alle Eintraege dieselbe (undefined) Identitaet.
   const [items, setItems] = useState(() =>
-    (initialPlan?.items || []).map((it) => (it && it.id ? it : { ...it, id: uid() }))
+    (initialPlan?.items || []).map((it) => ({
+      ...it,
+      id: it?.id || uid(),
+      setPlan: satzPlanVon(it),
+    }))
   );
   const [query, setQuery] = useState("");
-  const [group, setGroup] = useState("alle");
-  const [subgroupFilter, setSubgroupFilter] = useState("alle");
+  const [filter, setFilter] = useState(LEERER_FILTER);
   const [folderId, setFolderId] = useState(initialPlan?.folderId || null);
   const [showFolderPicker, setShowFolderPicker] = useState(false);
   const [creatingFolder, setCreatingFolder] = useState(false);
@@ -13224,6 +13522,9 @@ function PlanBuilder({
   const selectedExercise = exercises.find((e) => e.id === selectedExerciseId) || null;
   const [headerMenuOpen, setHeaderMenuOpen] = useState(false);
   const [creatingExercise, setCreatingExercise] = useState(false);
+  // Name aus einer Suche ohne Treffer - das Formular startet damit.
+  const [newExerciseName, setNewExerciseName] = useState("");
+  const openNewExercise = (vorschlag = "") => { setNewExerciseName(vorschlag); setCreatingExercise(true); };
   const [pickingFromHistory, setPickingFromHistory] = useState(false);
   // The builder runs in two steps: pick the exercises first (step 1), then
   // fine-tune sets/reps/weight (step 2). Showing everything at once meant a
@@ -13231,9 +13532,6 @@ function PlanBuilder({
   // because the exercises are usually already the right ones.
   const [step, setStep] = useState(initialPlan?.items?.length ? 2 : 1);
   const [expandedItemId, setExpandedItemId] = useState(null);
-  const [searchOpen, setSearchOpen] = useState(false);
-  const [equipmentFilter, setEquipmentFilter] = useState("alle");
-  const [tagFilter, setTagFilter] = useState("alle");
   // Rest times are set here so a workout starts with the right pause
   // instead of having to be adjusted mid-session every time.
   const [planRest, setPlanRest] = useState(initialPlan?.restSeconds ?? 90);
@@ -13247,7 +13545,16 @@ function PlanBuilder({
   const [planAutoSeconds, setPlanAutoSeconds] = useState(initialPlan?.autoSetSeconds ?? 30);
   const [planAutoOrder, setPlanAutoOrder] = useState(initialPlan?.autoOrder || "circuit");
   const [planRoundRest, setPlanRoundRest] = useState(initialPlan?.roundRestSeconds ?? 60);
-  const [restPopupFor, setRestPopupFor] = useState(null); // "plan" | Eintrags-ID
+  const [restPopupFor, setRestPopupFor] = useState(null);
+  // Satzart-Menü und Bandauswahl einer Satzzeile: { itemId, idx }.
+  const [kindMenu, setKindMenu] = useState(null);
+  const [bandPick, setBandPick] = useState(null);
+  useEffect(() => {
+    if (!kindMenu) return;
+    const zu = (e) => { if (!e.target.closest?.(".set-line.menu-open")) setKindMenu(null); };
+    document.addEventListener("click", zu);
+    return () => document.removeEventListener("click", zu);
+  }, [kindMenu]); // "plan" | Eintrags-ID
   const [itemMenuId, setItemMenuId] = useState(null);
   const [itemMenuUp, setItemMenuUp] = useState(false);
   const itemMenuRef = useMenuFlip(itemMenuId, setItemMenuUp);
@@ -13279,17 +13586,15 @@ function PlanBuilder({
     setItems(
       logEntries(log).map((e) => {
         const sets = entrySets(e);
-        const working = sets.filter((s) => !s.warmup);
-        const first = working[0] || sets[0] || {};
+        const setPlan = sets.length > 0
+          ? satzPlanAusSaetzen(sets)
+          : satzPlanVon({ sets: e.targetSets, reps: e.targetReps, weight: e.targetWeight, duration: e.targetDuration });
         return {
           id: uid(),
           exerciseId: e.exerciseId,
-          sets: e.targetSets || working.length || sets.length,
-          warmupSets: sets.filter((s) => s.warmup).length,
-          reps: e.targetReps || first.reps || 10,
-          weight: e.targetWeight || first.weight || 0,
           useTime: !!e.targetUseTime,
-          duration: e.targetDuration || first.duration || 30,
+          setPlan,
+          ...planZusammenfassung(setPlan),
         };
       })
     );
@@ -13366,11 +13671,11 @@ function PlanBuilder({
     () => {
       const matching = exercises.filter(
         (e) =>
-          (group === "alle" || e.group === group) &&
-          (subgroupFilter === "alle" || exerciseHasSubgroup(e, exerciseSubgroupOverrides, subgroupFilter)) &&
-          (equipmentFilter === "alle" ||
-            getExerciseEquipment(e, exerciseEquipmentOverrides) === equipmentFilter) &&
-          (tagFilter === "alle" || exerciseHasTag(e.id, exerciseTagging.assignments, tagFilter)) &&
+          passtZumFilter(e, filter, {
+            subgroupOverrides: exerciseSubgroupOverrides,
+            equipmentOverrides: exerciseEquipmentOverrides,
+            tagAssignments: exerciseTagging.assignments,
+          }) &&
           e.name.toLowerCase().includes(query.toLowerCase())
       );
       const BOTTOM = Number.MAX_SAFE_INTEGER;
@@ -13381,16 +13686,14 @@ function PlanBuilder({
         return a.name.localeCompare(b.name, "de");
       });
     },
-    [exercises, group, subgroupFilter, exerciseSubgroupOverrides,
-     equipmentFilter, exerciseEquipmentOverrides, tagFilter, exerciseTagging.assignments,
-     query, sortRank]
+    [exercises, filter, exerciseSubgroupOverrides, exerciseEquipmentOverrides,
+     exerciseTagging.assignments, query, sortRank]
   );
   // Rendering every one of the ~150 exercises made each tap on "Add"
   // redraw the whole list, which felt sluggish. Only a screenful is
   // rendered; narrowing via search/filter reveals the rest.
   const visibleFiltered = filtered.slice(0, EXERCISE_PICKER_LIMIT);
   const hiddenCount = filtered.length - visibleFiltered.length;
-  const activeGroupSubgroups = group !== "alle" ? SUBGROUPS[group] || [] : [];
 
   const addExercise = (exerciseId) => {
     // Start from what was last achieved instead of a generic 3x10 - when you
@@ -13401,20 +13704,16 @@ function PlanBuilder({
       logs, exerciseId, null, wasTimed,
       effectiveGymId(exerciseId, activeGymId, gymIndependentExercises)
     );
-    const working = (history?.lastSets || []).filter((set) => !set.warmup);
-    const last = working[0];
-    const warmCount = (history?.lastSets || []).filter((set) => set.warmup).length;
-    setItems([...items, {
+    const lastSets = history?.lastSets || [];
+    const setPlan = lastSets.length > 0 ? satzPlanAusSaetzen(lastSets) : satzPlanVon({ sets: 3, reps: 10 });
+    setItems((cur) => [...cur, {
       // Eigene ID je Platz - dieselbe Uebung darf mehrfach im Plan stehen
       // (Zirkel: A, B, A, C), deshalb kann die Uebungs-ID das nicht leisten.
       id: uid(),
       exerciseId,
-      sets: working.length > 0 ? working.length : 3,
-      warmupSets: warmCount,
-      reps: last && toNum(last.reps) > 0 ? toNum(last.reps) : 10,
-      weight: last && toNum(last.weight) > 0 ? fmtDecimal(last.weight) : 0,
       useTime: wasTimed,
-      duration: last && toNum(last.duration) > 0 ? toNum(last.duration) : 30,
+      setPlan,
+      ...planZusammenfassung(setPlan),
       supersetWithNext: false,
       restSeconds: null,
       autoRun: null,
@@ -13449,12 +13748,47 @@ function PlanBuilder({
   // braucht es dafuer nicht: die Rundenzahl ist die Satzzahl aller Uebungen.
   const roundCount = (() => {
     if (items.length === 0) return 0;
-    const first = Math.max(1, toNum(items[0].sets));
-    return items.every((i) => Math.max(1, toNum(i.sets)) === first) ? first : 0;
+    const zahl = (i) => Math.max(1, satzPlanZaehlt(i.setPlan).arbeit);
+    const first = zahl(items[0]);
+    return items.every((i) => zahl(i) === first) ? first : 0;
   })();
   const setRoundCount = (n) => {
     const rounds = Math.max(1, Math.round(toNum(n)) || 1);
-    setItems(items.map((i) => ({ ...i, sets: rounds })));
+    setItems(items.map((i) => ({ ...i, setPlan: satzPlanMitArbeitssaetzen(i.setPlan, rounds) })));
+  };
+
+  // Werte eines Satzes ändern. Nur das zählt als "Plan geändert" - danach
+  // startet das nächste Training dieser Übung mit den Plan-Werten statt mit
+  // denen vom letzten Mal. Sätze hinzufügen oder entfernen zählt nicht.
+  const aendereSatz = (itemId, idx, feld, werte) => {
+    setItems((cur) =>
+      cur.map((i) =>
+        i.id === itemId
+          ? { ...i, setPlan: satzPlanAendern(i.setPlan, idx, feld, werte), werteGeaendertAm: new Date().toISOString() }
+          : i
+      )
+    );
+  };
+  const satzHinzufuegen = (itemId) => {
+    setItems((cur) => cur.map((i) => (i.id === itemId ? { ...i, setPlan: satzPlanPlusSatz(i.setPlan) } : i)));
+  };
+  const satzEntfernen = (itemId, idx) => {
+    setItems((cur) =>
+      cur.map((i) =>
+        i.id === itemId && i.setPlan.length > 1
+          ? { ...i, setPlan: i.setPlan.filter((_, k) => k !== idx) }
+          : i
+      )
+    );
+  };
+  const satzArtSetzen = (itemId, idx, kind) => {
+    setItems((cur) =>
+      cur.map((i) =>
+        i.id === itemId
+          ? { ...i, setPlan: i.setPlan.map((s, k) => (k === idx ? { ...s, kind } : s)) }
+          : i
+      )
+    );
   };
 
   const handleItemBlur = (itemId, field, min) => {
@@ -13468,13 +13802,6 @@ function PlanBuilder({
         // everywhere the value is actually calculated with.
         return { ...i, [field]: field === "weight" ? fmtDecimal(value) : value };
       })
-    );
-  };
-  // Weight can legitimately be 0 (bodyweight exercises); like updateItem,
-  // this only stores what was typed — cleanup happens on blur.
-  const updateItemWeight = (itemId, value) => {
-    setItems(
-      items.map((i) => (i.id === itemId ? { ...i, weight: value } : i))
     );
   };
   const toggleItemTime = (itemId, useTime) => {
@@ -13505,15 +13832,6 @@ function PlanBuilder({
           />
         </div>
         <div style={{ display: "flex", gap: 4, flexShrink: 0 }}>
-          {step === 1 && (
-            <button
-              className={`btn-icon ${query ? "has-note" : ""}`}
-              onClick={() => setSearchOpen((v) => { if (v) setQuery(""); return !v; })}
-              title="Übung suchen"
-            >
-              <Search size={16} />
-            </button>
-          )}
           <button
             className={`btn-icon ${folderId ? "has-note" : ""}`}
             onClick={() => setShowFolderPicker((s) => !s)}
@@ -13537,12 +13855,6 @@ function PlanBuilder({
             >
               <ClipboardList size={14} /> Aus vergangenem Training übernehmen
             </button>
-            <button
-              className="program-menu-item"
-              onClick={() => { setCreatingExercise(true); setHeaderMenuOpen(false); }}
-            >
-              <Plus size={14} /> Neue Übung erstellen
-            </button>
           </div>
         )}
       </div>
@@ -13553,11 +13865,12 @@ function PlanBuilder({
             exercises={exercises}
             onAddCustom={onAddCustom}
             onSetExerciseSubgroups={onSetExerciseSubgroups}
+            initialName={newExerciseName}
             onDone={(newExercise) => {
               setCreatingExercise(false);
-              // Jump straight to it in the picker below so it can be added
-              // to the plan right away instead of having to search again.
-              if (newExercise) { setQuery(newExercise.name); setSearchOpen(true); }
+              // Wer beim Workout-Bauen eine Übung anlegt, will sie im
+              // Workout haben - sie kommt direkt hinein.
+              if (newExercise?.id) { addExercise(newExercise.id); setQuery(""); }
             }}
           />
         </Modal>
@@ -13655,89 +13968,43 @@ function PlanBuilder({
 
       {step === 1 ? (
         <div className="picker-step">
-      {searchOpen && (
-        <div className="search-box">
-          <Search size={16} color="var(--text-dim)" />
-          <input
-            autoFocus
-            placeholder="Übung suchen…"
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-          />
-          <button
-            className="btn-icon"
-            onClick={() => { setQuery(""); setSearchOpen(false); }}
-            title="Suche schließen"
-          >
+      <div className="search-box">
+        <Search size={16} color="var(--text-dim)" />
+        <input
+          placeholder="Übung suchen…"
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+        />
+        {query && (
+          <button className="btn-icon" onClick={() => setQuery("")} title="Suche leeren">
             <X size={14} />
           </button>
-        </div>
-      )}
-      <div className="chip-row" style={{ marginBottom: 10 }}>
-        <span
-          className={`chip ${group === "alle" ? "active" : ""}`}
-          onClick={() => { setGroup("alle"); setSubgroupFilter("alle"); }}
-        >
-          Alle
-        </span>
-        {MUSCLE_GROUPS.map((g) => (
-          <span
-            key={g.id}
-            className={`chip ${group === g.id ? "active" : ""}`}
-            onClick={() => {
-              setSubgroupFilter("alle");
-              setGroup((current) => (current === g.id ? "alle" : g.id));
-            }}
-          >
-            {g.label}
-          </span>
-        ))}
+        )}
       </div>
-      {activeGroupSubgroups.length > 0 && (
-        <div className="chip-row" style={{ marginBottom: 10 }}>
-          <span
-            className={`chip chip-sm ${subgroupFilter === "alle" ? "active" : ""}`}
-            onClick={() => setSubgroupFilter("alle")}
-          >
-            Alle {MUSCLE_GROUPS.find((g) => g.id === group)?.label}
-          </span>
-          {activeGroupSubgroups.map((sg) => (
-            <span
-              key={sg.id}
-              className={`chip chip-sm ${subgroupFilter === sg.id ? "active" : ""}`}
-              onClick={() => setSubgroupFilter(sg.id)}
-            >
-              {sg.label}
-            </span>
-          ))}
-        </div>
-      )}
-      <div className="chip-row" style={{ marginBottom: 10 }}>
-        <span
-          className={`chip chip-sm ${equipmentFilter === "alle" ? "active" : ""}`}
-          onClick={() => setEquipmentFilter("alle")}
-        >
-          Alle Geräte
-        </span>
-        {EQUIPMENT_OPTIONS.map((opt) => (
-          <span
-            key={opt}
-            className={`chip chip-sm ${equipmentFilter === opt ? "active" : ""}`}
-            onClick={() => setEquipmentFilter(opt)}
-          >
-            {opt}
-          </span>
-        ))}
-      </div>
-      <TagFilterRow
+      <UebungsFilter
+        filter={filter}
+        onChange={setFilter}
         tags={exerciseTagging.tags}
-        value={tagFilter}
-        onChange={setTagFilter}
         style={{ marginBottom: 10 }}
-      />
+      >
+        <button type="button" className="chip chip-sm filter-pill filter-new" onClick={() => openNewExercise("")}>
+          <Plus size={12} /> Neue Übung
+        </button>
+      </UebungsFilter>
       <div className="card exercise-picker-list">
         {filtered.length === 0 && (
-          <div className="empty-state" style={{ padding: "14px 0" }}>Keine Übung gefunden.</div>
+          <div className="empty-state" style={{ padding: "14px 0" }}>
+            {query.trim() ? <>Keine Übung „{query.trim()}“ gefunden.</> : "Keine Übung gefunden."}
+          </div>
+        )}
+        {filtered.length === 0 && query.trim() && (
+          <button
+            className="btn btn-primary btn-block"
+            style={{ marginBottom: 12 }}
+            onClick={() => openNewExercise(query.trim())}
+          >
+            <Plus size={16} /> „{query.trim()}“ neu anlegen
+          </button>
         )}
         {visibleFiltered.map((e) => {
           const addedCount = items.filter((i) => i.exerciseId === e.id).length;
@@ -13892,7 +14159,15 @@ function PlanBuilder({
                   : (it.duration ?? 30);
                 const isDragging = draggingId === it.id;
                 const isOpen = expandedItemId === it.id;
-                const warm = Math.max(0, toNum(it.warmupSets));
+                const plan = it.setPlan;
+                const isBand = !!ex && getExerciseEquipment(ex, exerciseEquipmentOverrides) === "Band";
+                // Ohne angelegte Bänder gibt es nichts auszuwählen - dann
+                // bleibt die Spalte weg, wie im Training.
+                const zeigtLast = !isBand || bands.length > 0;
+                const labels = setNumberLabels(plan.map((p) => setKindFlags(p.kind)));
+                const arbeitsBaender = plan.filter((p) => p.kind !== "warmup").map((p) => p.bandName || "");
+                const einBand = arbeitsBaender.length > 0 && arbeitsBaender.every((n) => n === arbeitsBaender[0]) ? plan.find((p) => p.kind !== "warmup") : null;
+                const { warm, arbeit } = satzPlanZaehlt(plan);
                 return (
                   <React.Fragment key={it.id}>
                   <div
@@ -13913,9 +14188,12 @@ function PlanBuilder({
                       >
                         <span className="ex-name">{exerciseName(ex)}</span>
                         <span className="builder-item-summary">
-                          {warm > 0 && `${warm}W + `}
-                          {`${it.sets}×${itemUsesTime ? `${shownSeconds} Sek.` : it.reps}`}
-                          {!itemUsesTime && toNum(it.weight) > 0 && ` · ${fmtDecimal(it.weight)} kg`}
+                          {autoTimed
+                            ? `${warm > 0 ? `${warm}W + ` : ""}${arbeit}×${shownSeconds} Sek.`
+                            : satzPlanText(plan, { useTime: !!it.useTime, mitGewicht: !isBand })}
+                          {isBand && !autoTimed && (einBand
+                            ? einBand.bandName && <> · {einBand.bandColor && <span className="folder-dot band-dot" style={{ background: einBand.bandColor }} />}{einBand.bandName}</>
+                            : " · verschiedene Bänder")}
                           {it.restSeconds != null && ` · Pause ${it.restSeconds === 0 ? "aus" : `${it.restSeconds}s`}`}
                           {planAutoRun && it.autoRun === false && " · zählt Wdh."}
                         </span>
@@ -14020,79 +14298,117 @@ function PlanBuilder({
 
                     {isOpen && (
                       <div className="builder-item-body">
-                        <div style={{ display: "flex", gap: 8 }}>
-                          {/* Warm-up sets are planned separately from working sets
-                              and get created already flagged as "W" when the
-                              workout starts. */}
-                          <div style={{ flex: "0 0 52px" }}>
-                            <label className="field-label" title="Aufwärmsätze">W</label>
+                        {autoTimed && (
+                          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
+                            <label className="field-label" style={{ margin: 0, flex: 1 }}>Sek. pro Satz</label>
                             <input
                               type="number"
-                                inputMode="numeric"
-                              min="0"
-                              value={it.warmupSets ?? 0}
-                              onChange={(e) => updateItem(it.id, "warmupSets", e.target.value)}
-                              onBlur={() => handleItemBlur(it.id, "warmupSets", 0)}
-                            />
-                          </div>
-                          <div style={{ flex: 1 }}>
-                            <label className="field-label">Sätze</label>
-                            <input
-                              type="number"
-                                inputMode="numeric"
+                              inputMode="numeric"
                               min="1"
-                              value={it.sets}
-                              onChange={(e) => updateItem(it.id, "sets", e.target.value)}
-                              onBlur={() => handleItemBlur(it.id, "sets", 1)}
+                              style={{ width: 80 }}
+                              value={shownSeconds}
+                              onChange={(e) => updateItem(it.id, "autoSeconds", e.target.value)}
+                              onBlur={() => handleItemBlur(it.id, "autoSeconds", 1)}
                             />
                           </div>
-                          {itemUsesTime ? (
-                            <div style={{ flex: 1 }}>
-                              <label className="field-label">Sek.</label>
-                              {/* In automatic mode this field edits the
-                                  exercise's own set length, so changing it
-                                  here does the same as the menu entry. */}
-                              <input
-                                type="number"
-                                inputMode="numeric"
-                                min="1"
-                                value={shownSeconds}
-                                onChange={(e) =>
-                                  updateItem(
-                                    it.id,
-                                    autoTimed ? "autoSeconds" : "duration",
-                                    e.target.value
-                                  )
-                                }
-                                onBlur={() =>
-                                  handleItemBlur(it.id, autoTimed ? "autoSeconds" : "duration", 1)
-                                }
-                              />
-                            </div>
-                          ) : (
-                            <div style={{ flex: 1 }}>
-                              <label className="field-label">Wdh.</label>
-                              <input
-                                type="number"
-                                inputMode="numeric"
-                                min="1"
-                                value={it.reps}
-                                onChange={(e) => updateItem(it.id, "reps", e.target.value)}
-                                onBlur={() => handleItemBlur(it.id, "reps", 1)}
-                              />
-                            </div>
+                        )}
+                        <div
+                          className={`set-row plan-set-row ${zeigtLast ? "" : "set-row-noweight"} ${autoTimed ? "is-auto" : ""}`}
+                          style={{ marginBottom: 4 }}
+                        >
+                          <span />
+                          {!autoTimed && (
+                            <label className="field-label" style={{ margin: 0 }}>{it.useTime ? "Sek." : "Wdh."}</label>
                           )}
-                          <div style={{ flex: 1 }}>
-                            <label className="field-label">kg</label>
-                            <input
-                              type="text"
-                              inputMode="decimal"
-                              value={it.weight ?? 0}
-                              onChange={(e) => updateItemWeight(it.id, e.target.value)}
-                              onBlur={() => handleItemBlur(it.id, "weight", 0)}
-                            />
-                          </div>
+                          {zeigtLast && (
+                            <label className="field-label" style={{ margin: 0 }}>{isBand ? "Band" : "kg"}</label>
+                          )}
+                          <span />
                         </div>
+                        {plan.map((p, idx) => {
+                          const menuOffen = kindMenu?.itemId === it.id && kindMenu?.idx === idx;
+                          const flags = setKindFlags(p.kind);
+                          const kind = setKind(flags);
+                          return (
+                            <div className={`set-line ${flags.dropset ? "is-drop" : ""} ${menuOffen ? "menu-open" : ""}`} key={idx}>
+                              <SwipeableSetRow
+                                className={`set-row plan-set-row ${flags.warmup ? "is-warmup" : ""} ${flags.dropset ? "is-drop" : ""} ${zeigtLast ? "" : "set-row-noweight"} ${autoTimed ? "is-auto" : ""}`}
+                                onSwipeLeft={plan.length > 1 ? () => satzEntfernen(it.id, idx) : undefined}
+                              >
+                                <span
+                                  className={`set-kind is-${kind} ${menuOffen ? "is-open" : ""}`}
+                                  onClick={() => setKindMenu(menuOffen ? null : { itemId: it.id, idx })}
+                                  role="button"
+                                  title="Satzart wählen"
+                                >
+                                  {labels[idx]}
+                                </span>
+                                {!autoTimed && (
+                                  <input
+                                    type="number"
+                                    inputMode="numeric"
+                                    min="0"
+                                    value={it.useTime ? p.duration ?? "" : p.reps ?? ""}
+                                    onChange={(e) =>
+                                      it.useTime
+                                        ? aendereSatz(it.id, idx, "duration", { duration: e.target.value })
+                                        : aendereSatz(it.id, idx, "reps", { reps: e.target.value })
+                                    }
+                                  />
+                                )}
+                                {zeigtLast && (isBand ? (
+                                  <button
+                                    className="band-pick"
+                                    onClick={() => setBandPick({ itemId: it.id, idx })}
+                                    title="Band wählen"
+                                  >
+                                    {p.bandColor && <span className="folder-dot band-dot" style={{ background: p.bandColor }} />}
+                                    {p.bandName || "Band"}
+                                  </button>
+                                ) : (
+                                  <input
+                                    type="text"
+                                    inputMode="decimal"
+                                    value={p.weight ?? ""}
+                                    onChange={(e) => aendereSatz(it.id, idx, "weight", { weight: e.target.value })}
+                                  />
+                                ))}
+                                <span />
+                              </SwipeableSetRow>
+                              {menuOffen && (
+                                <div className="set-kind-menu">
+                                  {SET_KINDS.filter(
+                                    ([id]) =>
+                                      id !== kind &&
+                                      id !== "calibration" &&
+                                      (id !== "dropset" || canBeDropset(plan.map((q) => setKindFlags(q.kind)), idx))
+                                  ).map(([id, label]) => (
+                                    <button
+                                      key={id}
+                                      className={`set-kind-option is-${id}`}
+                                      onClick={() => { satzArtSetzen(it.id, idx, id); setKindMenu(null); }}
+                                    >
+                                      <span className="set-kind-dot" />
+                                      {label}
+                                    </button>
+                                  ))}
+                                </div>
+                              )}
+                            </div>
+                          );
+                        })}
+                        {isBand && bands.length === 0 && (
+                          <div style={{ fontSize: 12, color: "var(--text-dim)", margin: "4px 0 8px" }}>
+                            Noch keine Bänder angelegt. Du findest die Liste auf der Startseite unter dem Zahnrad links oben.
+                          </div>
+                        )}
+                        <button
+                          className="btn btn-ghost btn-block btn-sm"
+                          style={{ marginTop: 6 }}
+                          onClick={() => satzHinzufuegen(it.id)}
+                        >
+                          <Plus size={14} /> Satz hinzufügen
+                        </button>
                       </div>
                     )}
                   </div>
@@ -14104,6 +14420,14 @@ function PlanBuilder({
                   </React.Fragment>
                 );
               })}
+            </div>
+            <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
+              <button className="btn btn-ghost btn-sm" style={{ flex: 1 }} onClick={() => { setStep(1); setItemMenuId(null); }}>
+                <Plus size={14} /> Übung hinzufügen
+              </button>
+              <button className="btn btn-ghost btn-sm" style={{ flex: 1 }} onClick={() => openNewExercise("")}>
+                <Plus size={14} /> Neue Übung
+              </button>
             </div>
           </div>
 
@@ -14133,19 +14457,20 @@ function PlanBuilder({
                   autoOrder: planAutoOrder,
                   roundRestSeconds: Math.max(0, Number(planRoundRest) || 0),
                   // Fields are stored as whatever the user typed while editing
-                  // (see updateItem/updateItemWeight) so a field can be freely
+                  // (see updateItem/aendereSatz) so a field can be freely
                   // cleared and retyped. Normalize everything to valid numbers
                   // here in case a field is saved before it was ever blurred.
-                  items: items.map((i) => ({
-                    ...i,
-                    restSeconds: i.restSeconds != null ? Math.max(0, Number(i.restSeconds) || 0) : null,
-                    autoRun: i.autoRun === true || i.autoRun === false ? i.autoRun : null,
-                    autoSeconds: i.autoSeconds != null ? Math.max(1, Number(i.autoSeconds) || 1) : null,
-                    sets: Math.max(1, Number(i.sets) || 1),
-                    reps: Math.max(1, toNum(i.reps) || 1),
-                    weight: Math.max(0, toNum(i.weight) || 0),
-                    duration: Math.max(1, toNum(i.duration) || 1),
-                  })),
+                  items: items.map((i) => {
+                    const setPlan = satzPlanBereinigt(i.setPlan);
+                    return {
+                      ...i,
+                      restSeconds: i.restSeconds != null ? Math.max(0, Number(i.restSeconds) || 0) : null,
+                      autoRun: i.autoRun === true || i.autoRun === false ? i.autoRun : null,
+                      autoSeconds: i.autoSeconds != null ? Math.max(1, Number(i.autoSeconds) || 1) : null,
+                      setPlan,
+                      ...planZusammenfassung(setPlan),
+                    };
+                  }),
                 })
               }
             >
@@ -14154,6 +14479,43 @@ function PlanBuilder({
           </div>
         </>
       )}
+
+      {/* Dieselbe Auswahl wie im Training: nach Art gruppiert, die zuletzt
+          benutzte Art zuerst. Ein Band in Satz 1 geht an die folgenden
+          Sätze weiter, solange die kein eigenes haben. */}
+      {bandPick && (() => {
+        const item = items.find((i) => i.id === bandPick.itemId);
+        if (!item) return null;
+        const waehle = (band) => {
+          aendereSatz(item.id, bandPick.idx, "band", band
+            ? bandFelder(band)
+            : { bandId: null, bandName: null, bandColor: null, weight: 0 });
+          setBandPick(null);
+        };
+        return (
+          <Modal title="Band wählen" onClose={() => setBandPick(null)}>
+            <div className="modal-list">
+              {bandGruppen(bands, bevorzugteBandArt(bands, item.setPlan)).map((g, gi, alle) => (
+                <React.Fragment key={g.id || "ohne"}>
+                  {alle.length > 1 && <div className="band-group-label">{g.label}</div>}
+                  {g.bands.map((b) => (
+                    <div className="modal-option" key={b.id} onClick={() => waehle(b)}>
+                      <span className="folder-chip">
+                        {b.color && <span className="folder-dot" style={{ background: b.color }} />}
+                        {b.name}
+                      </span>
+                      <span className="tag">{fmtDecimal(b.kg)} kg</span>
+                    </div>
+                  ))}
+                </React.Fragment>
+              ))}
+              <div className="modal-option" onClick={() => waehle(null)}>
+                <span style={{ color: "var(--text-dim)" }}>Kein Band</span>
+              </div>
+            </div>
+          </Modal>
+        );
+      })()}
 
       {restPopupFor && (() => {
         // One popup serves four things: workout rest, per-exercise rest,
@@ -14205,7 +14567,7 @@ function PlanBuilder({
         // muessen das widerspiegeln, sonst steht "3 Sekunden" fuer 3 Runden.
         // Bei gemischten Satzzahlen gibt es keine gemeinsame Rundenzahl - dann
         // steht im Eingabefeld die groesste, damit nichts still gekuerzt wird.
-        const maxItemSets = Math.max(1, ...items.map((i) => Math.max(1, toNum(i.sets))));
+        const maxItemSets = Math.max(1, ...items.map((i) => Math.max(1, satzPlanZaehlt(i.setPlan).arbeit)));
         const presetLabel = (n) =>
           kind === "rounds"
             ? plural(n, "Runde", "Runden")
@@ -15014,9 +15376,7 @@ function LogView({
   const [addExerciseQuery, setAddExerciseQuery] = useState("");
   // Filters for the mid-workout exercise picker, mirroring the ones in the
   // Exercises tab so finding a substitute doesn't mean scrolling ~150 rows.
-  const [addGroup, setAddGroup] = useState("alle");
-  const [addSubgroup, setAddSubgroup] = useState("alle");
-  const [addEquipment, setAddEquipment] = useState("alle");
+  const [addFilter, setAddFilter] = useState(LEERER_FILTER);
   // Exercises can be reordered mid-workout the same way as in the builder.
   // This runs above the "no active session" early return, so it must cope
   // with session being null rather than reaching into it.
@@ -15034,16 +15394,14 @@ function LogView({
   });
   const resetAddFilters = () => {
     setAddExerciseQuery("");
-    setAddGroup("alle");
-    setAddSubgroup("alle");
-    setAddEquipment("alle");
+    setAddFilter(LEERER_FILTER);
   };
   const addPickerMatches = (e) =>
-    (addGroup === "alle" || e.group === addGroup) &&
-    (addSubgroup === "alle" ||
-      exerciseHasSubgroup(e, exerciseSubgroupOverrides, addSubgroup)) &&
-    (addEquipment === "alle" ||
-      getExerciseEquipment(e, exerciseEquipmentOverrides) === addEquipment) &&
+    passtZumFilter(e, addFilter, {
+      subgroupOverrides: exerciseSubgroupOverrides,
+      equipmentOverrides: exerciseEquipmentOverrides,
+      tagAssignments: exerciseTagging.assignments,
+    }) &&
     e.name.toLowerCase().includes(addExerciseQuery.toLowerCase());
   const [settingsMenuOpen, setSettingsMenuOpen] = useState(false);
   const [openEntryMenu, setOpenEntryMenu] = useState(null);
@@ -16227,59 +16585,12 @@ function LogView({
                 {/* Same filters as when adding an exercise - replacing one is
                     the same kind of search, usually with a clear idea of the
                     muscle group or the equipment that is free right now. */}
-                <div className="chip-row" style={{ marginBottom: 8 }}>
-                  <span
-                    className={`chip ${addGroup === "alle" ? "active" : ""}`}
-                    onClick={() => { setAddGroup("alle"); setAddSubgroup("alle"); }}
-                  >
-                    Alle
-                  </span>
-                  {MUSCLE_GROUPS.map((g) => (
-                    <span
-                      key={g.id}
-                      className={`chip ${addGroup === g.id ? "active" : ""}`}
-                      onClick={() => { setAddGroup(g.id); setAddSubgroup("alle"); }}
-                    >
-                      {g.label}
-                    </span>
-                  ))}
-                </div>
-                {addGroup !== "alle" && (SUBGROUPS[addGroup] || []).length > 0 && (
-                  <div className="chip-row" style={{ marginBottom: 8 }}>
-                    <span
-                      className={`chip chip-sm ${addSubgroup === "alle" ? "active" : ""}`}
-                      onClick={() => setAddSubgroup("alle")}
-                    >
-                      Alle
-                    </span>
-                    {SUBGROUPS[addGroup].map((sg) => (
-                      <span
-                        key={sg.id}
-                        className={`chip chip-sm ${addSubgroup === sg.id ? "active" : ""}`}
-                        onClick={() => setAddSubgroup(sg.id)}
-                      >
-                        {sg.label}
-                      </span>
-                    ))}
-                  </div>
-                )}
-                <div className="chip-row" style={{ marginBottom: 10 }}>
-                  <span
-                    className={`chip chip-sm ${addEquipment === "alle" ? "active" : ""}`}
-                    onClick={() => setAddEquipment("alle")}
-                  >
-                    Alle Geräte
-                  </span>
-                  {EQUIPMENT_OPTIONS.map((opt) => (
-                    <span
-                      key={opt}
-                      className={`chip chip-sm ${addEquipment === opt ? "active" : ""}`}
-                      onClick={() => setAddEquipment(opt)}
-                    >
-                      {opt}
-                    </span>
-                  ))}
-                </div>
+                <UebungsFilter
+                  filter={addFilter}
+                  onChange={setAddFilter}
+                  tags={exerciseTagging.tags}
+                  style={{ marginBottom: 10 }}
+                />
                 <div style={{ maxHeight: 260, overflowY: "auto" }}>
                   {exercises.filter((e) => e.id !== entry.exerciseId && addPickerMatches(e)).length === 0 && (
                     <div className="empty-state" style={{ padding: "14px 0" }}>Keine Übung gefunden.</div>
@@ -16805,59 +17116,12 @@ function LogView({
                 onChange={(e) => setAddExerciseQuery(e.target.value)}
               />
             </div>
-            <div className="chip-row" style={{ marginBottom: 8 }}>
-              <span
-                className={`chip ${addGroup === "alle" ? "active" : ""}`}
-                onClick={() => { setAddGroup("alle"); setAddSubgroup("alle"); }}
-              >
-                Alle
-              </span>
-              {MUSCLE_GROUPS.map((g) => (
-                <span
-                  key={g.id}
-                  className={`chip ${addGroup === g.id ? "active" : ""}`}
-                  onClick={() => { setAddGroup(g.id); setAddSubgroup("alle"); }}
-                >
-                  {g.label}
-                </span>
-              ))}
-            </div>
-            {addGroup !== "alle" && (SUBGROUPS[addGroup] || []).length > 0 && (
-              <div className="chip-row" style={{ marginBottom: 8 }}>
-                <span
-                  className={`chip chip-sm ${addSubgroup === "alle" ? "active" : ""}`}
-                  onClick={() => setAddSubgroup("alle")}
-                >
-                  Alle
-                </span>
-                {SUBGROUPS[addGroup].map((sg) => (
-                  <span
-                    key={sg.id}
-                    className={`chip chip-sm ${addSubgroup === sg.id ? "active" : ""}`}
-                    onClick={() => setAddSubgroup(sg.id)}
-                  >
-                    {sg.label}
-                  </span>
-                ))}
-              </div>
-            )}
-            <div className="chip-row" style={{ marginBottom: 10 }}>
-              <span
-                className={`chip chip-sm ${addEquipment === "alle" ? "active" : ""}`}
-                onClick={() => setAddEquipment("alle")}
-              >
-                Alle Geräte
-              </span>
-              {EQUIPMENT_OPTIONS.map((opt) => (
-                <span
-                  key={opt}
-                  className={`chip chip-sm ${addEquipment === opt ? "active" : ""}`}
-                  onClick={() => setAddEquipment(opt)}
-                >
-                  {opt}
-                </span>
-              ))}
-            </div>
+            <UebungsFilter
+              filter={addFilter}
+              onChange={setAddFilter}
+              tags={exerciseTagging.tags}
+              style={{ marginBottom: 10 }}
+            />
             <div style={{ maxHeight: 260, overflowY: "auto" }}>
               {exercises.filter(addPickerMatches).length === 0 && (
                 <div className="empty-state" style={{ padding: "14px 0" }}>Keine Übung gefunden.</div>

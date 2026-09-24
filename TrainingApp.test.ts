@@ -1,5 +1,16 @@
 import { describe, it, expect } from "vitest";
 import {
+  satzPlanVon,
+  satzPlanAusSaetzen,
+  satzPlanAendern,
+  satzPlanPlusSatz,
+  satzPlanMitArbeitssaetzen,
+  satzPlanText,
+  startSaetze,
+  satzPlanNachTraining,
+  letztesTrainingDerUebung,
+  passtZumFilter,
+  LEERER_FILTER,
   toNum,
   bandLabel,
   bevorzugteBandArt,
@@ -2782,5 +2793,145 @@ describe("Bänder mit Art und Farbe", () => {
   it("zeigt das Band auch bei Zeituebungen", () => {
     expect(shortSet({ duration: 30, bandName: "Schwarz (lang)" }, true)).toBe("Schwarz (lang) · 30s");
     expect(shortSet({ duration: 30 }, true)).toBe("30s");
+  });
+});
+
+describe("Satzplan im Workout", () => {
+  const drei = [
+    { kind: "normal", reps: 10, weight: 20, duration: 30 },
+    { kind: "normal", reps: 10, weight: 20, duration: 30 },
+    { kind: "normal", reps: 10, weight: 20, duration: 30 },
+  ];
+
+  it("baut aus alten Plaenen dieselbe Liste wie frueher", () => {
+    const plan = satzPlanVon({ sets: 2, warmupSets: 1, reps: 8, weight: 50 });
+    expect(plan.map((s) => s.kind)).toEqual(["warmup", "normal", "normal"]);
+    expect(plan[0].weight).toBe(0);
+    expect(plan[1]).toMatchObject({ reps: 8, weight: 50 });
+  });
+
+  it("uebernimmt Satzarten und Baender aus echten Saetzen", () => {
+    const plan = satzPlanAusSaetzen([
+      { warmup: true, reps: 12, weight: 10 },
+      { reps: 8, weight: 20, bandId: "r", bandName: "Rot (lang)", bandColor: "#d64541" },
+      { dropset: true, reps: 6, weight: 15 },
+    ]);
+    expect(plan.map((s) => s.kind)).toEqual(["warmup", "normal", "dropset"]);
+    expect(plan[1].bandName).toBe("Rot (lang)");
+  });
+
+  it("gibt Werte aus Satz 1 an die folgenden Saetze weiter", () => {
+    const plan = satzPlanAendern(drei, 0, "reps", { reps: 12 });
+    expect(plan.map((s) => s.reps)).toEqual([12, 12, 12]);
+  });
+
+  it("laesst einzeln geaenderte Saetze in Ruhe - nur fuer dieses Feld", () => {
+    let plan = satzPlanAendern(drei, 2, "weight", { weight: 25 });
+    plan = satzPlanAendern(plan, 0, "weight", { weight: 22 });
+    plan = satzPlanAendern(plan, 0, "reps", { reps: 8 });
+    expect(plan.map((s) => s.weight)).toEqual([22, 22, 25]);
+    expect(plan.map((s) => s.reps)).toEqual([8, 8, 8]);
+  });
+
+  it("zaehlt den ersten Arbeitssatz als Satz 1, nicht den Aufwaermsatz", () => {
+    const mitWarm = [{ kind: "warmup", reps: 15, weight: 10, duration: 30 }, ...drei];
+    const plan = satzPlanAendern(mitWarm, 1, "reps", { reps: 6 });
+    expect(plan.map((s) => s.reps)).toEqual([15, 6, 6, 6]);
+    const warmGeaendert = satzPlanAendern(mitWarm, 0, "reps", { reps: 20 });
+    expect(warmGeaendert.map((s) => s.reps)).toEqual([20, 10, 10, 10]);
+  });
+
+  it("gibt ein Band aus Satz 1 samt kg weiter", () => {
+    const plan = satzPlanAendern(drei, 0, "band", { bandId: "g", bandName: "Grün (kurz)", bandColor: "#3fa45b", weight: 4 });
+    expect(plan.every((s) => s.bandId === "g" && s.weight === 4)).toBe(true);
+  });
+
+  it("kopiert beim Hinzufuegen den letzten Satz", () => {
+    const plan = satzPlanPlusSatz(satzPlanAendern(drei, 2, "weight", { weight: 30 }));
+    expect(plan).toHaveLength(4);
+    expect(plan[3]).toMatchObject({ kind: "normal", weight: 30, eigen: { weight: true } });
+  });
+
+  it("stellt die Zahl der Arbeitssaetze fuer Runden ein", () => {
+    const mitWarm = [{ kind: "warmup", reps: 15, weight: 0, duration: 30 }, ...drei];
+    expect(satzPlanMitArbeitssaetzen(mitWarm, 5).filter((s) => s.kind !== "warmup")).toHaveLength(5);
+    const weniger = satzPlanMitArbeitssaetzen(mitWarm, 1);
+    expect(weniger.map((s) => s.kind)).toEqual(["warmup", "normal"]);
+  });
+
+  it("fasst gleiche und verschiedene Saetze zusammen", () => {
+    expect(satzPlanText(drei)).toBe("3×10 · 20 kg");
+    const pyramide = [
+      { kind: "warmup", reps: 12, weight: 20 },
+      { kind: "normal", reps: 10, weight: 60 },
+      { kind: "normal", reps: 8, weight: 70 },
+      { kind: "normal", reps: 6, weight: 80 },
+    ];
+    expect(satzPlanText(pyramide)).toBe("1W + 10/8/6 · 60–80 kg");
+    expect(satzPlanText([{ kind: "normal", duration: 45 }, { kind: "normal", duration: 45 }], { useTime: true })).toBe("2×45 Sek.");
+  });
+});
+
+describe("Trainingsstart: Plan oder letztes Mal", () => {
+  const item = {
+    setPlan: [
+      { kind: "normal", reps: 10, weight: 4, bandId: "g", bandName: "Grün (kurz)", bandColor: "#3fa45b" },
+      { kind: "normal", reps: 10, weight: 4, bandId: "g", bandName: "Grün (kurz)", bandColor: "#3fa45b" },
+    ],
+  };
+  const letztes = [
+    { reps: 12, weight: 10, bandId: "r", bandName: "Rot (lang)", bandColor: "#d64541", done: true },
+    { reps: 11, weight: 10, bandId: "r", bandName: "Rot (lang)", bandColor: "#d64541", done: true },
+  ];
+
+  it("nimmt das letzte Mal, wenn der Plan seitdem nicht geaendert wurde", () => {
+    const sets = startSaetze({ ...item, werteGeaendertAm: "2026-09-01T10:00:00Z" }, letztes, "2026-09-10T10:00:00Z");
+    expect(sets.map((s) => s.reps)).toEqual([12, 11]);
+    expect(sets[0].bandName).toBe("Rot (lang)");
+  });
+
+  it("nimmt den Plan, wenn die Werte der Uebung danach geaendert wurden", () => {
+    const sets = startSaetze({ ...item, werteGeaendertAm: "2026-09-12T10:00:00Z" }, letztes, "2026-09-10T10:00:00Z");
+    expect(sets.map((s) => s.reps)).toEqual([10, 10]);
+    expect(sets[0].bandName).toBe("Grün (kurz)");
+  });
+
+  it("nimmt den Plan, wenn die Uebung noch nie trainiert wurde", () => {
+    expect(startSaetze(item, null, null)[0].bandId).toBe("g");
+  });
+
+  it("die Satzzahl kommt immer aus dem Plan", () => {
+    const drei = { setPlan: [...item.setPlan, item.setPlan[0]] };
+    expect(startSaetze(drei, letztes, "2026-09-10T10:00:00Z")).toHaveLength(3);
+  });
+
+  it("findet das letzte echte Training einer Uebung", () => {
+    const logs = [
+      { date: "2026-09-01T10:00:00Z", entries: [{ exerciseId: "a", sets: [{ done: true, reps: 5 }] }] },
+      { date: "2026-09-05T10:00:00Z", entries: [{ exerciseId: "a", sets: [{ done: false, reps: 5 }] }] },
+      { date: "2026-09-03T10:00:00Z", entries: [{ exerciseId: "b", sets: [{ done: true, reps: 5 }] }] },
+    ];
+    expect(letztesTrainingDerUebung(logs, "a")).toBe("2026-09-01T10:00:00.000Z");
+    expect(letztesTrainingDerUebung(logs, "x")).toBeNull();
+  });
+
+  it("uebernimmt nach dem Training die Werte Satz fuer Satz, ohne das Aenderungsdatum", () => {
+    const vorher = { ...item, werteGeaendertAm: "2026-09-01T10:00:00Z" };
+    const nachher = satzPlanNachTraining(vorher, letztes);
+    expect(nachher.setPlan.map((s) => s.reps)).toEqual([12, 11]);
+    expect(nachher.werteGeaendertAm).toBe("2026-09-01T10:00:00Z");
+    expect(nachher.reps).toBe(12);
+    expect(satzPlanNachTraining(vorher, [])).toBe(vorher);
+  });
+});
+
+describe("Uebungsfilter", () => {
+  it("prueft Muskel, Geraet und Tag zusammen", () => {
+    const e = { id: "x", group: "beine", name: "Wadenheben mit Band" };
+    const opts = { equipmentOverrides: { x: "Band" }, tagAssignments: { x: ["reha"] } };
+    expect(passtZumFilter(e, LEERER_FILTER, opts)).toBe(true);
+    expect(passtZumFilter(e, { ...LEERER_FILTER, group: "beine", equipment: "Band", tag: "reha" }, opts)).toBe(true);
+    expect(passtZumFilter(e, { ...LEERER_FILTER, group: "brust" }, opts)).toBe(false);
+    expect(passtZumFilter(e, { ...LEERER_FILTER, equipment: "Kabelzug" }, opts)).toBe(false);
   });
 });

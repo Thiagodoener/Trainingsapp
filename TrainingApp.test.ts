@@ -1,6 +1,11 @@
 import { describe, it, expect } from "vitest";
 import {
   toNum,
+  bandLabel,
+  bevorzugteBandArt,
+  bandGruppen,
+  bandFelder,
+  shortSet,
   getExerciseTags,
   exerciseHasTag,
   withoutTag,
@@ -2740,5 +2745,42 @@ describe("Tags je Übung", () => {
     expect(withoutTag(assignments, "reha")).toEqual({ plank: ["home"] });
     // Das Original bleibt unangetastet.
     expect(assignments.dehnen).toEqual(["reha"]);
+  });
+});
+
+describe("Bänder mit Art und Farbe", () => {
+  const bands = [
+    { id: "r-lang", name: "Rot", kg: 10, art: "lang", color: "#d64541" },
+    { id: "g-lang", name: "Grün", kg: 5, art: "lang" },
+    { id: "r-kurz", name: "Rot", kg: 4, art: "kurz" },
+    { id: "alt", name: "Altes Band", kg: 7 },
+  ];
+
+  it("schreibt die Art an den Namen", () => {
+    expect(bandLabel(bands[0])).toBe("Rot (lang)");
+    expect(bandLabel(bands[3])).toBe("Altes Band");
+  });
+
+  it("uebernimmt Name, Farbe und kg in den Satz", () => {
+    expect(bandFelder(bands[0])).toEqual({
+      bandId: "r-lang", bandName: "Rot (lang)", bandColor: "#d64541", weight: 10,
+    });
+  });
+
+  it("nimmt die Art aus den laufenden Saetzen, sonst vom letzten Mal", () => {
+    expect(bevorzugteBandArt(bands, [{ bandId: "r-kurz" }], [{ bandId: "r-lang" }])).toBe("kurz");
+    expect(bevorzugteBandArt(bands, [{ weight: 5 }], [{ bandId: "g-lang" }])).toBe("lang");
+    expect(bevorzugteBandArt(bands, [], null)).toBe(null);
+  });
+
+  it("gruppiert nach Art, bevorzugte zuerst, ohne Art zuletzt, leicht vor schwer", () => {
+    const g = bandGruppen(bands, "kurz");
+    expect(g.map((x) => x.id)).toEqual(["kurz", "lang", null]);
+    expect(g[1].bands.map((b) => b.id)).toEqual(["g-lang", "r-lang"]);
+  });
+
+  it("zeigt das Band auch bei Zeituebungen", () => {
+    expect(shortSet({ duration: 30, bandName: "Schwarz (lang)" }, true)).toBe("Schwarz (lang) · 30s");
+    expect(shortSet({ duration: 30 }, true)).toBe("30s");
   });
 });

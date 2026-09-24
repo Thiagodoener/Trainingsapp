@@ -3558,6 +3558,129 @@ export function getDeloadEffects(logs, deloadWeeks, timeBasedExercises, nowTs = 
   return { results, pattern, patternMin: DELOAD_PATTERN_MIN };
 }
 
+// ---------------------------------------------------------------------------
+// Widerstandsbänder
+//
+// Ein Band hat neben Name und kg-Wert eine Art (lang oder kurz) und eine
+// Farbe. Die Art trennt, was sich nicht vertauschen lässt: Ein langes und ein
+// kurzes rotes Band sind zwei verschiedene Bänder mit eigenem kg-Wert. Die
+// Farbe ist die echte Farbe des Bandes - daran erkennt man es am schnellsten.
+// Bänder aus der Zeit vor der Art haben keine und stehen unter "Ohne Art".
+// ---------------------------------------------------------------------------
+
+export const BAND_ARTEN = [
+  { id: "lang", label: "Lang" },
+  { id: "kurz", label: "Kurz" },
+];
+
+// Die üblichen Farben von Widerstandsbändern, nicht die App-Palette: Schwarz
+// und Gelb gehören dazu, ein Pastellton hilft am Band nicht weiter.
+export const BAND_COLORS = [
+  "#f2c230", "#e8862a", "#d64541", "#e27fa7", "#3fa45b", "#3d7cc9",
+  "#7d5bb5", "#8a6f5c", "#9aa0a6", "#2b2b2b",
+];
+
+// So steht das Band am Satz: "Rot (lang)". Ohne Art bleibt es beim Namen.
+export function bandLabel(band) {
+  if (!band) return "";
+  const art = BAND_ARTEN.find((a) => a.id === band.art);
+  return art ? `${band.name} (${art.label.toLowerCase()})` : band.name;
+}
+
+// Welche Art Band bei einer Übung zuletzt benutzt wurde - aus den Sätzen, die
+// gerade laufen, sonst aus dem letzten Training. Danach wird die Auswahl
+// sortiert, damit die passenden Bänder oben stehen.
+export function bevorzugteBandArt(bands, ...satzListen) {
+  const byId = Object.fromEntries((Array.isArray(bands) ? bands : []).map((b) => [b.id, b]));
+  for (const saetze of satzListen) {
+    for (const s of Array.isArray(saetze) ? saetze : []) {
+      const art = s?.bandId ? byId[s.bandId]?.art : null;
+      if (art) return art;
+    }
+  }
+  return null;
+}
+
+// Bänder für die Auswahl, nach Art gruppiert. Die bevorzugte Art zuerst,
+// Bänder ohne Art zuletzt; innerhalb einer Gruppe vom leichtesten zum
+// schwersten, so wie man sie auch in der Hand sortiert.
+export function bandGruppen(bands, bevorzugt = null) {
+  const liste = Array.isArray(bands) ? bands : [];
+  const arten = [...BAND_ARTEN].sort(
+    (a, b) => (b.id === bevorzugt ? 1 : 0) - (a.id === bevorzugt ? 1 : 0)
+  );
+  const gruppen = arten.map((a) => ({
+    id: a.id,
+    label: a.label,
+    bands: liste.filter((b) => b.art === a.id),
+  }));
+  gruppen.push({
+    id: null,
+    label: "Ohne Art",
+    bands: liste.filter((b) => !BAND_ARTEN.some((a) => a.id === b.art)),
+  });
+  gruppen.forEach((g) => g.bands.sort((x, y) => toNum(x.kg) - toNum(y.kg)));
+  return gruppen.filter((g) => g.bands.length > 0);
+}
+
+// Die Band-Felder, die ein Satz mitschreibt. Name und Farbe werden kopiert
+// statt nachgeschlagen, damit ein späteres Umbenennen alte Trainings nicht
+// rückwirkend verändert.
+export function bandFelder(band) {
+  return { bandId: band.id, bandName: bandLabel(band), bandColor: band.color || null, weight: band.kg };
+}
+
+const LEERER_BAND_ENTWURF = { name: "", kg: "", art: "lang", color: null };
+
+// Name, kg, Art und Farbe eines Bandes - beim Anlegen und beim Bearbeiten
+// dieselben Felder.
+function BandEntwurfFelder({ draft, setDraft }) {
+  return (
+    <>
+      <div style={{ display: "flex", gap: 6, alignItems: "flex-end" }}>
+        <div style={{ flex: 1 }}>
+          <input
+            type="text"
+            placeholder="z. B. Rot"
+            value={draft.name}
+            onChange={(e) => setDraft((d) => ({ ...d, name: e.target.value }))}
+          />
+        </div>
+        <div style={{ width: 74 }}>
+          <input
+            type="text"
+            inputMode="decimal"
+            placeholder="kg"
+            value={draft.kg}
+            onChange={(e) => setDraft((d) => ({ ...d, kg: e.target.value }))}
+          />
+        </div>
+      </div>
+      <div className="chip-row" style={{ marginTop: 8, marginBottom: 0 }}>
+        {BAND_ARTEN.map((a) => (
+          <span
+            key={a.id}
+            className={`chip chip-sm ${draft.art === a.id ? "active" : ""}`}
+            onClick={() => setDraft((d) => ({ ...d, art: a.id }))}
+          >
+            {a.label}
+          </span>
+        ))}
+      </div>
+      <div className="color-swatch-grid band-swatches" style={{ marginTop: 8, gridTemplateColumns: "repeat(10, 1fr)" }}>
+        {BAND_COLORS.map((c) => (
+          <span
+            key={c}
+            className={`color-swatch ${draft.color === c ? "active" : ""}`}
+            style={{ background: c, width: 24, height: 24 }}
+            onClick={() => setDraft((d) => ({ ...d, color: d.color === c ? null : c }))}
+          />
+        ))}
+      </div>
+    </>
+  );
+}
+
 const EQUIPMENT_OPTIONS = ["Langhantel", "Kurzhanteln", "Kabelzug", "Maschine", "Kettlebell", "Gewichtsscheibe", "Körpergewicht", "Band", "Sonstiges"];
 
 export function getExerciseMeta(exercise) {
@@ -4442,6 +4565,11 @@ function TrainingAppInner() {
           duration: targetUseTime ? duration : 0,
           done: false,
           warmup,
+          // Das Band vom letzten Mal gleich mit - vorher kam nur sein
+          // kg-Wert an, und das Feld zeigte trotzdem leer "Band".
+          ...(!warmup && ref?.bandId
+            ? { bandId: ref.bandId, bandName: ref.bandName || null, bandColor: ref.bandColor || null }
+            : {}),
         };
       };
       const sets = [
@@ -5278,7 +5406,7 @@ function TrainingAppInner() {
   );
   // Der Wert, der heute gilt - fuer die Anzeige im Menue.
   const bodyWeightNow = useMemo(() => bodyWeightAt(bodyWeights, Date.now()), [bodyWeights]);
-  const [bandDraft, setBandDraft] = useState({ name: "", kg: "" });
+  const [bandDraft, setBandDraft] = useState(LEERER_BAND_ENTWURF);
   const [renamingBandId, setRenamingBandId] = useState(null);
   const [gymDraftName, setGymDraftName] = useState("");
   const [renamingGymId, setRenamingGymId] = useState(null);
@@ -6607,6 +6735,24 @@ function TrainingAppInner() {
            ueber dem Inhalt, damit darunter nichts verrutscht. */
         /* Steht in der kg-Spalte der Satzzeile und sieht aus wie das
            Eingabefeld daneben, ist aber ein Knopf. */
+        .band-pick .band-dot {
+          display: inline-block;
+          margin-right: 5px;
+          vertical-align: 1px;
+        }
+        /* Schwarz ist eine echte Bandfarbe - ein dunkler Rahmen darum waere
+           unsichtbar. Deshalb ein Ring mit Abstand statt des Rahmens. */
+        .band-swatches .color-swatch.active {
+          border-color: transparent;
+          box-shadow: 0 0 0 2px var(--surface), 0 0 0 4px var(--text);
+        }
+        .band-group-label {
+          font-size: 11px;
+          letter-spacing: 0.6px;
+          text-transform: uppercase;
+          color: var(--text-dim);
+          margin: 10px 0 2px;
+        }
         .band-pick {
           width: 100%;
           font-family: inherit;
@@ -9216,122 +9362,122 @@ function TrainingAppInner() {
       {bandManagerOpen && (
         <Modal
           title="Bänder verwalten"
-          onClose={() => { setBandManagerOpen(false); setBandDraft({ name: "", kg: "" }); setRenamingBandId(null); }}
+          onClose={() => { setBandManagerOpen(false); setBandDraft(LEERER_BAND_ENTWURF); setRenamingBandId(null); }}
         >
           <p style={{ fontSize: 12.5, color: "var(--text-dim)", margin: "0 0 12px" }}>
-            Trag deine Bänder einmal ein – Name und ungefähr, wie viel Kilogramm
-            sie sich anfühlen. Im Training wählst du dann nur noch das Band aus.
-            Der kg-Wert muss nicht genau sein; er sorgt dafür, dass ein
+            Trag deine Bänder einmal ein – Art, Farbe und ungefähr, wie viel
+            Kilogramm sie sich anfühlen. Im Training wählst du dann nur noch das
+            Band aus. Der kg-Wert muss nicht genau sein; er sorgt dafür, dass ein
             stärkeres Band in der Statistik auch als mehr zählt.
           </p>
           {bands.length === 0 && <div className="empty-state">Noch keine Bänder angelegt.</div>}
           <div className="modal-list">
-            {bands.map((b) => (
-              <div key={b.id}>
-                {renamingBandId === b.id ? (
-                  <div style={{ display: "flex", gap: 6, alignItems: "flex-end" }}>
-                    <div style={{ flex: 1 }}>
-                      <input
-                        type="text"
-                        value={bandDraft.name}
-                        onChange={(e) => setBandDraft((d) => ({ ...d, name: e.target.value }))}
-                      />
-                    </div>
-                    <div style={{ width: 74 }}>
-                      <input
-                        type="text"
-                        inputMode="decimal"
-                        value={bandDraft.kg}
-                        onChange={(e) => setBandDraft((d) => ({ ...d, kg: e.target.value }))}
-                      />
-                    </div>
-                    <button
-                      className="btn btn-primary btn-sm"
-                      disabled={!bandDraft.name.trim() || !(toNum(bandDraft.kg) > 0)}
-                      onClick={async () => {
-                        await persistBands(
-                          bands.map((x) =>
-                            x.id === b.id
-                              ? { ...x, name: bandDraft.name.trim(), kg: toNum(bandDraft.kg) }
-                              : x
-                          )
-                        );
-                        setRenamingBandId(null);
-                        setBandDraft({ name: "", kg: "" });
-                      }}
-                    >
-                      <Check size={14} />
-                    </button>
+            {bandGruppen(bands).map((g) => (
+              <React.Fragment key={g.id || "ohne"}>
+                <div className="band-group-label">{g.label}</div>
+                {g.bands.map((b) => (
+                  <div key={b.id}>
+                    {renamingBandId === b.id ? (
+                      <div style={{ padding: "6px 0 10px" }}>
+                        <BandEntwurfFelder draft={bandDraft} setDraft={setBandDraft} />
+                        <button
+                          className="btn btn-primary btn-block btn-sm"
+                          style={{ marginTop: 10 }}
+                          disabled={!bandDraft.name.trim() || !(toNum(bandDraft.kg) > 0)}
+                          onClick={async () => {
+                            await persistBands(
+                              bands.map((x) =>
+                                x.id === b.id
+                                  ? {
+                                      ...x,
+                                      name: bandDraft.name.trim(),
+                                      kg: toNum(bandDraft.kg),
+                                      art: bandDraft.art,
+                                      color: bandDraft.color,
+                                    }
+                                  : x
+                              )
+                            );
+                            setRenamingBandId(null);
+                            setBandDraft(LEERER_BAND_ENTWURF);
+                          }}
+                        >
+                          <Check size={14} /> Speichern
+                        </button>
+                      </div>
+                    ) : (
+                      <div className="modal-option">
+                        <span className="folder-chip">
+                          {b.color && <span className="folder-dot" style={{ background: b.color }} />}
+                          {b.name}
+                        </span>
+                        <span style={{ display: "flex", gap: 4, alignItems: "center" }}>
+                          <span className="tag">{fmtDecimal(b.kg)} kg</span>
+                          <button
+                            className="btn-icon"
+                            title="Bearbeiten"
+                            onClick={() => {
+                              setRenamingBandId(b.id);
+                              setBandDraft({
+                                name: b.name,
+                                kg: String(b.kg),
+                                art: b.art || null,
+                                color: b.color || null,
+                              });
+                            }}
+                          >
+                            <Pencil size={14} />
+                          </button>
+                          <button
+                            className="btn-icon"
+                            title="Löschen"
+                            onClick={() =>
+                              askConfirm(
+                                `Band „${bandLabel(b)}" löschen? Bereits gespeicherte Sätze behalten ihren Wert.`,
+                                async () => { await persistBands(bands.filter((x) => x.id !== b.id)); }
+                              )
+                            }
+                          >
+                            <Trash2 size={14} />
+                          </button>
+                        </span>
+                      </div>
+                    )}
                   </div>
-                ) : (
-                  <div className="modal-option">
-                    <span>{b.name}</span>
-                    <span style={{ display: "flex", gap: 4, alignItems: "center" }}>
-                      <span className="tag">{fmtDecimal(b.kg)} kg</span>
-                      <button
-                        className="btn-icon"
-                        title="Bearbeiten"
-                        onClick={() => {
-                          setRenamingBandId(b.id);
-                          setBandDraft({ name: b.name, kg: String(b.kg) });
-                        }}
-                      >
-                        <Pencil size={14} />
-                      </button>
-                      <button
-                        className="btn-icon"
-                        title="Löschen"
-                        onClick={() =>
-                          askConfirm(
-                            `Band „${b.name}" löschen? Bereits gespeicherte Sätze behalten ihren Wert.`,
-                            async () => { await persistBands(bands.filter((x) => x.id !== b.id)); }
-                          )
-                        }
-                      >
-                        <Trash2 size={14} />
-                      </button>
-                    </span>
-                  </div>
-                )}
-              </div>
+                ))}
+              </React.Fragment>
             ))}
           </div>
-          <div style={{ marginTop: 12, paddingTop: 12, borderTop: "1px solid var(--border)" }}>
-            <label className="field-label">Neues Band</label>
-            <div style={{ display: "flex", gap: 6, alignItems: "flex-end", marginTop: 6 }}>
-              <div style={{ flex: 1 }}>
-                <input
-                  type="text"
-                  placeholder="z. B. Rot (mittel)"
-                  value={renamingBandId ? "" : bandDraft.name}
-                  onChange={(e) => { setRenamingBandId(null); setBandDraft((d) => ({ ...d, name: e.target.value })); }}
-                />
+          {!renamingBandId && (
+            <div style={{ marginTop: 12, paddingTop: 12, borderTop: "1px solid var(--border)" }}>
+              <label className="field-label">Neues Band</label>
+              <div style={{ marginTop: 6 }}>
+                <BandEntwurfFelder draft={bandDraft} setDraft={setBandDraft} />
               </div>
-              <div style={{ width: 74 }}>
-                <input
-                  type="text"
-                  inputMode="decimal"
-                  placeholder="kg"
-                  value={renamingBandId ? "" : bandDraft.kg}
-                  onChange={(e) => { setRenamingBandId(null); setBandDraft((d) => ({ ...d, kg: e.target.value })); }}
-                />
-              </div>
+              <button
+                className="btn btn-primary btn-block btn-sm"
+                style={{ marginTop: 10 }}
+                disabled={!bandDraft.name.trim() || !(toNum(bandDraft.kg) > 0)}
+                onClick={async () => {
+                  await persistBands([
+                    ...bands,
+                    {
+                      id: uid(),
+                      name: bandDraft.name.trim(),
+                      kg: toNum(bandDraft.kg),
+                      art: bandDraft.art,
+                      color: bandDraft.color,
+                    },
+                  ]);
+                  // Art und Farbe bleiben stehen: Meist trägt man mehrere
+                  // Bänder derselben Art hintereinander ein.
+                  setBandDraft((d) => ({ ...d, name: "", kg: "" }));
+                }}
+              >
+                <Plus size={14} /> Band hinzufügen
+              </button>
             </div>
-            <button
-              className="btn btn-primary btn-block btn-sm"
-              style={{ marginTop: 10 }}
-              disabled={!bandDraft.name.trim() || !(toNum(bandDraft.kg) > 0) || !!renamingBandId}
-              onClick={async () => {
-                await persistBands([
-                  ...bands,
-                  { id: uid(), name: bandDraft.name.trim(), kg: toNum(bandDraft.kg) },
-                ]);
-                setBandDraft({ name: "", kg: "" });
-              }}
-            >
-              <Plus size={14} /> Band hinzufügen
-            </button>
-          </div>
+          )}
         </Modal>
       )}
 
@@ -11793,6 +11939,34 @@ function NewExerciseForm({ exercises, onAddCustom, onSetExerciseSubgroups, onDon
           ))}
         </div>
       </div>
+      {/* Untergruppen direkt unter der Muskelgruppe: sie verfeinern die
+          Auswahl darueber, die Nebenmuskeln sind eine eigene Frage. */}
+      {(SUBGROUPS[newGroup] || []).length > 0 && (
+        <div style={{ marginTop: 10 }}>
+          <label className="field-label">Untergruppen (optional)</label>
+          <div className="chip-row" style={{ marginTop: 6 }}>
+            <span
+              className={`chip chip-sm ${newSubgroups.length === 0 ? "active" : ""}`}
+              onClick={() => setNewSubgroups([])}
+            >
+              Keine
+            </span>
+            {SUBGROUPS[newGroup].map((sg) => (
+              <span
+                key={sg.id}
+                className={`chip chip-sm ${newSubgroups.includes(sg.id) ? "active" : ""}`}
+                onClick={() =>
+                  setNewSubgroups((prev) =>
+                    prev.includes(sg.id) ? prev.filter((id) => id !== sg.id) : [...prev, sg.id]
+                  )
+                }
+              >
+                {sg.label}
+              </span>
+            ))}
+          </div>
+        </div>
+      )}
       <div style={{ marginTop: 10 }}>
         <label className="field-label">Nebenmuskelgruppen (optional)</label>
         <div className="chip-row" style={{ marginTop: 6 }}>
@@ -11857,32 +12031,6 @@ function NewExerciseForm({ exercises, onAddCustom, onSetExerciseSubgroups, onDon
             );
           })}
       </div>
-      {(SUBGROUPS[newGroup] || []).length > 0 && (
-        <div style={{ marginTop: 10 }}>
-          <label className="field-label">Untergruppen (optional)</label>
-          <div className="chip-row" style={{ marginTop: 6 }}>
-            <span
-              className={`chip chip-sm ${newSubgroups.length === 0 ? "active" : ""}`}
-              onClick={() => setNewSubgroups([])}
-            >
-              Keine
-            </span>
-            {SUBGROUPS[newGroup].map((sg) => (
-              <span
-                key={sg.id}
-                className={`chip chip-sm ${newSubgroups.includes(sg.id) ? "active" : ""}`}
-                onClick={() =>
-                  setNewSubgroups((prev) =>
-                    prev.includes(sg.id) ? prev.filter((id) => id !== sg.id) : [...prev, sg.id]
-                  )
-                }
-              >
-                {sg.label}
-              </span>
-            ))}
-          </div>
-        </div>
-      )}
       <div style={{ marginTop: 10 }}>
         <label className="field-label">Gerät</label>
         <div className="chip-row" style={{ marginTop: 6 }}>
@@ -15369,23 +15517,38 @@ function LogView({
   const addSet = (entryId, warmup = false) => {
     onUpdateSession({
       ...session,
-      entries: session.entries.map((e) =>
-        e.id === entryId
-          ? {
-              ...e,
-              sets: [
-                ...e.sets,
-                {
-                  reps: warmup ? "" : e.targetReps || 10,
-                  weight: warmup ? "" : e.targetWeight || 0,
-                  duration: warmup ? "" : e.targetDuration || 0,
-                  done: false,
-                  warmup,
-                },
-              ],
-            }
-          : e
-      ),
+      entries: session.entries.map((e) => {
+        if (e.id !== entryId) return e;
+        // Ein neuer Satz nimmt das Band des Satzes davor - oder, beim ersten
+        // Satz einer frisch hinzugefügten Übung, das vom letzten Training.
+        const bandVorlage = warmup
+          ? null
+          : [...e.sets].reverse().find((x) => x.bandId && !x.warmup) ||
+            (e.sets.length === 0
+              ? (getExerciseHistory(logs, e.exerciseId, session.id)?.lastSets || [])
+                  .find((x) => x.bandId && !x.warmup)
+              : null);
+        return {
+          ...e,
+          sets: [
+            ...e.sets,
+            {
+              reps: warmup ? "" : e.targetReps || 10,
+              weight: warmup ? "" : bandVorlage ? bandVorlage.weight : e.targetWeight || 0,
+              duration: warmup ? "" : e.targetDuration || 0,
+              done: false,
+              warmup,
+              ...(bandVorlage
+                ? {
+                    bandId: bandVorlage.bandId,
+                    bandName: bandVorlage.bandName || null,
+                    bandColor: bandVorlage.bandColor || null,
+                  }
+                : {}),
+            },
+          ],
+        };
+      }),
     });
   };
   const updateSet = (entryId, idx, field, value) => {
@@ -15416,7 +15579,7 @@ function LogView({
               sets: e.sets.map((s, i) => {
                 if (i < idx) return s;
                 if (i > idx && (s.bandId || s.done)) return s;
-                return { ...s, bandId: band.id, bandName: band.name, weight: band.kg };
+                return { ...s, ...bandFelder(band) };
               }),
             }
           : e
@@ -16294,9 +16457,16 @@ function LogView({
                         {isBandExercise ? (
                           <button
                             className="band-pick"
-                            onClick={() => setBandPickFor({ entryId: entry.id, idx })}
+                            onClick={() => setBandPickFor({
+                              entryId: entry.id,
+                              idx,
+                              art: bevorzugteBandArt(bands, entry.sets, history.lastSets),
+                            })}
                             title="Band wählen"
                           >
+                            {s.bandColor && (
+                              <span className="folder-dot band-dot" style={{ background: s.bandColor }} />
+                            )}
                             {s.bandName || "Band"}
                           </button>
                         ) : (
@@ -16499,22 +16669,34 @@ function LogView({
             </div>
           ) : (
             <div className="modal-list">
-              {bands.map((b) => (
-                <div
-                  className="modal-option"
-                  key={b.id}
-                  onClick={() => {
-                    // Wer ein Band waehlt, nimmt fast immer dasselbe fuer die
-                    // restlichen Saetze der Uebung. Gefuellt werden deshalb
-                    // auch die folgenden Saetze - aber nur die, bei denen noch
-                    // kein Band steht und die noch nicht abgehakt sind.
-                    applyBandFrom(bandPickFor.entryId, bandPickFor.idx, b);
-                    setBandPickFor(null);
-                  }}
-                >
-                  <span>{b.name}</span>
-                  <span className="tag">{fmtDecimal(b.kg)} kg</span>
-                </div>
+              {bandGruppen(bands, bandPickFor.art).map((g, gi, alle) => (
+                <React.Fragment key={g.id || "ohne"}>
+                  {/* Eine Überschrift nur, wenn es mehr als eine Gruppe gibt -
+                      bei lauter langen Bändern wäre "Lang" darüber nur Lärm. */}
+                  {alle.length > 1 && (
+                    <div className="band-group-label">{g.label}</div>
+                  )}
+                  {g.bands.map((b) => (
+                    <div
+                      className="modal-option"
+                      key={b.id}
+                      onClick={() => {
+                        // Wer ein Band waehlt, nimmt fast immer dasselbe fuer die
+                        // restlichen Saetze der Uebung. Gefuellt werden deshalb
+                        // auch die folgenden Saetze - aber nur die, bei denen noch
+                        // kein Band steht und die noch nicht abgehakt sind.
+                        applyBandFrom(bandPickFor.entryId, bandPickFor.idx, b);
+                        setBandPickFor(null);
+                      }}
+                    >
+                      <span className="folder-chip">
+                        {b.color && <span className="folder-dot" style={{ background: b.color }} />}
+                        {b.name}
+                      </span>
+                      <span className="tag">{fmtDecimal(b.kg)} kg</span>
+                    </div>
+                  ))}
+                </React.Fragment>
               ))}
               <div
                 className="modal-option"
@@ -16522,6 +16704,7 @@ function LogView({
                   updateSetFields(bandPickFor.entryId, bandPickFor.idx, {
                     bandId: null,
                     bandName: null,
+                    bandColor: null,
                     weight: 0,
                   });
                   setBandPickFor(null);
@@ -16909,7 +17092,9 @@ export function buildPercentSeries(data, keys, compareWeeks, toleranceDays = PER
 // die vorher ausgerechnet hatten, dass die Uebung gar keine Zeit-Uebung ist.
 export function shortSet(s, isTimeBased = false) {
   if (!s) return "";
-  if (isTimeBased) return `${toNum(s.duration)}s`;
+  // Bei einer Zeitübung mit Band gehört das Band dazu - "30s" allein sagt
+  // nicht, ob es das schwarze oder das rote war.
+  if (isTimeBased) return s.bandName ? `${s.bandName} · ${toNum(s.duration)}s` : `${toNum(s.duration)}s`;
   const weight = toNum(s.weight);
   const reps = toNum(s.reps);
   // Bei einem Band sagt der Name mehr als die Kilogramm: "Rot ×15" ist die

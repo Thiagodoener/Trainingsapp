@@ -993,6 +993,17 @@ Feld „Zweck" (Training/Reha/Mobilität), das zugleich die Statistik steuert �
 ums Finden geht und nicht ums Rechnen. Wer eine Reha-Übung aus „Sätze pro Muskelgruppe" nehmen
 will, nutzt dafür weiter „Ohne Statistik"; zwei Wege zur selben Wirkung wären nicht erklärbar.
 
+**Bänder haben eine Art und eine Farbe, und das Band steht am Satz.**
+Ein Band ist jetzt lang oder kurz und trägt seine echte Farbe. Die Art trennt, was sich nicht
+vertauschen lässt – ein rotes langes und ein rotes kurzes Band sind zwei Bänder mit eigenem
+kg-Wert. In der Auswahl im Training stehen die Bänder nach Art gruppiert, die zuletzt bei dieser
+Übung benutzte Art zuerst. Ein Satz schreibt „Rot (lang)" und die Farbe mit, statt sie
+nachzuschlagen, damit ein Umbenennen alte Trainings nicht verändert. Neu ist außerdem: Das Band
+vom letzten Mal wird beim nächsten Training vorbelegt (vorher kam nur sein kg-Wert an, und das
+Feld zeigte leer „Band"), ein neuer Satz übernimmt das Band des Satzes davor, und bei
+Zeitübungen steht das Band im Verlauf und unter „Letztes Mal" mit dabei („Schwarz (lang) · 30s"
+statt nur „30s").
+
 ---
 
 ## Offene Punkte

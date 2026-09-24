@@ -4360,9 +4360,28 @@ function TrainingAppInner() {
   };
 
   const [navHidden, setNavHidden] = useState(false);
+  // Höhe von Navigation + Trainings-Leiste als CSS-Variable, damit Inhalte
+  // (z. B. die Knöpfe der Übungsauswahl) exakt darauf aufsetzen können.
+  const dockRef = useRef(null);
+  useEffect(() => {
+    const dock = dockRef.current;
+    if (!dock || typeof ResizeObserver === "undefined") return undefined;
+    const setzen = () => document.documentElement.style.setProperty("--dock-h", `${dock.offsetHeight}px`);
+    setzen();
+    const ro = new ResizeObserver(setzen);
+    ro.observe(dock);
+    return () => ro.disconnect();
+  }, []);
   const [theme, setTheme] = useState("light");
   const lastScrollY = useRef(0);
   const handleContentScroll = (e) => {
+    // In der Übungsauswahl eines Plans kleben Abbrechen/Weiter auf der
+    // Navigation - die bleibt dort stehen, sonst hinge die Leiste in der Luft.
+    if (e.currentTarget.querySelector(".picker-step")) {
+      setNavHidden(false);
+      lastScrollY.current = e.currentTarget.scrollTop;
+      return;
+    }
     const y = e.currentTarget.scrollTop;
     const last = lastScrollY.current;
     if (y < 10) {
@@ -6883,6 +6902,11 @@ function TrainingAppInner() {
         .set-swipe-hint[data-dir="left"] .set-swipe-done { opacity: 0; }
         .set-swipe-done { color: var(--success); display: flex; }
         .set-swipe-del { color: var(--danger); display: flex; }
+        .set-swipe > .builder-item-head {
+          position: relative;
+          background: var(--bg);
+          touch-action: pan-y;
+        }
         .set-swipe > .set-row {
           position: relative;
           background: var(--surface);
@@ -7843,19 +7867,27 @@ function TrainingAppInner() {
            can be open or closed, and the status bar inset differs per device -
            any fixed number pushed the buttons under the navigation bar in some
            combination. Letting the list take whatever is left over is exact. */
+        /* Inzwischen scrollt die ganze Seite statt nur der Liste: so
+           verschwinden Name, Suche und Filter beim Runterscrollen und die
+           Liste bekommt den Platz. Die Knöpfe kleben unten direkt auf der
+           Navigation (--dock-h misst die App), ohne leeren Streifen. */
         .picker-step {
-          display: flex;
-          flex-direction: column;
-          min-height: 0;
-          height: calc(100dvh - env(safe-area-inset-top) - env(safe-area-inset-bottom) - 150px);
+          padding-bottom: var(--dock-h, 64px);
         }
-        .exercise-picker-list {
-          flex: 1;
-          min-height: 140px;
-          overflow-y: auto;
+        .content:has(.picker-step) {
+          padding-bottom: 0;
         }
         .picker-actions {
-          flex-shrink: 0;
+          position: sticky;
+          bottom: var(--dock-h, 64px);
+          z-index: 5;
+          display: flex;
+          gap: 8px;
+          padding: 6px 0;
+          background: var(--bg);
+        }
+        .picker-actions .btn {
+          min-height: 38px;
         }
         .pr-badge-clickable {
           cursor: pointer;
@@ -9896,7 +9928,7 @@ function TrainingAppInner() {
       {/* Leiste und Navigation sitzen in einem gemeinsamen Dock: so
           verschieben sie sich beim Ausblenden zusammen, statt getrennt
           übereinander wegzurutschen. */}
-      <div className={`bottom-dock ${navHidden ? "nav-hidden" : ""}`}>
+      <div className={`bottom-dock ${navHidden ? "nav-hidden" : ""}`} ref={dockRef}>
         {session && tab !== "log" && (
           <ActiveSessionBar
             session={session}
@@ -14038,23 +14070,20 @@ function PlanBuilder({
         )}
       </div>
 
-          {items.length === 0 && (
-            <div style={{ color: "var(--text-dim)", fontSize: 12.5, marginTop: 4, marginBottom: 4 }}>
-              Wähle mindestens eine Übung aus.
-            </div>
-          )}
-          <div className="picker-actions" style={{ display: "flex", gap: 8, marginTop: 4 }}>
-            <button className="btn btn-ghost" style={{ flex: 1 }} onClick={onCancel}>
-              <X size={16} /> Abbrechen
+          {/* Klebt direkt über der Navigation; der Hinweistext darüber ist
+              entfallen - der ausgegraute Knopf sagt dasselbe. */}
+          <div className="picker-actions">
+            <button className="btn btn-ghost btn-sm" style={{ flex: 1 }} onClick={onCancel}>
+              <X size={15} /> Abbrechen
             </button>
             <button
-              className="btn btn-primary"
+              className="btn btn-primary btn-sm"
               style={{ flex: 2 }}
               disabled={items.length === 0}
               onClick={() => setStep(2)}
             >
               Weiter ({items.length} {items.length === 1 ? "Übung" : "Übungen"})
-              <ChevronRight size={16} />
+              <ChevronRight size={15} />
             </button>
           </div>
         </div>
@@ -14145,8 +14174,7 @@ function PlanBuilder({
           </div>
 
           <div className="card">
-            <span className="plan-title">Übungen einstellen</span>
-            <div style={{ marginTop: 10 }}>
+            <div>
               {items.map((it, itemIndex) => {
                 const ex = exById[it.exerciseId];
                 // With the automatic run on, every exercise is timed unless it
@@ -14174,7 +14202,11 @@ function PlanBuilder({
                     ref={(el) => { itemRefs.current[it.id] = el; }}
                     className={`plan-item-row builder-item ${isOpen ? "is-open" : ""} ${itemMenuId === it.id ? "menu-open" : ""} ${isDragging ? "is-dragging" : ""}`}
                   >
-                    <div className="builder-item-head">
+                    {/* Nach links wischen entfernt die Übung, wie bei den Sätzen. */}
+                    <SwipeableSetRow
+                      className="builder-item-head"
+                      onSwipeLeft={() => { removeItem(it.id); setItemMenuId(null); }}
+                    >
                       <span
                         className="drag-handle"
                         title="Gedrückt halten, um die Reihenfolge zu ändern"
@@ -14294,7 +14326,7 @@ function PlanBuilder({
                       >
                         {isOpen ? <ChevronDown size={15} /> : <ChevronRight size={15} />}
                       </span>
-                    </div>
+                    </SwipeableSetRow>
 
                     {isOpen && (
                       <div className="builder-item-body">
@@ -14421,14 +14453,11 @@ function PlanBuilder({
                 );
               })}
             </div>
-            <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
-              <button className="btn btn-ghost btn-sm" style={{ flex: 1 }} onClick={() => { setStep(1); setItemMenuId(null); }}>
-                <Plus size={14} /> Übung hinzufügen
-              </button>
-              <button className="btn btn-ghost btn-sm" style={{ flex: 1 }} onClick={() => openNewExercise("")}>
-                <Plus size={14} /> Neue Übung
-              </button>
-            </div>
+            {/* Zur Auswahl zurück geht es über „Übungen“ unten - ein
+                zweiter Knopf dafür hier war doppelt. */}
+            <button className="btn btn-ghost btn-sm btn-block" style={{ marginTop: 10 }} onClick={() => openNewExercise("")}>
+              <Plus size={14} /> Neue Übung
+            </button>
           </div>
 
           {!name.trim() && (

@@ -7874,6 +7874,23 @@ function TrainingAppInner() {
         .picker-step {
           padding-bottom: var(--dock-h, 64px);
         }
+        .picker-search {
+          position: sticky;
+          /* .content hat 8px Innenabstand oben; ohne diesen Ausgleich
+             schaute die Liste im Spalt über der Suche hervor. */
+          top: -8px;
+          margin-top: -8px;
+          padding-top: 8px;
+          z-index: 6;
+          background: var(--bg);
+          padding-bottom: 10px;
+          transition: transform 0.22s ease;
+        }
+        /* Nur im versteckten Zustand ein transform: sonst würde es für
+           fixed-positionierte Inhalte einen neuen Bezugsrahmen bilden. */
+        .picker-search.is-hidden {
+          transform: translateY(-100%);
+        }
         .content:has(.picker-step) {
           padding-bottom: 0;
         }
@@ -13563,6 +13580,37 @@ function PlanBuilder({
   // very long scroll on a phone. Editing an existing plan opens on step 2
   // because the exercises are usually already the right ones.
   const [step, setStep] = useState(initialPlan?.items?.length ? 2 : 1);
+  // Suche und Filter der Übungsauswahl kleben oben: beim Runterscrollen
+  // gleiten sie weg, beim Hochscrollen kommen sie sofort wieder. Der Name
+  // darüber scrollt dagegen ganz normal mit und erscheint erst wieder,
+  // wenn man ganz oben ist.
+  const pickerStepRef = useRef(null);
+  const pickerSearchRef = useRef(null);
+  const [pickerSearchHidden, setPickerSearchHidden] = useState(false);
+  useEffect(() => {
+    if (step !== 1) return undefined;
+    const content = pickerStepRef.current?.closest(".content");
+    if (!content) return undefined;
+    let last = content.scrollTop;
+    const onScroll = () => {
+      const y = content.scrollTop;
+      const stepEl = pickerStepRef.current;
+      const searchEl = pickerSearchRef.current;
+      if (!stepEl || !searchEl) return;
+      // Erst ausblenden, wenn die Leiste wirklich oben klebt - vorher steht
+      // sie noch an ihrem normalen Platz unter dem Namen.
+      const stepTop = stepEl.getBoundingClientRect().top - content.getBoundingClientRect().top + y;
+      if (y <= stepTop + searchEl.offsetHeight) setPickerSearchHidden(false);
+      else if (y > last + 6) setPickerSearchHidden(true);
+      else if (y < last - 6) setPickerSearchHidden(false);
+      last = y;
+    };
+    content.addEventListener("scroll", onScroll, { passive: true });
+    return () => {
+      content.removeEventListener("scroll", onScroll);
+      setPickerSearchHidden(false);
+    };
+  }, [step]);
   const [expandedItemId, setExpandedItemId] = useState(null);
   // Rest times are set here so a workout starts with the right pause
   // instead of having to be adjusted mid-session every time.
@@ -13999,7 +14047,8 @@ function PlanBuilder({
       )}
 
       {step === 1 ? (
-        <div className="picker-step">
+        <div className="picker-step" ref={pickerStepRef}>
+      <div className={`picker-search ${pickerSearchHidden ? "is-hidden" : ""}`} ref={pickerSearchRef}>
       <div className="search-box">
         <Search size={16} color="var(--text-dim)" />
         <input
@@ -14017,12 +14066,13 @@ function PlanBuilder({
         filter={filter}
         onChange={setFilter}
         tags={exerciseTagging.tags}
-        style={{ marginBottom: 10 }}
+        style={{ marginBottom: 0 }}
       >
         <button type="button" className="chip chip-sm filter-pill filter-new" onClick={() => openNewExercise("")}>
           <Plus size={12} /> Neue Übung
         </button>
       </UebungsFilter>
+      </div>
       <div className="card exercise-picker-list">
         {filtered.length === 0 && (
           <div className="empty-state" style={{ padding: "14px 0" }}>

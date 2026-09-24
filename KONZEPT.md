@@ -1004,6 +1004,38 @@ Feld zeigte leer „Band"), ein neuer Satz übernimmt das Band des Satzes davor,
 Zeitübungen steht das Band im Verlauf und unter „Letztes Mal" mit dabei („Schwarz (lang) · 30s"
 statt nur „30s").
 
+**Im Workout wird jeder Satz einzeln geplant.**
+Statt „W / Sätze / Wdh. / kg" für alle Sätze gleich trägt ein Plan-Eintrag seine Sätze als
+Liste (`setPlan`), dargestellt wie im laufenden Training: Tipp auf die Nummer wählt die Satzart,
+unten „+ Satz hinzufügen", Wischen nach links entfernt. Was in Satz 1 (dem ersten Arbeitssatz)
+eingetragen wird, geht an die folgenden Arbeitssätze weiter – außer an Sätze, bei denen genau
+dieses Feld schon einzeln geändert wurde. So bleiben drei gleiche Sätze eine einzige Eingabe,
+eine Pyramide ist trotzdem möglich. Bei Bandübungen steht statt „kg" die Bandauswahl, pro Satz.
+Die alten Felder (`sets`, `reps`, `weight` …) werden beim Speichern als Zusammenfassung
+mitgeschrieben; alte Pläne ohne Satzliste werden beim Öffnen daraus aufgebaut.
+
+**Beim Trainingsstart gilt das Neuere – aber nur, wenn an der Übung wirklich etwas geändert
+wurde.** Die Satzzahl kommt immer aus dem Plan. Die Werte (Wdh., kg, Sekunden, Band) kommen
+vom letzten Training dieser Übung – es sei denn, genau diese Werte wurden im Plan geändert,
+nachdem die Übung zuletzt trainiert wurde (`werteGeaendertAm`). Beispiel: Die Physio sagt „ab
+jetzt das grüne Band", man stellt Grün im Plan ein, und das nächste Training startet mit Grün
+statt mit dem roten Band vom letzten Mal. Einen Satz hinzufügen, eine andere Übung ändern oder
+Name und Pausen des Workouts ändern zählt nicht. Das automatische Nachziehen des Plans nach
+einem Training (Satz für Satz) setzt das Datum ebenfalls nicht – das hat ja nicht man selbst
+geändert.
+
+**Filter: drei Knöpfe statt vier Chip-Reihen.** Muskel, Gerät und Tag stehen als je ein Knopf
+in einer Zeile, überall gleich (Übungen-Tab, Workout erstellen, Übung hinzufügen/tauschen im
+Training). Ein Tipp klappt die Auswahl als Liste auf; bei Muskel erscheinen die Untergruppen der
+angetippten Gruppe rechts daneben. Vorher scrollten die Reihen seitlich, und Optionen wie
+„Band" waren erst nach Wischen zu sehen. Ein aktiver Filter zeigt seinen Wert und lässt sich mit
+× direkt entfernen.
+
+**Neue Übung ohne Umweg beim Workout-Erstellen.** „+ Neue Übung" steht in der Filterzeile statt
+im ⋮-Menü, findet die Suche nichts, lässt sich genau diese Übung anlegen (Name schon
+eingetragen), und im zweiten Schritt gibt es unter der Liste „+ Übung hinzufügen" und „+ Neue
+Übung". Eine neu angelegte Übung landet direkt im Workout.
+
 ---
 
 ## Offene Punkte

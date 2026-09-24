@@ -1,0 +1,10 @@
+# Die App wird ausschliesslich ueber GitHub Pages veroeffentlicht
+# (.github/workflows/app-veroeffentlichen.yml). Netlify ist nur noch als
+# GitHub-App mit dem Repository verbunden und wuerde sonst bei jedem Push und
+# jedem Pull Request weiter bauen - und dafuer Guthaben abbuchen.
+#
+# "exit 0" sagt Netlify: nichts geaendert, Build ueberspringen. Das gilt fuer
+# die Hauptseite und fuer Deploy-Previews. Auf GitHub Pages hat diese Datei
+# keinerlei Einfluss.
+[build]
+  ignore = "exit 0"

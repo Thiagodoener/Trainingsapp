@@ -1024,12 +1024,14 @@ Name und Pausen des Workouts ändern zählt nicht. Das automatische Nachziehen d
 einem Training (Satz für Satz) setzt das Datum ebenfalls nicht – das hat ja nicht man selbst
 geändert.
 
-**Filter: drei Knöpfe statt vier Chip-Reihen.** Muskel, Gerät und Tag stehen als je ein Knopf
-in einer Zeile, überall gleich (Übungen-Tab, Workout erstellen, Übung hinzufügen/tauschen im
-Training). Ein Tipp klappt die Auswahl als Liste auf; bei Muskel erscheinen die Untergruppen der
-angetippten Gruppe rechts daneben. Vorher scrollten die Reihen seitlich, und Optionen wie
-„Band" waren erst nach Wischen zu sehen. Ein aktiver Filter zeigt seinen Wert und lässt sich mit
-× direkt entfernen.
+**Filter: Chip-Reihen, die beim Scrollen Platz machen.** Die Variante mit drei Knöpfen und
+aufklappender Liste (kurz im Einsatz) war zu umständlich – zu viele Tipps pro Filter. Zurück
+also zu Chips (ein Tipp pro Filter): Muskelgruppe, Untergruppe (erst wenn eine Gruppe gewählt
+ist), Gerät, Tag. Die beiden alten Probleme sind anders gelöst: Suche und Filter kleben oben und
+gleiten beim Runterscrollen weg, beim Hochscrollen kommen sie sofort wieder (Übungen-Tab,
+Workout-Erstellen, „Übung hinzufügen" im Training). Und Geräte und Tags stehen nach Nutzung in
+echten Trainings sortiert, damit das Übliche vorne steht und nicht erst hinter dem
+Bildschirmrand.
 
 **Neue Übung ohne Umweg beim Workout-Erstellen.** „+ Neue Übung" steht in der Filterzeile statt
 im ⋮-Menü, findet die Suche nichts, lässt sich genau diese Übung anlegen (Name schon

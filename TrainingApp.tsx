@@ -6945,81 +6945,27 @@ function TrainingAppInner() {
           grid-template-columns: 38px 4px;
         }
 
-        /* Übungsfilter: eine Zeile Knöpfe, Auswahl klappt darunter auf. */
-        .filter-row {
-          display: flex;
-          flex-wrap: wrap;
-          gap: 6px;
-          align-items: center;
+        /* Übungsfilter: Chip-Reihen dicht untereinander. */
+        .filter-rows .chip-row {
+          margin-bottom: 6px;
         }
-        .filter-pill {
-          font-family: inherit;
-          border: none;
-          white-space: nowrap;
+        .filter-rows .chip-row:last-child {
+          margin-bottom: 0;
         }
-        .filter-pill.is-open:not(.active) {
-          background: var(--border);
-        }
-        .filter-pill-x {
+        .chip.filter-new {
+          color: var(--accent);
+          font-weight: 600;
           display: inline-flex;
-          margin: -6px -6px -6px 0;
-          padding: 6px;
-        }
-        .filter-new {
-          color: var(--accent);
-          font-weight: 600;
-        }
-        .filter-panel {
-          display: grid;
-          gap: 6px;
-          margin-top: 8px;
-          padding: 6px;
-          border: 1px solid var(--border);
-          border-radius: 12px;
-          background: var(--elevated);
-        }
-        .filter-panel-2col {
-          grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-        }
-        .filter-col {
-          display: flex;
-          flex-direction: column;
-          gap: 2px;
-          min-width: 0;
-        }
-        .filter-col-sub {
-          border-left: 1px solid var(--border);
-          padding-left: 6px;
-        }
-        .filter-opt {
-          display: flex;
           align-items: center;
-          justify-content: space-between;
-          gap: 6px;
-          width: 100%;
-          text-align: left;
-          padding: 9px 10px;
-          border: none;
-          border-radius: 8px;
-          background: transparent;
-          color: var(--text);
-          font-family: 'Inter', sans-serif;
-          font-size: 14px;
-          cursor: pointer;
+          gap: 4px;
         }
-        .filter-opt.active {
-          background: var(--fill);
-          color: var(--accent);
-          font-weight: 600;
-        }
-        .filter-opt-label {
-          min-width: 0;
-          overflow-wrap: break-word;
-        }
-        .filter-hint {
-          font-size: 12px;
-          color: var(--text-dim);
-          padding: 9px 6px;
+        /* Kopf in einem Fenster: dort scrollt .modal-body, ohne Innenabstand
+           oben, und der Grund ist die Fensterfarbe. */
+        .modal-body .picker-search {
+          top: 0;
+          margin-top: 0;
+          padding-top: 0;
+          background: var(--elevated);
         }
 
         .band-group-label {
@@ -12386,137 +12332,161 @@ export function passtZumFilter(e, f, { subgroupOverrides, equipmentOverrides, ta
   );
 }
 
-// Muskel, Gerät und Tag als je ein Knopf in einer Zeile - statt bis zu vier
-// Chip-Reihen, die seitlich scrollen und Optionen verstecken. Ein Tipp klappt
-// die Auswahl als Liste darunter auf; bei den Muskeln erscheinen die
-// Untergruppen der angetippten Gruppe rechts daneben. Weitere Knöpfe (z. B.
-// "Neue Übung") kommen als children in dieselbe Zeile.
-function UebungsFilter({ filter, onChange, tags = [], children, style }) {
-  const [offen, setOffen] = useState(null);
-  const [muskelSicht, setMuskelSicht] = useState(null);
-  const ref = useRef(null);
-  useEffect(() => {
-    if (!offen) return;
-    const zu = (e) => { if (ref.current && !ref.current.contains(e.target)) setOffen(null); };
-    document.addEventListener("click", zu);
-    return () => document.removeEventListener("click", zu);
-  }, [offen]);
+// Wie oft Geräte und Tags in echten Trainings vorkommen - danach werden die
+// Chips sortiert, damit das Übliche vorne steht und nicht erst hinter dem
+// Bildschirmrand (vorher lag z. B. "Band" rechts außerhalb und musste erst
+// hergewischt werden).
+export function filterNutzung(logs, exercises, { equipmentOverrides, tagAssignments } = {}) {
+  const byId = Object.fromEntries((Array.isArray(exercises) ? exercises : []).map((e) => [e.id, e]));
+  const equipment = {};
+  const tags = {};
+  (Array.isArray(logs) ? logs : []).forEach((l) => {
+    logEntries(l).forEach((entry) => {
+      if (performedSets(entrySets(entry)).length === 0) return;
+      const ex = byId[entry.exerciseId];
+      if (ex) {
+        const eq = getExerciseEquipment(ex, equipmentOverrides);
+        equipment[eq] = (equipment[eq] || 0) + 1;
+      }
+      const zugeordnet = tagAssignments?.[entry.exerciseId];
+      (Array.isArray(zugeordnet) ? zugeordnet : []).forEach((t) => { tags[t] = (tags[t] || 0) + 1; });
+    });
+  });
+  return { equipment, tags };
+}
 
+// Häufigstes zuerst; bei Gleichstand bleibt die gewohnte Reihenfolge.
+export function nachNutzung(liste, zaehler, key = (x) => x) {
+  return liste
+    .map((x, i) => ({ x, i, n: zaehler?.[key(x)] || 0 }))
+    .sort((a, b) => b.n - a.n || a.i - b.i)
+    .map((o) => o.x);
+}
+
+// Muskelgruppe, Untergruppe, Gerät und Tag als Chip-Reihen: ein Tipp pro
+// Filter. Die Untergruppen erscheinen erst, wenn eine Muskelgruppe gewählt
+// ist; Geräte und Tags stehen nach Nutzung sortiert. Weitere Knöpfe (z. B.
+// "Neue Übung") kommen als children vorne in die erste Reihe.
+function UebungsFilter({ filter, onChange, tags = [], nutzung = null, children, style }) {
   const set = (patch) => onChange({ ...filter, ...patch });
+  const untergruppen = filter.group !== "alle" ? SUBGROUPS[filter.group] || [] : [];
   const gruppe = MUSCLE_GROUPS.find((g) => g.id === filter.group);
-  const untergruppe = (SUBGROUPS[filter.group] || []).find((sg) => sg.id === filter.subgroup);
-  const aktiverTag = tags.find((t) => t.id === filter.tag);
-  const umschalten = (name) => {
-    if (name === "muskel") setMuskelSicht(filter.group !== "alle" ? filter.group : null);
-    setOffen((o) => (o === name ? null : name));
-  };
-  const knopf = (name, aktiv, label, leeren, extraStyle) => (
-    <button
-      type="button"
-      className={`chip chip-sm filter-pill ${aktiv ? "active" : ""} ${offen === name ? "is-open" : ""}`}
-      style={extraStyle}
-      onClick={() => umschalten(name)}
-    >
-      {label}
-      {aktiv ? (
-        <span
-          className="filter-pill-x"
-          role="button"
-          title="Filter entfernen"
-          onClick={(e) => { e.stopPropagation(); leeren(); setOffen(null); }}
-        >
-          <X size={12} />
-        </span>
-      ) : (
-        <ChevronDown size={12} />
-      )}
-    </button>
-  );
-  const option = (key, aktiv, inhalt, onClick, mitPfeil = false) => (
-    <button key={key} type="button" className={`filter-opt ${aktiv ? "active" : ""}`} onClick={onClick}>
-      {/* "Adduktoren/Abduktoren" darf am Schrägstrich umbrechen, nicht mitten im Wort. */}
-      <span className="filter-opt-label">{typeof inhalt === "string" ? inhalt.replace(/\//g, "/\u200b") : inhalt}</span>
-      {mitPfeil ? <ChevronRight size={14} /> : aktiv ? <Check size={14} /> : null}
-    </button>
-  );
-  const sichtGruppe = MUSCLE_GROUPS.find((g) => g.id === muskelSicht);
-
+  const geraete = nachNutzung(EQUIPMENT_OPTIONS, nutzung?.equipment);
+  const tagListe = nachNutzung(Array.isArray(tags) ? tags : [], nutzung?.tags, (t) => t.id);
   return (
-    <div ref={ref} style={style}>
-      <div className="filter-row">
-        {knopf(
-          "muskel",
-          filter.group !== "alle",
-          gruppe ? (untergruppe ? `${gruppe.label} · ${untergruppe.label}` : gruppe.label) : "Muskel",
-          () => set({ group: "alle", subgroup: "alle" })
-        )}
-        {knopf("geraet", filter.equipment !== "alle", filter.equipment !== "alle" ? filter.equipment : "Gerät", () => set({ equipment: "alle" }))}
-        {tags.length > 0 &&
-          knopf(
-            "tag",
-            !!aktiverTag,
-            aktiverTag ? aktiverTag.name : "Tag",
-            () => set({ tag: "alle" }),
-            aktiverTag ? { background: aktiverTag.color } : undefined
-          )}
+    <div className="filter-rows" style={style}>
+      <div className="chip-row">
         {children}
+        <span
+          className={`chip ${filter.group === "alle" ? "active" : ""}`}
+          onClick={() => set({ group: "alle", subgroup: "alle" })}
+        >
+          Alle
+        </span>
+        {MUSCLE_GROUPS.map((g) => (
+          <span
+            key={g.id}
+            className={`chip ${filter.group === g.id ? "active" : ""}`}
+            onClick={() => set({ group: filter.group === g.id ? "alle" : g.id, subgroup: "alle" })}
+          >
+            {g.label}
+          </span>
+        ))}
       </div>
-      {offen === "muskel" && (
-        <div className="filter-panel filter-panel-2col">
-          <div className="filter-col">
-            {option("alle", filter.group === "alle", "Alle", () => { set({ group: "alle", subgroup: "alle" }); setOffen(null); })}
-            {MUSCLE_GROUPS.map((g) =>
-              option(g.id, muskelSicht === g.id, g.label, () => {
-                set({ group: g.id, subgroup: "alle" });
-                setMuskelSicht(g.id);
-                if (!(SUBGROUPS[g.id] || []).length) setOffen(null);
-              }, (SUBGROUPS[g.id] || []).length > 0)
-            )}
-          </div>
-          <div className="filter-col filter-col-sub">
-            {sichtGruppe ? (
-              <>
-                {option("alle", filter.group === sichtGruppe.id && filter.subgroup === "alle", `Alle ${sichtGruppe.label}`, () => {
-                  set({ group: sichtGruppe.id, subgroup: "alle" });
-                  setOffen(null);
-                })}
-                {(SUBGROUPS[sichtGruppe.id] || []).map((sg) =>
-                  option(sg.id, filter.subgroup === sg.id, sg.label, () => {
-                    set({ group: sichtGruppe.id, subgroup: sg.id });
-                    setOffen(null);
-                  })
-                )}
-              </>
-            ) : (
-              <div className="filter-hint">Links eine Muskelgruppe antippen, dann stehen hier ihre Untergruppen.</div>
-            )}
-          </div>
+      {untergruppen.length > 0 && (
+        <div className="chip-row">
+          <span
+            className={`chip chip-sm ${filter.subgroup === "alle" ? "active" : ""}`}
+            onClick={() => set({ subgroup: "alle" })}
+          >
+            Alle {gruppe?.label}
+          </span>
+          {untergruppen.map((sg) => (
+            <span
+              key={sg.id}
+              className={`chip chip-sm ${filter.subgroup === sg.id ? "active" : ""}`}
+              onClick={() => set({ subgroup: filter.subgroup === sg.id ? "alle" : sg.id })}
+            >
+              {sg.label}
+            </span>
+          ))}
         </div>
       )}
-      {offen === "geraet" && (
-        <div className="filter-panel">
-          <div className="filter-col">
-            {option("alle", filter.equipment === "alle", "Alle Geräte", () => { set({ equipment: "alle" }); setOffen(null); })}
-            {EQUIPMENT_OPTIONS.map((opt) =>
-              option(opt, filter.equipment === opt, opt, () => { set({ equipment: opt }); setOffen(null); })
-            )}
-          </div>
-        </div>
-      )}
-      {offen === "tag" && (
-        <div className="filter-panel">
-          <div className="filter-col">
-            {option("alle", filter.tag === "alle", "Alle Tags", () => { set({ tag: "alle" }); setOffen(null); })}
-            {tags.map((t) =>
-              option(t.id, filter.tag === t.id, (
-                <span className="folder-chip"><span className="folder-dot" style={{ background: t.color }} />{t.name}</span>
-              ), () => { set({ tag: t.id }); setOffen(null); })
-            )}
-          </div>
+      <div className="chip-row">
+        <span
+          className={`chip chip-sm ${filter.equipment === "alle" ? "active" : ""}`}
+          onClick={() => set({ equipment: "alle" })}
+        >
+          Alle Geräte
+        </span>
+        {geraete.map((opt) => (
+          <span
+            key={opt}
+            className={`chip chip-sm ${filter.equipment === opt ? "active" : ""}`}
+            onClick={() => set({ equipment: filter.equipment === opt ? "alle" : opt })}
+          >
+            {opt}
+          </span>
+        ))}
+      </div>
+      {tagListe.length > 0 && (
+        <div className="chip-row">
+          <span
+            className={`chip chip-sm ${filter.tag === "alle" ? "active" : ""}`}
+            onClick={() => set({ tag: "alle" })}
+          >
+            Alle Tags
+          </span>
+          {tagListe.map((t) => {
+            const aktiv = filter.tag === t.id;
+            return (
+              <span
+                key={t.id}
+                className={`chip chip-sm folder-chip ${aktiv ? "active" : ""}`}
+                style={aktiv ? { background: t.color } : undefined}
+                onClick={() => set({ tag: aktiv ? "alle" : t.id })}
+              >
+                {!aktiv && <span className="folder-dot" style={{ background: t.color }} />}
+                {t.name}
+              </span>
+            );
+          })}
         </div>
       )}
     </div>
   );
+}
+
+// Suche und Filter kleben oben an der Liste: beim Runterscrollen gleiten sie
+// weg, beim Hochscrollen kommen sie sofort wieder. Erst ausgeblendet wird,
+// wenn der Kopf wirklich oben klebt - vorher steht er noch an seinem Platz.
+// Der Kopf muss das erste Element in seinem Elternelement sein.
+function useKopfBeimScrollen(kopfRef, aktiv = true) {
+  const [versteckt, setVersteckt] = useState(false);
+  useEffect(() => {
+    if (!aktiv) return undefined;
+    const kopf = kopfRef.current;
+    const box = kopf?.parentElement?.closest(".modal-body, .content");
+    if (!kopf || !box) return undefined;
+    let last = box.scrollTop;
+    const onScroll = () => {
+      const y = box.scrollTop;
+      // Wo der Kopf ohne Kleben stünde: am Anfang seines Elternelements -
+      // oder ganz oben, wenn das Elternelement selbst der Scrollbereich ist.
+      const eltern = kopf.parentElement;
+      const start = eltern === box ? 0 : eltern.getBoundingClientRect().top - box.getBoundingClientRect().top + y;
+      if (y <= start + kopf.offsetHeight) setVersteckt(false);
+      else if (y > last + 6) setVersteckt(true);
+      else if (y < last - 6) setVersteckt(false);
+      last = y;
+    };
+    box.addEventListener("scroll", onScroll, { passive: true });
+    return () => {
+      box.removeEventListener("scroll", onScroll);
+      setVersteckt(false);
+    };
+  }, [aktiv, kopfRef]);
+  return versteckt;
 }
 
 // In der Übungszeile nur Punkte statt Namen - die Zeile ist mit Name und
@@ -12738,6 +12708,15 @@ function ExercisesView({
 }) {
   const [query, setQuery] = useState("");
   const [filter, setFilter] = useState(LEERER_FILTER);
+  const kopfRef = useRef(null);
+  const kopfVersteckt = useKopfBeimScrollen(kopfRef);
+  const filterZaehler = useMemo(
+    () => filterNutzung(logs, exercises, {
+      equipmentOverrides: exerciseEquipmentOverrides,
+      tagAssignments: exerciseTagging.assignments,
+    }),
+    [logs, exercises, exerciseEquipmentOverrides, exerciseTagging.assignments]
+  );
   const [creating, setCreating] = useState(false);
   const [selectedExerciseId, setSelectedExerciseId] = useState(null);
 
@@ -12810,6 +12789,7 @@ function ExercisesView({
     .sort((a, b) => (lastPerformed[b.id] || 0) - (lastPerformed[a.id] || 0));
   return (
     <div>
+      <div className={`picker-search ${kopfVersteckt ? "is-hidden" : ""}`} ref={kopfRef}>
       <div className="search-box">
         <Search size={16} color="var(--text-dim)" />
         <input
@@ -12822,8 +12802,9 @@ function ExercisesView({
         filter={filter}
         onChange={setFilter}
         tags={exerciseTagging.tags}
-        style={{ marginBottom: 12 }}
+        nutzung={filterZaehler}
       />
+      </div>
 
       {creating ? (
         <NewExerciseForm
@@ -13586,31 +13567,15 @@ function PlanBuilder({
   // wenn man ganz oben ist.
   const pickerStepRef = useRef(null);
   const pickerSearchRef = useRef(null);
-  const [pickerSearchHidden, setPickerSearchHidden] = useState(false);
-  useEffect(() => {
-    if (step !== 1) return undefined;
-    const content = pickerStepRef.current?.closest(".content");
-    if (!content) return undefined;
-    let last = content.scrollTop;
-    const onScroll = () => {
-      const y = content.scrollTop;
-      const stepEl = pickerStepRef.current;
-      const searchEl = pickerSearchRef.current;
-      if (!stepEl || !searchEl) return;
-      // Erst ausblenden, wenn die Leiste wirklich oben klebt - vorher steht
-      // sie noch an ihrem normalen Platz unter dem Namen.
-      const stepTop = stepEl.getBoundingClientRect().top - content.getBoundingClientRect().top + y;
-      if (y <= stepTop + searchEl.offsetHeight) setPickerSearchHidden(false);
-      else if (y > last + 6) setPickerSearchHidden(true);
-      else if (y < last - 6) setPickerSearchHidden(false);
-      last = y;
-    };
-    content.addEventListener("scroll", onScroll, { passive: true });
-    return () => {
-      content.removeEventListener("scroll", onScroll);
-      setPickerSearchHidden(false);
-    };
-  }, [step]);
+  const pickerSearchHidden = useKopfBeimScrollen(pickerSearchRef, step === 1);
+  const filterZaehler = useMemo(
+    () => filterNutzung(logs, exercises, {
+      equipmentOverrides: exerciseEquipmentOverrides,
+      tagAssignments: exerciseTagging.assignments,
+    }),
+    [logs, exercises, exerciseEquipmentOverrides, exerciseTagging.assignments]
+  );
+
   const [expandedItemId, setExpandedItemId] = useState(null);
   // Rest times are set here so a workout starts with the right pause
   // instead of having to be adjusted mid-session every time.
@@ -14066,11 +14031,11 @@ function PlanBuilder({
         filter={filter}
         onChange={setFilter}
         tags={exerciseTagging.tags}
-        style={{ marginBottom: 0 }}
+        nutzung={filterZaehler}
       >
-        <button type="button" className="chip chip-sm filter-pill filter-new" onClick={() => openNewExercise("")}>
-          <Plus size={12} /> Neue Übung
-        </button>
+        <span className="chip filter-new" role="button" onClick={() => openNewExercise("")}>
+          <Plus size={13} /> Neue Übung
+        </span>
       </UebungsFilter>
       </div>
       <div className="card exercise-picker-list">
@@ -15475,6 +15440,15 @@ function LogView({
     setAddExerciseQuery("");
     setAddFilter(LEERER_FILTER);
   };
+  const filterZaehler = useMemo(
+    () => filterNutzung(logs, exercises, {
+      equipmentOverrides: exerciseEquipmentOverrides,
+      tagAssignments: exerciseTagging.assignments,
+    }),
+    [logs, exercises, exerciseEquipmentOverrides, exerciseTagging.assignments]
+  );
+  const addKopfRef = useRef(null);
+  const addKopfVersteckt = useKopfBeimScrollen(addKopfRef, !!addingExercise && !creatingExercise);
   const addPickerMatches = (e) =>
     passtZumFilter(e, addFilter, {
       subgroupOverrides: exerciseSubgroupOverrides,
@@ -16668,6 +16642,7 @@ function LogView({
                   filter={addFilter}
                   onChange={setAddFilter}
                   tags={exerciseTagging.tags}
+                  nutzung={filterZaehler}
                   style={{ marginBottom: 10 }}
                 />
                 <div style={{ maxHeight: 260, overflowY: "auto" }}>
@@ -17186,6 +17161,9 @@ function LogView({
             </>
           ) : (
             <>
+            {/* Das ganze Fenster scrollt, Suche und Filter kleben oben und
+                gleiten beim Runterscrollen weg. */}
+            <div className={`picker-search ${addKopfVersteckt ? "is-hidden" : ""}`} ref={addKopfRef}>
             <div className="search-box" style={{ marginBottom: 10 }}>
               <Search size={16} color="var(--text-dim)" />
               <input
@@ -17199,9 +17177,10 @@ function LogView({
               filter={addFilter}
               onChange={setAddFilter}
               tags={exerciseTagging.tags}
-              style={{ marginBottom: 10 }}
+              nutzung={filterZaehler}
             />
-            <div style={{ maxHeight: 260, overflowY: "auto" }}>
+            </div>
+            <div>
               {exercises.filter(addPickerMatches).length === 0 && (
                 <div className="empty-state" style={{ padding: "14px 0" }}>Keine Übung gefunden.</div>
               )}

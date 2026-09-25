@@ -1,5 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
+  filterNutzung,
+  nachNutzung,
   satzPlanVon,
   satzPlanAusSaetzen,
   satzPlanAendern,
@@ -2933,5 +2935,24 @@ describe("Uebungsfilter", () => {
     expect(passtZumFilter(e, { ...LEERER_FILTER, group: "beine", equipment: "Band", tag: "reha" }, opts)).toBe(true);
     expect(passtZumFilter(e, { ...LEERER_FILTER, group: "brust" }, opts)).toBe(false);
     expect(passtZumFilter(e, { ...LEERER_FILTER, equipment: "Kabelzug" }, opts)).toBe(false);
+  });
+});
+
+describe("Filter-Chips nach Nutzung", () => {
+  it("zaehlt Geraete und Tags aus echten Trainings", () => {
+    const exercises = [{ id: "a", name: "A" }, { id: "b", name: "B" }];
+    const logs = [
+      { date: "2026-09-01", entries: [{ exerciseId: "a", sets: [{ done: true }] }, { exerciseId: "b", sets: [{ done: false }] }] },
+      { date: "2026-09-02", entries: [{ exerciseId: "a", sets: [{ done: true }] }] },
+    ];
+    const n = filterNutzung(logs, exercises, { equipmentOverrides: { a: "Band", b: "Kabelzug" }, tagAssignments: { a: ["reha"] } });
+    expect(n.equipment).toEqual({ Band: 2 });
+    expect(n.tags).toEqual({ reha: 2 });
+  });
+
+  it("sortiert Haeufiges nach vorn und behaelt sonst die Reihenfolge", () => {
+    expect(nachNutzung(["Langhantel", "Kurzhanteln", "Band", "Sonstiges"], { Band: 3, Sonstiges: 1 }))
+      .toEqual(["Band", "Sonstiges", "Langhantel", "Kurzhanteln"]);
+    expect(nachNutzung(["x", "y"], null)).toEqual(["x", "y"]);
   });
 });

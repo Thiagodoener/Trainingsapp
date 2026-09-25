@@ -12094,8 +12094,35 @@ function SwipeableSetRow({ className, onSwipeRight, onSwipeLeft, children }) {
 // what they're doing (building a workout) just to add a missing exercise.
 // ---------------------------------------------------------------------------
 
-function NewExerciseForm({ exercises, onAddCustom, onSetExerciseSubgroups, onDone, initialName = "" }) {
+// Neue Übung anlegen - überall dasselbe Fenster, und darin alles, was sich
+// sonst erst hinterher in der Detailansicht einstellen ließe: zeitbasiert,
+// überall gleich, ohne Statistik, Tags und Notiz.
+function NewExerciseForm({
+  exercises,
+  onAddCustom,
+  onSetExerciseSubgroups,
+  onDone,
+  initialName = "",
+  onToggleTimeBased = () => {},
+  onToggleGymIndependent = () => {},
+  onToggleStatsExcluded = () => {},
+  onUpdateExerciseNote = () => {},
+  exerciseTagging = KEINE_TAGS,
+}) {
   const [newName, setNewName] = useState(initialName);
+  const [zeitbasiert, setZeitbasiert] = useState(false);
+  const [ueberallGleich, setUeberallGleich] = useState(false);
+  const [ohneStatistik, setOhneStatistik] = useState(false);
+  const [neueTags, setNeueTags] = useState([]);
+  const [notiz, setNotiz] = useState("");
+  // Die Tag-Auswahl ist dieselbe wie in der Detailansicht; solange es die
+  // Übung noch nicht gibt, landet die Auswahl hier statt im Speicher.
+  const ENTWURF_ID = "__neue-uebung__";
+  const entwurfTagging = {
+    ...exerciseTagging,
+    assignments: { [ENTWURF_ID]: neueTags },
+    onSetExerciseTags: (_id, ids) => setNeueTags(ids),
+  };
   const [newGroup, setNewGroup] = useState(MUSCLE_GROUPS[0].id);
   // Mehrere Untergruppen möglich, wie beim Bearbeiten einer bestehenden
   // Übung ("Untergruppen wählen" in der Detailansicht) - vorher konnte man
@@ -12160,16 +12187,20 @@ function NewExerciseForm({ exercises, onAddCustom, onSetExerciseSubgroups, onDon
     };
     onAddCustom(newExercise);
     if (newSubgroups.length > 0) onSetExerciseSubgroups(id, newSubgroups);
+    if (zeitbasiert) onToggleTimeBased(id, true);
+    if (ueberallGleich) onToggleGymIndependent(id, true);
+    if (ohneStatistik) onToggleStatsExcluded(id, true);
+    if (neueTags.length > 0) exerciseTagging.onSetExerciseTags?.(id, neueTags);
+    if (notiz.trim()) onUpdateExerciseNote(id, notiz);
     // The parent's exercise list hasn't re-rendered with the new entry yet
     // (state update is still pending), so hand the fresh object back
     // directly instead of making the caller look it up.
-    onDone(newExercise);
+    onDone(newExercise, { zeitbasiert });
   };
 
   return (
-    <div className="card">
-      <span className="plan-title">Neue Übung</span>
-      <div style={{ marginTop: 10 }}>
+    <div>
+      <div>
         <label className="field-label">Name</label>
         <input
           type="text"
@@ -12310,12 +12341,49 @@ function NewExerciseForm({ exercises, onAddCustom, onSetExerciseSubgroups, onDon
         </div>
       </div>
       <div style={{ marginTop: 10 }}>
+        <label className="field-label">Einstellungen</label>
+        <div className="quick-toggle-row" style={{ marginTop: 6 }}>
+          <button
+            className={`chip chip-sm ${zeitbasiert ? "active" : ""}`}
+            onClick={() => setZeitbasiert((v) => !v)}
+            title="Zeit pro Satz statt Wiederholungen (z. B. Plank, Sprints)"
+          >
+            <Clock size={11} /> Zeitbasiert
+          </button>
+          <button
+            className={`chip chip-sm ${ueberallGleich ? "active" : ""}`}
+            onClick={() => setUeberallGleich((v) => !v)}
+            title="In jedem Gym gleich (z. B. Liegestütze, Plank, Bandübungen) – Verlauf, Rekorde und „letztes Mal“ werden nicht nach Gym getrennt"
+          >
+            <Globe size={11} /> Überall gleich
+          </button>
+          <button
+            className={`chip chip-sm ${ohneStatistik ? "active" : ""}`}
+            onClick={() => setOhneStatistik((v) => !v)}
+            title="Die Sätze zählen nicht in „Sätze pro Muskelgruppe“ – z. B. bei Reha- oder Zusatzübungen"
+          >
+            <EyeOff size={11} /> Ohne Statistik
+          </button>
+        </div>
+      </div>
+      <div style={{ marginTop: 10 }}>
+        <ExerciseTagEditor exerciseId={ENTWURF_ID} tagging={entwurfTagging} />
+      </div>
+      <div style={{ marginTop: 10 }}>
         <label className="field-label">Beschreibung</label>
         <textarea value={newDescription} onChange={(e) => setNewDescription(e.target.value)} placeholder="Kurze Technik-/Hinweisbeschreibung" />
       </div>
       <div style={{ marginTop: 10 }}>
         <label className="field-label">Video-Link (optional)</label>
-        <input value={newVideo} onChange={(e) => setNewVideo(e.target.value)} placeholder="https://…" />
+        <input type="text" inputMode="url" value={newVideo} onChange={(e) => setNewVideo(e.target.value)} placeholder="https://…" />
+      </div>
+      <div style={{ marginTop: 10 }}>
+        <label className="field-label">Notiz (optional)</label>
+        <textarea
+          value={notiz}
+          onChange={(e) => setNotiz(e.target.value)}
+          placeholder="z. B. Form-Cues, Verletzungshistorie, bevorzugtes Equipment…"
+        />
       </div>
       {errorMsg && (
         <div style={{ color: "var(--danger)", fontSize: 13, marginTop: 8 }}>
@@ -12830,22 +12898,28 @@ function ExercisesView({
       />
       </div>
 
-      {creating ? (
-        <NewExerciseForm
-          exercises={exercises}
-          onAddCustom={onAddCustom}
-          onSetExerciseSubgroups={onSetExerciseSubgroups}
-          onDone={() => setCreating(false)}
-        />
-      ) : (
-        <button
-          className="btn btn-ghost btn-block"
-          style={{ marginBottom: 12 }}
-          onClick={() => setCreating(true)}
-        >
-          <Plus size={16} /> Eigene Übung erstellen
-        </button>
+      {creating && (
+        <Modal title="Neue Übung erstellen" onClose={() => setCreating(false)} width={420}>
+          <NewExerciseForm
+            exercises={exercises}
+            onAddCustom={onAddCustom}
+            onSetExerciseSubgroups={onSetExerciseSubgroups}
+            onToggleTimeBased={onToggleTimeBased}
+            onToggleGymIndependent={onToggleGymIndependent}
+            onToggleStatsExcluded={onToggleStatsExcluded}
+            onUpdateExerciseNote={onUpdateExerciseNote}
+            exerciseTagging={exerciseTagging}
+            onDone={() => setCreating(false)}
+          />
+        </Modal>
       )}
+      <button
+        className="btn btn-ghost btn-block"
+        style={{ marginBottom: 12 }}
+        onClick={() => setCreating(true)}
+      >
+        <Plus size={16} /> Eigene Übung erstellen
+      </button>
 
       <div className="card">
         {filtered.length === 0 ? (
@@ -13764,11 +13838,11 @@ function PlanBuilder({
   const visibleFiltered = filtered.slice(0, EXERCISE_PICKER_LIMIT);
   const hiddenCount = filtered.length - visibleFiltered.length;
 
-  const eintragFuer = (exerciseId) => {
+  const eintragFuer = (exerciseId, zeitbasiert = false) => {
     // Start from what was last achieved instead of a generic 3x10 - when you
     // build a plan around an exercise you already train, those numbers are
     // the useful starting point.
-    const wasTimed = isTimeBasedInLogs(logs, exerciseId, timeBasedExercises);
+    const wasTimed = zeitbasiert || isTimeBasedInLogs(logs, exerciseId, timeBasedExercises);
     const history = getExerciseHistory(
       logs, exerciseId, null, wasTimed,
       effectiveGymId(exerciseId, activeGymId, gymIndependentExercises)
@@ -13777,12 +13851,12 @@ function PlanBuilder({
     const setPlan = lastSets.length > 0 ? satzPlanAusSaetzen(lastSets) : satzPlanVon({ sets: 3, reps: 10 });
     return { exerciseId, useTime: wasTimed, setPlan, ...planZusammenfassung(setPlan) };
   };
-  const addExercise = (exerciseId) => {
+  const addExercise = (exerciseId, zeitbasiert = false) => {
     setItems((cur) => [...cur, {
       // Eigene ID je Platz - dieselbe Uebung darf mehrfach im Plan stehen
       // (Zirkel: A, B, A, C), deshalb kann die Uebungs-ID das nicht leisten.
       id: uid(),
-      ...eintragFuer(exerciseId),
+      ...eintragFuer(exerciseId, zeitbasiert),
       supersetWithNext: false,
       restSeconds: null,
       autoRun: null,
@@ -13792,12 +13866,12 @@ function PlanBuilder({
   // Übung ersetzen: Platz, Pause und Superset-Verknüpfung bleiben, Sätze und
   // Werte kommen wie beim Hinzufügen vom letzten Training der neuen Übung.
   const [ersetzeItemId, setErsetzeItemId] = useState(null);
-  const ersetzeDurch = (exerciseId) => {
+  const ersetzeDurch = (exerciseId, zeitbasiert = false) => {
     setItems((cur) =>
       cur.map((i) => {
         if (i.id !== ersetzeItemId) return i;
         const { werteGeaendertAm, ...rest } = i;
-        return { ...rest, ...eintragFuer(exerciseId) };
+        return { ...rest, ...eintragFuer(exerciseId, zeitbasiert) };
       })
     );
     setErsetzeItemId(null);
@@ -13950,13 +14024,20 @@ function PlanBuilder({
             onAddCustom={onAddCustom}
             onSetExerciseSubgroups={onSetExerciseSubgroups}
             initialName={newExerciseName}
-            onDone={(newExercise) => {
+            onToggleTimeBased={onToggleTimeBased}
+            onToggleGymIndependent={onToggleGymIndependent}
+            onToggleStatsExcluded={onToggleStatsExcluded}
+            onUpdateExerciseNote={onUpdateExerciseNote}
+            exerciseTagging={exerciseTagging}
+            onDone={(newExercise, optionen) => {
               setCreatingExercise(false);
               // Wer beim Workout-Bauen eine Übung anlegt, will sie im
-              // Workout haben - sie kommt direkt hinein.
+              // Workout haben - sie kommt direkt hinein. Ob sie zeitbasiert
+              // ist, kommt mit, weil die Einstellung erst noch gespeichert wird.
               if (newExercise?.id) {
-                if (ersetzeItemId) ersetzeDurch(newExercise.id);
-                else { addExercise(newExercise.id); setQuery(""); }
+                const zeit = !!optionen?.zeitbasiert;
+                if (ersetzeItemId) ersetzeDurch(newExercise.id, zeit);
+                else { addExercise(newExercise.id, zeit); setQuery(""); }
               }
             }}
           />
@@ -17207,7 +17288,7 @@ function LogView({
 
       {addingExercise && (
         <Modal
-          title="Übung hinzufügen"
+          title={creatingExercise ? "Neue Übung erstellen" : "Übung hinzufügen"}
           onClose={() => { setAddingExercise(false); setCreatingExercise(false); resetAddFilters(); }}
           width={420}
         >
@@ -17217,6 +17298,11 @@ function LogView({
                 exercises={exercises}
                 onAddCustom={onAddCustom}
                 onSetExerciseSubgroups={onSetExerciseSubgroups}
+              onToggleTimeBased={onToggleTimeBased}
+              onToggleGymIndependent={onToggleGymIndependent}
+              onToggleStatsExcluded={onToggleStatsExcluded}
+              onUpdateExerciseNote={onUpdateExerciseNote}
+              exerciseTagging={exerciseTagging}
                 onDone={(created) => {
                   setCreatingExercise(false);
                   // The parent's exercise list has not re-rendered yet, so the
@@ -17225,12 +17311,6 @@ function LogView({
                   if (created?.id) addExerciseToSession(created.id);
                 }}
               />
-              <button
-                className="btn btn-ghost btn-block"
-                onClick={() => setCreatingExercise(false)}
-              >
-                Zurück zur Auswahl
-              </button>
             </>
           ) : (
             <>

@@ -103,8 +103,10 @@ const CATEGORY_COLORS = SWATCH_COLORS;
 // beim Kreis wächst/schrumpft er, bei der Linie läuft der Punkt nach
 // oben, unten oder waagerecht.
 // ---------------------------------------------------------------------------
-const BREATHING_COLOR = "#6ea8d8"; // Himmelblau, auch im Kalender
-// Grün für Ausdauer - deutlich getrennt vom Himmelblau der Atemübungen und
+// Kräftiges Azurblau, auch im Kalender. Seit der Akzent der App selbst ein
+// helles Blau ist, war das frühere Himmelblau davon kaum zu unterscheiden.
+const BREATHING_COLOR = "#1f6fe5";
+// Grün für Ausdauer - deutlich getrennt vom kräftigen Blau der Atemübungen und
 // vom Akzentton der Kraft-Trainings, damit ein Blick auf den Monat reicht.
 const ENDURANCE_COLOR = "#5aa86e";
 const BREATHING_DIRECTIONS = [
@@ -8360,12 +8362,14 @@ function TrainingAppInner() {
           background: color-mix(in srgb, var(--accent) 35%, transparent);
           color: var(--text);
         }
-        /* Atemübungen im Himmelblau - gleiche Logik wie bei den Workouts:
-           eine Farbe für geplant wie erledigt, den Unterschied macht das
-           Symbol (▷ bzw. ✓). */
+        /* Atemübungen in kräftigem Blau, voll deckend mit weißer Schrift -
+           die Workouts sind ein blasses Blau, so bleibt beides auf einen
+           Blick unterscheidbar. Gleiche Logik wie bei den Workouts: eine
+           Farbe für geplant wie erledigt, den Unterschied macht das Symbol
+           (▷ bzw. ✓). */
         .cal-entry-breathing {
-          background: color-mix(in srgb, ${BREATHING_COLOR} 42%, transparent);
-          color: var(--text);
+          background: ${BREATHING_COLOR};
+          color: #fff;
         }
         .cal-entry-endurance {
           background: color-mix(in srgb, ${ENDURANCE_COLOR} 42%, transparent);

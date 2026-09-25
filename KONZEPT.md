@@ -1050,6 +1050,12 @@ leicht gefülltem aktiven Symbol, und ein abgehakter Satz bekommt einen blauen H
 Aufploppen und eine leicht blaue Zeile. Das kleine Blau auf Weiß ist knapper lesbar als das
 frühere Orange – bewusst in Kauf genommen, weil genau dieser Ton gewählt wurde.
 
+**Eigenes App-Symbol.** Auf dem Home-Bildschirm steht ein eigenes Symbol: ein Kopf als blaue
+Strichzeichnung auf Weiß (runder Lockenkopf, schmaler Schnauzer, offenes Grinsen), im Stil der
+übrigen Symbole. Die Dateien liegen in `public/` (`apple-touch-icon.png` 180 px für iOS,
+`icon-512.png`, `favicon.svg`). iOS übernimmt ein neues Symbol erst, wenn die App neu zum
+Home-Bildschirm hinzugefügt wird.
+
 ---
 
 ## Offene Punkte

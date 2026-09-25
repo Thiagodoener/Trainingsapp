@@ -13237,7 +13237,8 @@ function ExerciseDetailSheet({
                         onClick={() => setEditingSecondary(true)}
                         title="Nebenmuskelgruppe – zählt mit einem halben Satz. Antippen: ändern."
                       >
-                        {secSubLabels.length > 0 ? `${groupLabel} (${secSubLabels.join(", ")})` : groupLabel}
+                        {/* Mit Untergruppe steht nur diese da ("Vordere Schulter"), die Gruppe steckt schon im Namen. */}
+                        {secSubLabels.length > 0 ? secSubLabels.join(", ") : groupLabel}
                       </span>
                     );
                   })
@@ -13393,30 +13394,6 @@ function ExerciseDetailSheet({
 
           {detailTab === "info" && (
             <>
-          {/* Was die Nebengruppen im Kopf bedeuten - der Kopf zeigt nur, DASS
-              sie mitzaehlen, hier steht, wie stark. */}
-          <p style={{ fontSize: 12.5, color: "var(--text-dim)", lineHeight: 1.5, margin: "0 0 12px" }}>
-            {(exercise.secondary || []).length > 0 ? (
-              <>
-                Zählt voll auf{" "}
-                <strong>{MUSCLE_GROUPS.find((m) => m.id === exercise.group)?.label || exercise.group}</strong>
-                {" "}und je zur Hälfte auf{" "}
-                <strong>
-                  {(exercise.secondary || [])
-                    .map((g) => MUSCLE_GROUPS.find((m) => m.id === g)?.label || g)
-                    .join(" und ")}
-                </strong>
-                . Diese Übung trainiert die Nebengruppen deutlich mit; ein halber Satz
-                ist die übliche grobe Verrechnung dafür, keine Messung.
-              </>
-            ) : (
-              <>
-                Zählt allein auf{" "}
-                <strong>{MUSCLE_GROUPS.find((m) => m.id === exercise.group)?.label || exercise.group}</strong>
-                {" "}– für diese Übung sind keine Nebenmuskelgruppen hinterlegt.
-              </>
-            )}
-          </p>
           {meta.video && (
             <a
               className="btn btn-ghost btn-sm"
@@ -13581,12 +13558,6 @@ function ExerciseDetailSheet({
 
       {editingSecondary && (
         <Modal title="Nebenmuskelgruppen wählen" onClose={() => setEditingSecondary(false)}>
-          <p style={{ fontSize: 12.5, color: "var(--text-dim)", margin: "0 0 10px" }}>
-            Mehrere möglich – jede zählt mit einem halben Satz in „Sätze pro
-            Muskelgruppe“ und „Belastung pro Muskelgruppe“. Bei aktiven
-            Gruppen mit Untergruppen kannst du zusätzlich eine davon wählen,
-            damit genau diese in der Statistik mitzählt.
-          </p>
           <div className="modal-list">
             {/* Bleibt offen, waehrend man waehlt - mehrere nacheinander
                 antippen ist der ganze Zweck, wie bei den Untergruppen. */}

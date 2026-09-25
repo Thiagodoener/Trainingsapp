@@ -6952,6 +6952,30 @@ function TrainingAppInner() {
         .filter-rows .chip-row:last-child {
           margin-bottom: 0;
         }
+        .picker-search-row {
+          display: flex;
+          align-items: center;
+          gap: 10px;
+          margin-bottom: 10px;
+        }
+        .picker-search-row .search-box {
+          flex: 1;
+          min-width: 0;
+          margin-bottom: 0;
+        }
+        .picker-search-row .chip {
+          flex-shrink: 0;
+          border: none;
+          font-family: inherit;
+        }
+        .picker-replace-note {
+          display: flex;
+          align-items: center;
+          gap: 6px;
+          font-size: 13px;
+          color: var(--accent);
+          margin-bottom: 8px;
+        }
         .chip.filter-new {
           color: var(--accent);
           font-weight: 600;
@@ -13740,7 +13764,7 @@ function PlanBuilder({
   const visibleFiltered = filtered.slice(0, EXERCISE_PICKER_LIMIT);
   const hiddenCount = filtered.length - visibleFiltered.length;
 
-  const addExercise = (exerciseId) => {
+  const eintragFuer = (exerciseId) => {
     // Start from what was last achieved instead of a generic 3x10 - when you
     // build a plan around an exercise you already train, those numbers are
     // the useful starting point.
@@ -13751,19 +13775,34 @@ function PlanBuilder({
     );
     const lastSets = history?.lastSets || [];
     const setPlan = lastSets.length > 0 ? satzPlanAusSaetzen(lastSets) : satzPlanVon({ sets: 3, reps: 10 });
+    return { exerciseId, useTime: wasTimed, setPlan, ...planZusammenfassung(setPlan) };
+  };
+  const addExercise = (exerciseId) => {
     setItems((cur) => [...cur, {
       // Eigene ID je Platz - dieselbe Uebung darf mehrfach im Plan stehen
       // (Zirkel: A, B, A, C), deshalb kann die Uebungs-ID das nicht leisten.
       id: uid(),
-      exerciseId,
-      useTime: wasTimed,
-      setPlan,
-      ...planZusammenfassung(setPlan),
+      ...eintragFuer(exerciseId),
       supersetWithNext: false,
       restSeconds: null,
       autoRun: null,
       autoSeconds: null,
     }]);
+  };
+  // Übung ersetzen: Platz, Pause und Superset-Verknüpfung bleiben, Sätze und
+  // Werte kommen wie beim Hinzufügen vom letzten Training der neuen Übung.
+  const [ersetzeItemId, setErsetzeItemId] = useState(null);
+  const ersetzeDurch = (exerciseId) => {
+    setItems((cur) =>
+      cur.map((i) => {
+        if (i.id !== ersetzeItemId) return i;
+        const { werteGeaendertAm, ...rest } = i;
+        return { ...rest, ...eintragFuer(exerciseId) };
+      })
+    );
+    setErsetzeItemId(null);
+    setQuery("");
+    setStep(2);
   };
   const removeItem = (itemId) => {
     setItems(items.filter((i) => i.id !== itemId));
@@ -13915,7 +13954,10 @@ function PlanBuilder({
               setCreatingExercise(false);
               // Wer beim Workout-Bauen eine Übung anlegt, will sie im
               // Workout haben - sie kommt direkt hinein.
-              if (newExercise?.id) { addExercise(newExercise.id); setQuery(""); }
+              if (newExercise?.id) {
+                if (ersetzeItemId) ersetzeDurch(newExercise.id);
+                else { addExercise(newExercise.id); setQuery(""); }
+              }
             }}
           />
         </Modal>
@@ -14014,29 +14056,36 @@ function PlanBuilder({
       {step === 1 ? (
         <div className="picker-step" ref={pickerStepRef}>
       <div className={`picker-search ${pickerSearchHidden ? "is-hidden" : ""}`} ref={pickerSearchRef}>
-      <div className="search-box">
-        <Search size={16} color="var(--text-dim)" />
-        <input
-          placeholder="Übung suchen…"
-          value={query}
-          onChange={(e) => setQuery(e.target.value)}
-        />
-        {query && (
-          <button className="btn-icon" onClick={() => setQuery("")} title="Suche leeren">
-            <X size={14} />
-          </button>
-        )}
+      {ersetzeItemId && (
+        <div className="picker-replace-note">
+          <Repeat size={14} /> Ersetzen: {exerciseName(exById[items.find((i) => i.id === ersetzeItemId)?.exerciseId])}
+        </div>
+      )}
+      {/* Neue Übung und Suche in einer Zeile. */}
+      <div className="picker-search-row">
+        <button className="chip filter-new" onClick={() => openNewExercise("")}>
+          <Plus size={13} /> Neue Übung
+        </button>
+        <div className="search-box">
+          <Search size={16} color="var(--text-dim)" />
+          <input
+            placeholder="Übung suchen…"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+          />
+          {query && (
+            <button className="btn-icon" onClick={() => setQuery("")} title="Suche leeren">
+              <X size={14} />
+            </button>
+          )}
+        </div>
       </div>
       <UebungsFilter
         filter={filter}
         onChange={setFilter}
         tags={exerciseTagging.tags}
         nutzung={filterZaehler}
-      >
-        <span className="chip filter-new" role="button" onClick={() => openNewExercise("")}>
-          <Plus size={13} /> Neue Übung
-        </span>
-      </UebungsFilter>
+      />
       </div>
       <div className="card exercise-picker-list">
         {filtered.length === 0 && (
@@ -14069,12 +14118,18 @@ function PlanBuilder({
                   {addedCount}×
                 </span>
               )}
-              <button
-                className="btn btn-sm btn-ghost"
-                onClick={() => addExercise(e.id)}
-              >
-                <Plus size={14} /> Hinzufügen
-              </button>
+              {ersetzeItemId ? (
+                <button className="btn btn-sm btn-ghost" onClick={() => ersetzeDurch(e.id)}>
+                  <Repeat size={14} /> Wählen
+                </button>
+              ) : (
+                <button
+                  className="btn btn-sm btn-ghost"
+                  onClick={() => addExercise(e.id)}
+                >
+                  <Plus size={14} /> Hinzufügen
+                </button>
+              )}
             </div>
           );
         })}
@@ -14088,6 +14143,16 @@ function PlanBuilder({
           {/* Klebt direkt über der Navigation; der Hinweistext darüber ist
               entfallen - der ausgegraute Knopf sagt dasselbe. */}
           <div className="picker-actions">
+            {ersetzeItemId ? (
+              <button
+                className="btn btn-ghost btn-sm"
+                style={{ flex: 1 }}
+                onClick={() => { setErsetzeItemId(null); setQuery(""); setStep(2); }}
+              >
+                <X size={15} /> Nicht ersetzen
+              </button>
+            ) : (
+            <>
             <button className="btn btn-ghost btn-sm" style={{ flex: 1 }} onClick={onCancel}>
               <X size={15} /> Abbrechen
             </button>
@@ -14100,6 +14165,8 @@ function PlanBuilder({
               Weiter ({items.length} {items.length === 1 ? "Übung" : "Übungen"})
               <ChevronRight size={15} />
             </button>
+            </>
+            )}
           </div>
         </div>
       ) : (
@@ -14326,11 +14393,17 @@ function PlanBuilder({
                             >
                               <StickyNote size={14} /> Übungs-Details & Notiz
                             </button>
+                            {/* Entfernen geht per Wischen nach links. */}
                             <button
-                              className="program-menu-item danger"
-                              onClick={() => { removeItem(it.id); setItemMenuId(null); }}
+                              className="program-menu-item"
+                              onClick={() => {
+                                setErsetzeItemId(it.id);
+                                setQuery("");
+                                setItemMenuId(null);
+                                setStep(1);
+                              }}
                             >
-                              <Trash2 size={14} /> Übung entfernen
+                              <Repeat size={14} /> Übung ersetzen
                             </button>
                           </div>
                         )}

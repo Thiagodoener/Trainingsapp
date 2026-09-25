@@ -1038,6 +1038,18 @@ im ⋮-Menü, findet die Suche nichts, lässt sich genau diese Übung anlegen (N
 eingetragen), und im zweiten Schritt gibt es unter der Liste „+ Übung hinzufügen" und „+ Neue
 Übung". Eine neu angelegte Übung landet direkt im Workout.
 
+
+**Neues Aussehen: Himmelblau, iOS-Schrift, gruppierte Karten (Sept. 2026).** Das Orange ist
+durch das Blau vom Horizont aus einem Gipfelfoto ersetzt (`#4780C3`, im dunklen Modus
+`#86B1EA`). Text steht in der iOS-Systemschrift SF Pro, Titel und Zahlen in SF Rounded wie bei
+Apple Fitness; außerhalb von Apple-Geräten springen Inter und Nunito ein. Die Flächen folgen den
+iOS-Einstellungen: hellgrauer Grund, weiße Karten mit runden Ecken, Abschnittsüberschriften klein
+und grau ohne Linie. Getönte Knöpfe sind hellblau mit blauer Schrift. Fenster kommen als Blatt
+von unten (am Griff nach unten ziehen schließt), die Tab-Leiste ist durchscheinend mit blauem,
+leicht gefülltem aktiven Symbol, und ein abgehakter Satz bekommt einen blauen Haken mit kurzem
+Aufploppen und eine leicht blaue Zeile. Das kleine Blau auf Weiß ist knapper lesbar als das
+frühere Orange – bewusst in Kauf genommen, weil genau dieser Ton gewählt wurde.
+
 ---
 
 ## Offene Punkte

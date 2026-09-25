@@ -4202,7 +4202,7 @@ class AppErrorBoundary extends React.Component {
           onClick={() => window.location.reload()}
           style={{
             padding: "13px 16px", borderRadius: 12, border: "none",
-            background: "#b25a26", color: "#fff", fontSize: 16, fontWeight: 600,
+            background: "#4780c3", color: "#fff", fontSize: 16, fontWeight: 600,
           }}
         >
           App neu laden
@@ -5615,7 +5615,7 @@ function TrainingAppInner() {
   return (
     <div className={`app-shell ${theme === "light" ? "theme-light" : ""}`}>
       <style>{`
-        @import url('https://fonts.googleapis.com/css2?family=Newsreader:opsz,wght@6..72,400;6..72,500;6..72,600&family=Inter:wght@400;500;600;700&display=swap');
+        @import url('https://fonts.googleapis.com/css2?family=Nunito:wght@500;600;700;800&family=Inter:wght@400;500;600;700&display=swap');
 
         /* Farbwelt: neutrale Flaechen, Trennung durch Haarlinien statt
            durch Kaesten. Die Akzentfarbe ist ausschliesslich fuer
@@ -5625,9 +5625,16 @@ function TrainingAppInner() {
            Hier stehen die Werte des dunklen Modus; der helle Modus (Standard)
            ueberschreibt sie direkt darunter. */
         :root {
+          /* Schriften: iOS-Systemschrift fuer Text, die runde Variante fuer
+             Titel und Zahlen (wie Apple Fitness). Ausserhalb von Apple-
+             Geraeten springen Inter und Nunito ein. */
+          --font-ui: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Inter", system-ui, sans-serif;
+          --font-display: ui-rounded, "SF Pro Rounded", "Nunito", -apple-system, system-ui, sans-serif;
+          /* Gruppierte Flaechen wie in den iOS-Einstellungen: schwarzer
+             Grund, Karten in dunklem Grau. */
           --bg: #000000;
-          --surface: #000000;
-          --surface-alt: #161616;
+          --surface: #1c1c1e;
+          --surface-alt: rgba(118,118,128,0.24);
           /* Schwebende Ebenen (Modal, Sheet, Menue) heben sich vom Grund ab. */
           --elevated: #1c1c1e;
           --border: rgba(255,255,255,0.14);
@@ -5635,19 +5642,23 @@ function TrainingAppInner() {
           --text: #f5f5f7;
           --text-dim: #98989d;
           --text-faint: #616166;
-          --accent: #dd8442;
-          --accent-dim: #a8632f;
+          /* Himmelblau vom Horizont (Foto vom Gipfel), aufgehellt fuer
+             schwarzen Grund. */
+          --accent: #86b1ea;
+          --accent-dim: #5f8fd0;
+          --accent-tint: rgba(134,177,234,0.16);
           --brass: #d3a63f;
           --success: #79ac6d;
           --danger: #e0705c;
-          --fill: rgba(255,255,255,0.07);
+          --fill: rgba(118,118,128,0.24);
+          --bar-bg: rgba(22,22,22,0.9);
           /* Bank hinter einer markierten Entlastung. Bewusst ein eigener Wert
              und nicht --fill oder --surface-alt: Auf schwarzem Grund sind
              beide so dunkel, dass die Markierung praktisch verschwindet. */
           --deload-band: rgba(255,255,255,0.13);
           --shadow-strength: 0.5;
           /* Diagrammfarben: gedaempft und untereinander abgestimmt. */
-          --chart-accent: #dd8442;
+          --chart-accent: #86b1ea;
           --chart-gold: #d3a63f;
           --chart-teal: #6fb0c0;
           --chart-violet: #a493cf;
@@ -5656,24 +5667,28 @@ function TrainingAppInner() {
         }
         .app-shell.theme-light {
           color-scheme: light;
-          --bg: #ffffff;
+          /* Hellgrauer Grund, weisse Karten - wie die iOS-Einstellungen.
+             Eingabefelder sind durchscheinend, damit sie auf beidem wirken. */
+          --bg: #f2f2f7;
           --surface: #ffffff;
-          --surface-alt: #f4f4f5;
+          --surface-alt: rgba(118,118,128,0.12);
           --elevated: #ffffff;
           --border: rgba(60,60,67,0.15);
           --border-strong: rgba(60,60,67,0.32);
           --text: #1c1c1e;
           --text-dim: #6e6e73;
           --text-faint: #a3a3a8;
-          --accent: #b25a26;
-          --accent-dim: #8f4a22;
+          --accent: #4780c3;
+          --accent-dim: #3a6aa3;
+          --accent-tint: rgba(71,128,195,0.13);
           --brass: #a67c14;
           --success: #3f7a4e;
           --danger: #c0402e;
-          --fill: rgba(60,60,67,0.06);
+          --fill: rgba(118,118,128,0.12);
+          --bar-bg: rgba(249,249,249,0.92);
           --deload-band: rgba(60,60,67,0.11);
           --shadow-strength: 0.10;
-          --chart-accent: #b25a26;
+          --chart-accent: #4780c3;
           --chart-gold: #9a7414;
           --chart-teal: #41707d;
           --chart-violet: #6f5f92;
@@ -5693,7 +5708,7 @@ function TrainingAppInner() {
              fehlte er - dadurch lag die Kopfzeile unter Uhrzeit und
              Empfangsanzeige und war nicht antippbar. */
           padding-top: env(safe-area-inset-top);
-          font-family: 'Inter', sans-serif;
+          font-family: var(--font-ui);
           background: var(--bg);
           color: var(--text);
           width: 100%;
@@ -5765,7 +5780,7 @@ function TrainingAppInner() {
           border-bottom: 2px solid transparent;
           margin-bottom: -1px;
           color: var(--text-dim);
-          font-family: 'Inter', sans-serif;
+          font-family: var(--font-ui);
           font-size: 12px;
           font-weight: 500;
           text-transform: uppercase;
@@ -5798,7 +5813,7 @@ function TrainingAppInner() {
           gap: 8px;
         }
         .history-card-date {
-          font-family: 'Inter', sans-serif;
+          font-family: var(--font-ui);
           font-variant-numeric: tabular-nums;
           font-size: 11px;
           color: var(--text-faint);
@@ -5881,7 +5896,7 @@ function TrainingAppInner() {
         }
         .history-set-summary {
           color: var(--text-dim);
-          font-family: 'Inter', sans-serif;
+          font-family: var(--font-ui);
           font-variant-numeric: tabular-nums;
           font-size: 12px;
         }
@@ -5896,7 +5911,7 @@ function TrainingAppInner() {
 
 
         .tag {
-          font-family: 'Inter', sans-serif;
+          font-family: var(--font-ui);
           font-size: 11px;
           letter-spacing: 0.1px;
           background: var(--fill);
@@ -5936,20 +5951,23 @@ function TrainingAppInner() {
         /* Karten sind keine Kaesten mehr, sondern Abschnitte, die eine
            Haarlinie voneinander trennt. Dadurch faellt eine komplette
            Rahmenebene weg und die Seite wird deutlich ruhiger. */
+        /* Weisse Karte mit runden Ecken auf grauem Grund (iOS gruppiert). */
         .card {
-          background: transparent;
+          background: var(--surface);
           border: none;
-          border-bottom: 1px solid var(--border);
-          border-radius: 0;
-          padding: 14px 0;
-          margin-bottom: 0;
+          border-radius: 14px;
+          padding: 14px 16px;
+          margin-bottom: 12px;
           box-shadow: none;
         }
         /* In Modalen und Sheets liegt der Inhalt schon auf einer eigenen
            Flaeche - dort braucht die letzte Karte keine Abschlusslinie. */
-        .modal-body > .card:last-child,
-        .exercise-detail-body > .card:last-child {
-          border-bottom: none;
+        /* In Blättern liegt der Inhalt schon auf einer eigenen Fläche -
+           eine Karte darin wäre nur eine eingerückte zweite Fläche. */
+        .modal-body .card {
+          background: transparent;
+          padding: 10px 0;
+          margin-bottom: 0;
         }
         .chart-card {
           padding: 16px 0 14px;
@@ -5958,11 +5976,12 @@ function TrainingAppInner() {
           padding-left: 0;
         }
 
+        /* Abschnittsüberschrift wie in den iOS-Einstellungen: klein, grau,
+           über der Karte eingerückt - ohne Linie. */
         .stat-section-title {
           display: block;
-          margin: 26px 0 0;
-          padding-bottom: 8px;
-          border-bottom: 1px solid var(--border-strong);
+          margin: 24px 0 6px;
+          padding: 0 16px;
           font-size: 11px;
           font-weight: 500;
           letter-spacing: 0.12em;
@@ -5990,17 +6009,11 @@ function TrainingAppInner() {
 
         /* Kennzahlen ohne Kaesten: ein Raster, das nur durch Haarlinien
            geteilt wird. */
+        /* Kacheln als Karten, wie in Apple Fitness / Health. */
         .stats-grid {
           display: grid;
           grid-template-columns: 1fr 1fr;
-          gap: 0;
-        }
-        .stats-grid .stat-item:nth-child(odd) {
-          border-right: 1px solid var(--border);
-          padding-right: 16px;
-        }
-        .stats-grid .stat-item:nth-child(even) {
-          padding-left: 18px;
+          gap: 10px;
         }
         .stats-grid-secondary {
           grid-template-columns: repeat(3, 1fr);
@@ -6013,19 +6026,9 @@ function TrainingAppInner() {
         .stats-grid-secondary .stat-value {
           font-size: 24px;
         }
-        /* Im Dreierraster gilt die gerade/ungerade Regel nicht - hier
-           bekommt jede Spalte ausser der letzten die Trennlinie. */
-        .stats-grid-secondary .stat-item:nth-child(odd),
-        .stats-grid-secondary .stat-item:nth-child(even) {
-          border-right: none;
+        .stats-grid-secondary .stat-item {
           padding-left: 12px;
           padding-right: 12px;
-        }
-        .stats-grid-secondary .stat-item:not(:nth-child(3n)) {
-          border-right: 1px solid var(--border);
-        }
-        .stats-grid-secondary .stat-item:nth-child(3n + 1) {
-          padding-left: 0;
         }
         .stat-hero {
           display: flex;
@@ -6044,11 +6047,11 @@ function TrainingAppInner() {
           color: var(--text-dim);
         }
         .stat-hero-value {
-          font-family: 'Newsreader', Georgia, serif;
-          font-weight: 400;
+          font-family: var(--font-display);
+          font-weight: 700;
           font-size: 46px;
           line-height: 1;
-          letter-spacing: -1px;
+          letter-spacing: -0.5px;
           font-variant-numeric: tabular-nums;
           color: var(--text);
         }
@@ -6062,18 +6065,17 @@ function TrainingAppInner() {
           display: flex;
           flex-direction: column;
           gap: 7px;
-          background: transparent;
+          background: var(--surface);
           border: none;
-          border-bottom: 1px solid var(--border);
-          border-radius: 0;
-          padding: 16px 0 18px;
+          border-radius: 14px;
+          padding: 14px 16px 16px;
         }
         .stat-value {
-          font-family: 'Newsreader', Georgia, serif;
-          font-weight: 400;
+          font-family: var(--font-display);
+          font-weight: 700;
           font-size: 32px;
           line-height: 1;
-          letter-spacing: -0.6px;
+          letter-spacing: -0.3px;
           font-variant-numeric: tabular-nums;
           color: var(--text);
         }
@@ -6100,7 +6102,7 @@ function TrainingAppInner() {
           border: none;
           outline: none;
           color: var(--text);
-          font-family: 'Inter', sans-serif;
+          font-family: var(--font-ui);
           font-size: 16px;
           width: 100%;
         }
@@ -6118,7 +6120,7 @@ function TrainingAppInner() {
            statt Versalien, damit die Beschriftungen lesbar bleiben. */
         .chip {
           flex-shrink: 0;
-          font-family: 'Inter', sans-serif;
+          font-family: var(--font-ui);
           font-size: 13px;
           font-weight: 400;
           letter-spacing: 0.1px;
@@ -6191,9 +6193,9 @@ function TrainingAppInner() {
           text-overflow: ellipsis;
         }
         .ex-name {
-          font-family: 'Newsreader', Georgia, serif;
-          font-weight: 500;
-          font-size: 18px;
+          font-family: var(--font-display);
+          font-weight: 600;
+          font-size: 17px;
           letter-spacing: -0.1px;
         }
 
@@ -6202,7 +6204,7 @@ function TrainingAppInner() {
           align-items: center;
           justify-content: center;
           gap: 7px;
-          font-family: 'Inter', sans-serif;
+          font-family: var(--font-ui);
           font-weight: 600;
           font-size: 15px;
           letter-spacing: -0.1px;
@@ -6220,7 +6222,8 @@ function TrainingAppInner() {
           cursor: not-allowed;
         }
         .btn-primary { background: var(--accent); color: #fff; }
-        .btn-ghost { background: var(--fill); color: var(--accent); border: none; }
+        /* "Getönte" Knöpfe wie bei iOS: helles Blau mit blauer Schrift. */
+        .btn-ghost { background: var(--accent-tint); color: var(--accent); border: none; }
         .btn-block { width: 100%; }
         .btn-sm { padding: 8px 12px; font-size: 13px; border-radius: 9px; }
         .btn-danger { background: transparent; color: var(--danger); }
@@ -6249,10 +6252,14 @@ function TrainingAppInner() {
         .bottom-dock.nav-hidden {
           transform: translateY(100%);
         }
+        /* Durchscheinende Leiste wie bei iOS: der Inhalt schimmert
+           verschwommen durch. */
         .fab-nav {
           display: flex;
-          background: var(--bg);
-          border-top: 1px solid var(--border-strong);
+          background: var(--bar-bg);
+          -webkit-backdrop-filter: saturate(180%) blur(20px);
+          backdrop-filter: saturate(180%) blur(20px);
+          border-top: 1px solid var(--border);
           /* Unten nur der halbe Safe-Area-Abstand: der volle Wert ließ auf
              dem iPhone einen fingerbreiten leeren Streifen unter den
              Beschriftungen stehen. Die Hälfte hält die Knöpfe weiterhin
@@ -6269,7 +6276,7 @@ function TrainingAppInner() {
           border-bottom: 1px solid var(--border);
           background: var(--accent);
           color: #fff;
-          font-family: 'Inter', sans-serif;
+          font-family: var(--font-ui);
           font-size: 13px;
           padding: 9px 14px;
           cursor: pointer;
@@ -6286,7 +6293,7 @@ function TrainingAppInner() {
           white-space: nowrap;
         }
         .session-bar-time {
-          font-family: 'Newsreader', Georgia, serif;
+          font-family: var(--font-display);
           font-size: 16px;
           font-variant-numeric: tabular-nums;
           flex-shrink: 0;
@@ -6323,24 +6330,26 @@ function TrainingAppInner() {
           background: none;
           border: none;
           color: var(--text-faint);
-          font-family: 'Inter', sans-serif;
+          font-family: var(--font-ui);
           /* "Fortschritt" ist die laengste Beschriftung und muss in ein
              Fuenftel der Bildschirmbreite passen, ohne den Rand zu beruehren. */
-          font-size: 9px;
-          text-transform: uppercase;
-          letter-spacing: 0.03em;
-          padding: 6px 0;
+          font-size: 10px;
+          font-weight: 500;
+          padding: 4px 0 2px;
+          gap: 3px;
           cursor: pointer;
           transition: color 120ms ease, transform 100ms ease;
         }
-        .nav-btn.active { color: var(--text); }
-        .nav-btn.active svg { color: var(--accent); }
+        .nav-btn svg { width: 25px; height: 25px; }
+        /* Aktiver Reiter ganz in Blau, das Symbol leicht gefüllt. */
+        .nav-btn.active { color: var(--accent); }
+        .nav-btn.active svg { color: var(--accent); fill: var(--accent-tint); }
         .nav-btn:active { transform: scale(0.92); }
 
         .plan-title {
-          font-family: 'Newsreader', Georgia, serif;
-          font-weight: 500;
-          font-size: 21px;
+          font-family: var(--font-display);
+          font-weight: 700;
+          font-size: 20px;
           line-height: 1.15;
           letter-spacing: -0.2px;
         }
@@ -6575,7 +6584,7 @@ function TrainingAppInner() {
           color: var(--text);
           border-radius: 9px;
           padding: 10px 11px;
-          font-family: 'Inter', sans-serif;
+          font-family: var(--font-ui);
           font-variant-numeric: tabular-nums;
           font-size: 16px;
           width: 100%;
@@ -6586,7 +6595,7 @@ function TrainingAppInner() {
           color: var(--text);
           border-radius: 9px;
           padding: 10px 11px;
-          font-family: 'Inter', sans-serif;
+          font-family: var(--font-ui);
           font-size: 16px;
           width: 100%;
         }
@@ -6622,7 +6631,7 @@ function TrainingAppInner() {
           width: 100%;
           min-height: 64px;
           resize: vertical;
-          font-family: 'Inter', sans-serif;
+          font-family: var(--font-ui);
           font-size: 16px;
           background: var(--surface-alt);
           color: var(--text);
@@ -6754,7 +6763,7 @@ function TrainingAppInner() {
           align-items: center;
           justify-content: center;
           cursor: pointer;
-          font-family: 'Inter', sans-serif;
+          font-family: var(--font-ui);
           font-variant-numeric: tabular-nums;
           font-size: 14px;
           font-weight: 500;
@@ -6800,7 +6809,7 @@ function TrainingAppInner() {
           border-radius: 9px;
           background: transparent;
           color: var(--text);
-          font-family: 'Inter', sans-serif;
+          font-family: var(--font-ui);
           font-size: 15px;
           cursor: pointer;
         }
@@ -6904,12 +6913,16 @@ function TrainingAppInner() {
         .set-swipe-del { color: var(--danger); display: flex; }
         .set-swipe > .builder-item-head {
           position: relative;
-          background: var(--bg);
+          background: var(--surface);
           touch-action: pan-y;
         }
         .set-swipe > .set-row {
           position: relative;
           background: var(--surface);
+          margin: 0 -6px;
+          padding: 3px 6px;
+          border-radius: 10px;
+          transition: box-shadow 250ms ease;
           /* Horizontal panning is handled in JS; letting the browser also
              pan would fight the gesture. */
           touch-action: pan-y;
@@ -7040,8 +7053,8 @@ function TrainingAppInner() {
           padding: 2px 0;
           color: var(--text);
           cursor: pointer;
-          font-family: 'Newsreader', Georgia, serif;
-          font-weight: 500;
+          font-family: var(--font-display);
+          font-weight: 700;
           font-size: 30px;
           letter-spacing: -0.5px;
         }
@@ -7073,7 +7086,7 @@ function TrainingAppInner() {
           border-radius: 8px;
           padding: 10px 10px;
           color: var(--text);
-          font-family: 'Inter', sans-serif;
+          font-family: var(--font-ui);
           font-size: 14px;
           text-align: left;
           cursor: pointer;
@@ -7102,9 +7115,9 @@ function TrainingAppInner() {
           white-space: nowrap;
         }
         .folder-header-title {
-          font-family: 'Newsreader', Georgia, serif;
-          font-weight: 500;
-          font-size: 19px;
+          font-family: var(--font-display);
+          font-weight: 700;
+          font-size: 18px;
           letter-spacing: -0.1px;
           flex: 1 1 auto;
           min-width: 0;
@@ -7120,7 +7133,7 @@ function TrainingAppInner() {
           text-overflow: ellipsis;
         }
         .muscle-week-value {
-          font-family: 'Inter', sans-serif;
+          font-family: var(--font-ui);
           font-variant-numeric: tabular-nums;
           font-size: 13px;
           text-align: right;
@@ -7295,7 +7308,7 @@ function TrainingAppInner() {
           stroke-dasharray: 2 2;
         }
         .load-change {
-          font-family: 'Inter', sans-serif;
+          font-family: var(--font-ui);
           font-variant-numeric: tabular-nums;
           font-size: 12.5px;
           text-align: right;
@@ -7346,11 +7359,12 @@ function TrainingAppInner() {
           position: fixed;
           top: 0; right: 0; bottom: 0; left: 0;
           background: rgba(0,0,0,0.55);
+          /* Fenster kommen als Blatt von unten, wie bei iOS - mit dem
+             Daumen gut erreichbar. Oben bleibt ein Streifen frei. */
           display: flex;
-          align-items: center;
+          align-items: flex-end;
           justify-content: center;
-          padding: calc(16px + env(safe-area-inset-top)) 16px
-                   calc(16px + env(safe-area-inset-bottom));
+          padding: calc(28px + env(safe-area-inset-top)) 0 0;
           z-index: 300;
           /* The popup used to snap in; a short fade of the backdrop and a
              gentle rise of the card make it land instead of jump. */
@@ -7363,42 +7377,62 @@ function TrainingAppInner() {
         /* Fades in without moving. A sliding card keeps changing position
            while it animates, and a button that is still travelling can
            swallow the first tap - a calm fade avoids that entirely. */
+        /* Das Blatt gleitet kurz von unten herein. Kurz gehalten: ein
+           Knopf, der noch unterwegs ist, soll den ersten Tipp nicht
+           verschlucken. */
         @keyframes modal-rise {
-          from { opacity: 0; }
-          to { opacity: 1; }
+          from { transform: translateY(40%); opacity: 0.4; }
+          to { transform: translateY(0); opacity: 1; }
         }
         @media (prefers-reduced-motion: reduce) {
           .modal-overlay, .modal-card { animation: none; }
         }
         .modal-card {
           width: 100%;
+          max-width: 480px;
           max-height: 100%;
-          animation: modal-rise 200ms ease-out both;
+          animation: modal-rise 220ms cubic-bezier(0.2, 0.8, 0.2, 1);
           background: var(--elevated);
-          border: 1px solid var(--border);
-          border-radius: 16px;
-          box-shadow: 0 18px 48px rgba(0,0,0,0.45);
+          border: none;
+          border-radius: 14px 14px 0 0;
+          box-shadow: 0 -8px 30px rgba(0,0,0,0.18);
           display: flex;
           flex-direction: column;
           overflow: hidden;
+        }
+        .modal-grab {
+          flex-shrink: 0;
+          padding: 7px 0 0;
+          touch-action: none;
+        }
+        .modal-grab::before {
+          content: "";
+          display: block;
+          width: 36px;
+          height: 5px;
+          border-radius: 999px;
+          margin: 0 auto;
+          background: var(--text-faint);
+          opacity: 0.55;
         }
         .modal-head {
           display: flex;
           align-items: center;
           justify-content: space-between;
           gap: 10px;
-          padding: 14px 14px 10px;
+          padding: 8px 16px 10px;
           flex-shrink: 0;
+          touch-action: none;
         }
         .modal-title {
-          font-family: 'Newsreader', Georgia, serif;
-          font-weight: 500;
-          font-size: 21px;
+          font-family: var(--font-display);
+          font-weight: 700;
+          font-size: 19px;
           letter-spacing: -0.2px;
           color: var(--text);
         }
         .modal-body {
-          padding: 0 14px 16px;
+          padding: 0 16px calc(18px + env(safe-area-inset-bottom));
           overflow-y: auto;
           -webkit-overflow-scrolling: touch;
           overscroll-behavior: contain;
@@ -7421,7 +7455,7 @@ function TrainingAppInner() {
           border: none;
           background: var(--fill);
           color: var(--text);
-          font-family: 'Inter', sans-serif;
+          font-family: var(--font-ui);
           font-size: 15px;
           cursor: pointer;
         }
@@ -7525,9 +7559,9 @@ function TrainingAppInner() {
           padding: 18px 16px calc(22px + env(safe-area-inset-bottom));
         }
         .move-sheet-title {
-          font-family: 'Newsreader', Georgia, serif;
-          font-weight: 500;
-          font-size: 21px;
+          font-family: var(--font-display);
+          font-weight: 700;
+          font-size: 19px;
           letter-spacing: -0.2px;
           margin-bottom: 12px;
         }
@@ -7547,7 +7581,7 @@ function TrainingAppInner() {
           color: var(--text);
           border-radius: 10px;
           padding: 12px 14px;
-          font-family: 'Inter', sans-serif;
+          font-family: var(--font-ui);
           font-size: 15px;
           font-weight: 400;
           cursor: pointer;
@@ -7609,7 +7643,7 @@ function TrainingAppInner() {
           gap: 5px;
           padding: 5px 10px;
           border-radius: 999px;
-          font-family: 'Inter', sans-serif;
+          font-family: var(--font-ui);
           font-variant-numeric: tabular-nums;
           font-size: 12.5px;
           color: var(--text-dim);
@@ -7626,7 +7660,7 @@ function TrainingAppInner() {
           display: flex;
           align-items: center;
           gap: 5px;
-          font-family: 'Inter', sans-serif;
+          font-family: var(--font-ui);
           font-variant-numeric: tabular-nums;
           font-size: 12px;
           color: var(--text-dim);
@@ -7681,7 +7715,7 @@ function TrainingAppInner() {
           padding: 2px;
         }
         .set-num {
-          font-family: 'Inter', sans-serif;
+          font-family: var(--font-ui);
           font-variant-numeric: tabular-nums;
           font-size: 13px;
           color: var(--text-faint);
@@ -7700,18 +7734,32 @@ function TrainingAppInner() {
           cursor: pointer;
           flex-shrink: 0;
         }
+        /* Abgehakt: blauer Haken mit kurzem Aufploppen, die Zeile wird
+           leicht blau hinterlegt - so sieht man im Augenwinkel, wo man ist. */
         .set-check.checked {
-          background: var(--success);
-          border-color: var(--success);
+          background: var(--accent);
+          border-color: var(--accent);
+          animation: check-pop 280ms ease;
+        }
+        @keyframes check-pop {
+          0% { transform: scale(0.7); }
+          60% { transform: scale(1.15); }
+          100% { transform: scale(1); }
+        }
+        .set-row.is-done {
+          box-shadow: inset 0 0 0 999px var(--accent-tint);
         }
         .set-row.is-done input {
-          opacity: 0.55;
+          background: transparent;
+        }
+        @media (prefers-reduced-motion: reduce) {
+          .set-check.checked { animation: none; }
         }
 
         .last-performance {
           font-size: 12.5px;
           color: var(--text-dim);
-          font-family: 'Inter', sans-serif;
+          font-family: var(--font-ui);
           font-variant-numeric: tabular-nums;
           background: var(--fill);
           border-radius: 8px;
@@ -7742,7 +7790,7 @@ function TrainingAppInner() {
           display: flex;
           align-items: center;
           gap: 5px;
-          font-family: 'Inter', sans-serif;
+          font-family: var(--font-ui);
           font-size: 10.5px;
           text-transform: uppercase;
           letter-spacing: 0.1em;
@@ -7912,7 +7960,7 @@ function TrainingAppInner() {
         .volume-change-badge {
           margin-left: 4px;
           flex-shrink: 0;
-          font-family: 'Inter', sans-serif;
+          font-family: var(--font-ui);
           font-variant-numeric: tabular-nums;
           font-size: 12px;
           font-weight: 600;
@@ -7939,19 +7987,19 @@ function TrainingAppInner() {
           text-align: center;
         }
         .auto-run-phase {
-          font-family: 'Inter', sans-serif;
+          font-family: var(--font-ui);
           font-size: 11px;
           letter-spacing: 0.12em;
           text-transform: uppercase;
           color: var(--text-faint);
         }
         .auto-run-time {
-          font-family: 'Newsreader', Georgia, serif;
+          font-family: var(--font-display);
           font-variant-numeric: tabular-nums;
           font-size: 50px;
-          font-weight: 400;
+          font-weight: 700;
           line-height: 1;
-          letter-spacing: -1.4px;
+          letter-spacing: -0.8px;
           color: var(--text);
         }
         .auto-run-what {
@@ -7979,10 +8027,10 @@ function TrainingAppInner() {
           display: flex;
           align-items: center;
           gap: 8px;
-          font-family: 'Newsreader', Georgia, serif;
+          font-family: var(--font-display);
           font-variant-numeric: tabular-nums;
           font-size: 26px;
-          font-weight: 400;
+          font-weight: 600;
         }
         .rest-timer .rest-actions {
           display: flex;
@@ -8004,7 +8052,7 @@ function TrainingAppInner() {
           border-radius: 8px;
           padding: 7px 10px;
           font-size: 13px;
-          font-family: 'Inter', sans-serif;
+          font-family: var(--font-ui);
           font-weight: 500;
           display: flex;
           align-items: center;
@@ -8024,7 +8072,7 @@ function TrainingAppInner() {
         .confirm-actions{display:flex;gap:8px}
         .confirm-actions .btn{background:transparent}
         .toast-snackbar{position:fixed;left:50%;bottom:82px;transform:translateX(-50%);z-index:35;background:var(--surface-alt);border:1px solid var(--border);border-radius:12px;padding:10px 14px;box-shadow:0 8px 30px rgba(0,0,0,.3);font-size:13px;max-width:90%;text-align:center}
-        @media (max-width:600px){.content{padding-left:18px!important;padding-right:18px!important}.card{padding:14px 0!important}.set-row{grid-template-columns:36px 1fr 1fr 30px!important;gap:6px!important}.set-row.set-row-noweight{grid-template-columns:36px 1fr 30px!important}.set-row input{min-width:0}.meta-grid{grid-template-columns:1fr 1fr}.stat-value{font-size:28px}.bottom-dock{left:0!important;right:0!important;bottom:0!important}.nav-btn{min-width:0!important}.plan-title{font-size:19px}.btn{min-height:44px}.btn-icon{min-width:36px;min-height:36px}}
+        @media (max-width:600px){.content{padding-left:18px!important;padding-right:18px!important}.set-row{grid-template-columns:36px 1fr 1fr 30px!important;gap:6px!important}.set-row.set-row-noweight{grid-template-columns:36px 1fr 30px!important}.set-row input{min-width:0}.meta-grid{grid-template-columns:1fr 1fr}.stat-value{font-size:28px}.bottom-dock{left:0!important;right:0!important;bottom:0!important}.nav-btn{min-width:0!important}.plan-title{font-size:19px}.btn{min-height:44px}.btn-icon{min-width:36px;min-height:36px}}
         @media (prefers-reduced-motion:reduce){*{scroll-behavior:auto!important;transition:none!important;animation:none!important}}
 
         .cal-header {
@@ -8034,10 +8082,10 @@ function TrainingAppInner() {
           margin-bottom: 10px;
         }
         .cal-month-label {
-          font-family: 'Newsreader', Georgia, serif;
-          font-weight: 500;
-          font-size: 26px;
-          letter-spacing: -0.4px;
+          font-family: var(--font-display);
+          font-weight: 700;
+          font-size: 24px;
+          letter-spacing: -0.3px;
           text-transform: capitalize;
           cursor: pointer;
         }
@@ -8267,7 +8315,7 @@ function TrainingAppInner() {
           background: var(--fill);
         }
         .cal-day-num {
-          font-family: 'Inter', sans-serif;
+          font-family: var(--font-ui);
           font-variant-numeric: tabular-nums;
           font-size: 11px;
           color: var(--text-dim);
@@ -8374,8 +8422,8 @@ function TrainingAppInner() {
           gap: 10px;
         }
         .breathing-title {
-          font-family: 'Newsreader', Georgia, serif;
-          font-weight: 500;
+          font-family: var(--font-display);
+          font-weight: 700;
           font-size: 22px;
           letter-spacing: -0.2px;
           color: var(--text);
@@ -8453,17 +8501,18 @@ function TrainingAppInner() {
         }
         .breathing-phase {
           text-align: center;
-          font-family: 'Newsreader', Georgia, serif;
-          font-weight: 500;
+          font-family: var(--font-display);
+          font-weight: 600;
           font-size: 25px;
           color: var(--text);
         }
         .breathing-time {
           text-align: center;
-          font-family: 'Newsreader', Georgia, serif;
+          font-family: var(--font-display);
+          font-weight: 700;
           font-variant-numeric: tabular-nums;
           font-size: 48px;
-          letter-spacing: -1px;
+          letter-spacing: -0.6px;
           color: ${BREATHING_COLOR};
           margin: 2px 0 18px;
         }
@@ -14570,7 +14619,7 @@ function PlanBuilder({
                                   <input
                                     type="text"
                                     inputMode="decimal"
-                                    value={p.weight ?? ""}
+                                    value={typeof p.weight === "number" ? fmtDecimal(p.weight) : p.weight ?? ""}
                                     onChange={(e) => aendereSatz(it.id, idx, "weight", { weight: e.target.value })}
                                   />
                                 ))}
@@ -17431,7 +17480,7 @@ function LogView({
 // exercise detail sheet, so both always show identical numbers.
 // ---------------------------------------------------------------------------
 
-const GYM_LINE_COLORS = ["#b25a26", "#41707d", "#4f7a48", "#6f5f92", "#9a7414"];
+const GYM_LINE_COLORS = ["#4780c3", "#41707d", "#4f7a48", "#6f5f92", "#9a7414"];
 
 // Jedes Gym bekommt überall dieselbe Farbe - in jeder Übung, jedem Diagramm.
 // Grundlage ist die Reihenfolge in der Gym-Verwaltung (gyms), NICHT die
@@ -17464,7 +17513,7 @@ function useChartColors(theme) {
       tooltipBg: read("--elevated", "#ffffff"),
       tooltipBorder: read("--border", "rgba(60,60,67,0.15)"),
       series: {
-        accent: read("--chart-accent", "#b25a26"),
+        accent: read("--chart-accent", "#4780c3"),
         gold: read("--chart-gold", "#9a7414"),
         teal: read("--chart-teal", "#41707d"),
         violet: read("--chart-violet", "#6f5f92"),
@@ -18971,7 +19020,31 @@ function BreathingEditor({ initial, onSave, onCancel }) {
 // gesture inside itself instead of moving the page behind it.
 // ---------------------------------------------------------------------------
 
-function Modal({ title, onClose, children, width = 360 }) {
+// Blatt von unten. Am Griff oder an der Kopfzeile nach unten ziehen schließt
+// es, wie bei iOS. "width" wird nicht mehr gebraucht: ein Blatt ist so breit
+// wie die App.
+function Modal({ title, onClose, children }) {
+  const cardRef = useRef(null);
+  const drag = useRef(null);
+  const dragStart = (e) => {
+    if (e.target.closest?.("button")) return;
+    drag.current = { y: e.touches[0].clientY, dy: 0 };
+    if (cardRef.current) cardRef.current.style.transition = "none";
+  };
+  const dragMove = (e) => {
+    if (!drag.current || !cardRef.current) return;
+    drag.current.dy = Math.max(0, e.touches[0].clientY - drag.current.y);
+    cardRef.current.style.transform = drag.current.dy ? `translateY(${drag.current.dy}px)` : "";
+  };
+  const dragEnd = () => {
+    const d = drag.current;
+    drag.current = null;
+    const card = cardRef.current;
+    if (!d || !card) return;
+    if (d.dy > 90) { onClose(); return; }
+    card.style.transition = "transform 180ms ease";
+    card.style.transform = "";
+  };
   useEffect(() => {
     const onKey = (e) => { if (e.key === "Escape") onClose(); };
     document.addEventListener("keydown", onKey);
@@ -18990,10 +19063,21 @@ function Modal({ title, onClose, children, width = 360 }) {
     <div className="modal-overlay" onClick={onClose}>
       <div
         className="modal-card"
-        style={{ maxWidth: width }}
+        ref={cardRef}
         onClick={(e) => e.stopPropagation()}
       >
-        <div className="modal-head">
+        <div
+          className="modal-grab"
+          onTouchStart={dragStart}
+          onTouchMove={dragMove}
+          onTouchEnd={dragEnd}
+        />
+        <div
+          className="modal-head"
+          onTouchStart={dragStart}
+          onTouchMove={dragMove}
+          onTouchEnd={dragEnd}
+        >
           <span className="modal-title">{title}</span>
           <button className="btn-icon" onClick={onClose} title="Schließen">
             <X size={16} />

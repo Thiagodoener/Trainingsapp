@@ -788,13 +788,22 @@ const toDateKey = (date) => {
 
 // Builds a 6x7 grid (weeks x days) covering the full month plus the
 // leading/trailing days needed to fill complete weeks, Monday-first.
-function getMonthMatrix(year, month) {
+// Nur so viele Wochen, wie der Monat braucht (4 bis 6). Frueher waren es
+// immer sechs - bei den meisten Monaten war die letzte Reihe dann komplett
+// Folgemonat und nahm Platz weg, der den Eintraegen der echten Tage fehlte.
+// So viele Eintraege zeigt ein Tag im Monatsraster, bevor "+N mehr" kommt.
+// Die Zellenhoehe (.cal-day min-height) ist auf genau diese Zahl ausgelegt.
+const CAL_MAX_ENTRIES = 5;
+
+export function getMonthMatrix(year, month) {
   const first = new Date(year, month, 1);
   const startOffset = (first.getDay() + 6) % 7; // Monday = 0
   const gridStart = new Date(year, month, 1 - startOffset);
+  const daysInMonth = new Date(year, month + 1, 0).getDate();
+  const weekCount = Math.ceil((startOffset + daysInMonth) / 7);
   const weeks = [];
   let cursor = new Date(gridStart);
-  for (let w = 0; w < 6; w++) {
+  for (let w = 0; w < weekCount; w++) {
     const week = [];
     for (let d = 0; d < 7; d++) {
       week.push(new Date(cursor));
@@ -8293,7 +8302,9 @@ function TrainingAppInner() {
           border-top: 1px solid var(--border);
           border-radius: 0;
           padding: 4px 2px 6px;
-          min-height: 46px;
+          /* Platz fuer Tageszahl + CAL_MAX_ENTRIES Eintraege, damit jede
+             Woche gleich hoch ist und der Monat laenger wird statt enger. */
+          min-height: 116px;
           cursor: pointer;
           display: flex;
           flex-direction: column;
@@ -11046,9 +11057,13 @@ function CalendarView({
                 // ersten angetippten Tag und dem Tag darunter schon mit.
                 const inDraft = draftRange && key >= draftRange[0] && key <= draftRange[1];
                 // Every week is treated the same, so the month grid keeps an
-                // even rhythm instead of one row bulging out.
-                const visibleEntries = dayEntries.slice(0, 3);
-                const overflow = Math.max(0, dayEntries.length - 3);
+                // even rhythm instead of one row bulging out. Passen alle
+                // Eintraege in die Zelle, stehen sie alle da - "+1 mehr"
+                // braucht dieselbe Zeile wie der Eintrag selbst.
+                const visibleEntries = dayEntries.length > CAL_MAX_ENTRIES
+                  ? dayEntries.slice(0, CAL_MAX_ENTRIES - 1)
+                  : dayEntries;
+                const overflow = dayEntries.length - visibleEntries.length;
                 return (
                   <div
                     key={key}

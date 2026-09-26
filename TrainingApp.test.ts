@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import {
+  getMonthMatrix,
   filterNutzung,
   nachNutzung,
   satzPlanVon,
@@ -2954,5 +2955,21 @@ describe("Filter-Chips nach Nutzung", () => {
     expect(nachNutzung(["Langhantel", "Kurzhanteln", "Band", "Sonstiges"], { Band: 3, Sonstiges: 1 }))
       .toEqual(["Band", "Sonstiges", "Langhantel", "Kurzhanteln"]);
     expect(nachNutzung(["x", "y"], null)).toEqual(["x", "y"]);
+  });
+});
+
+describe("getMonthMatrix", () => {
+  const reihen = (y, m) => getMonthMatrix(y, m).length;
+  it("zeigt nur die Wochen, die der Monat braucht", () => {
+    expect(reihen(2026, 8)).toBe(5);  // September 2026: Di 1. bis Mi 30.
+    expect(reihen(2021, 1)).toBe(4);  // Februar 2021: Mo 1. bis So 28.
+    expect(reihen(2026, 7)).toBe(6);  // August 2026: Sa 1. bis Mo 31.
+  });
+  it("letzte Reihe enthält immer noch einen Tag des Monats", () => {
+    for (let m = 0; m < 12; m++) {
+      const wochen = getMonthMatrix(2026, m);
+      expect(wochen.at(-1).some((d) => d.getMonth() === m)).toBe(true);
+      expect(wochen.at(-1).at(-1).getDay()).toBe(0);
+    }
   });
 });

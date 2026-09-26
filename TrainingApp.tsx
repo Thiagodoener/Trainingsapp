@@ -209,6 +209,28 @@ const BREATHING_PHASE_VIBRATION = [50, 40, 50];
 // (letzte Phase der letzten Runde), nicht nur einen Phasenwechsel.
 const BREATHING_EXERCISE_END_VIBRATION = [150, 100, 150, 100, 150];
 
+// Das Signal am Phasenende. Auf dem iPhone gibt es keine Vibration aus einer
+// Web-App: Safari kennt navigator.vibrate gar nicht, und der Umweg über den
+// Haptik-Schalter (<input switch>) reagiert seit iOS 26.5 nur noch auf einen
+// echten Fingertipp, nicht mehr auf Code - also nie am Ende einer getakteten
+// Phase. Das Häkchen im Editor tat auf dem iPhone deshalb schlicht nichts.
+// Wo vibriert werden kann (Android), wird vibriert; überall sonst kommt ein
+// leiser Ton. navigator.vibrate liefert false, wenn der Browser die
+// Vibration verweigert - dann ebenfalls der Ton, statt gar nichts.
+export function signalBreathingPhaseEnd(isExerciseEnd, env = {}) {
+  const nav = env.navigator ?? (typeof navigator !== "undefined" ? navigator : null);
+  const play = env.playTone ?? playBreathingTone;
+  if (typeof nav?.vibrate === "function") {
+    try {
+      if (nav.vibrate(isExerciseEnd ? BREATHING_EXERCISE_END_VIBRATION : BREATHING_PHASE_VIBRATION)) {
+        return "vibration";
+      }
+    } catch (_) {}
+  }
+  play(isExerciseEnd);
+  return "ton";
+}
+
 // Exercise pickers only render a screenful at a time. Drawing all ~150
 // rows made every tap inside the picker redraw the entire list, which
 // felt like a stutter on each "Add".
@@ -5063,6 +5085,10 @@ function TrainingAppInner() {
       showToast("Diese Atemübung hat noch keine Phasen.");
       return;
     }
+    // Der Ton am Phasenende darf auf iOS nur spielen, wenn der Audio-Kontext
+    // durch einen Fingertipp geöffnet wurde - das ist genau dieser Tipp auf
+    // "Starten". Später, am Ende einer Phase, wäre es zu spät dafür.
+    unlockAudio();
     setBreathingManagerOpen(false);
     setBreathingSession({ exercise, calendarEntryId, startedAt: Date.now() });
   };
@@ -10632,6 +10658,17 @@ function DashboardView({
           })}
         </>
       )}
+
+      {/* Atemübungen direkt von der Startseite - vorher lagen sie nur im
+          Zahnrad-Menü zwischen Gyms und Bändern, als wären sie eine
+          Einstellung und nicht etwas, das man macht. */}
+      <button
+        className="btn btn-ghost btn-block"
+        style={{ marginBottom: 12 }}
+        onClick={onManageBreathing}
+      >
+        <Wind size={15} /> Atemübungen
+      </button>
 
       {lastLog && (
         <div className="stats-grid" style={{ marginBottom: 4 }}>
@@ -18359,6 +18396,39 @@ function playBell(volume = 0.6) {
   } catch (_) { /* sound is optional, never break the workout over it */ }
 }
 
+// Atemübung: bewusst KEINE Boxglocke wie bei der Pause. Ein weicher,
+// ausklingender Sinuston mit leiser Oktave darüber - hörbar mit geschlossenen
+// Augen, aber ohne einen aus der Ruhe zu reißen. Das Ende der ganzen Übung
+// bekommt drei aufsteigende Töne, damit man es vom Phasenwechsel
+// unterscheidet, ohne hinzusehen.
+function scheduleSoftTone(ctx, atTime, frequency, volume, decay) {
+  [{ ratio: 1, gain: 1, decay }, { ratio: 2, gain: 0.18, decay: decay * 0.5 }].forEach((p) => {
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.type = "sine";
+    osc.frequency.value = frequency * p.ratio;
+    gain.gain.setValueAtTime(0.0001, atTime);
+    gain.gain.linearRampToValueAtTime(Math.max(0.0001, volume * p.gain), atTime + 0.02);
+    gain.gain.exponentialRampToValueAtTime(0.0001, atTime + p.decay);
+    osc.connect(gain).connect(ctx.destination);
+    osc.start(atTime);
+    osc.stop(atTime + p.decay + 0.05);
+  });
+}
+
+function playBreathingTone(isExerciseEnd = false) {
+  const ctx = unlockAudio();
+  if (!ctx) return;
+  try {
+    const t = ctx.currentTime;
+    if (isExerciseEnd) {
+      [523.25, 659.25, 783.99].forEach((f, i) => scheduleSoftTone(ctx, t + i * 0.22, f, 0.4, 1.4));
+    } else {
+      scheduleSoftTone(ctx, t, 587.33, 0.4, 0.9);
+    }
+  } catch (_) { /* Ton ist Beiwerk, die Übung läuft auch ohne */ }
+}
+
 // The rest-end bell is placed on the audio clock the moment the rest starts,
 // not fired by a timer when it ends. setInterval is throttled to a standstill
 // as soon as the screen goes off or the app moves to the background, so a
@@ -18509,14 +18579,12 @@ function BreathingSessionView({ session, onFinish, onCancel }) {
   const goNext = () => {
     if (isOpen) maxOpenSecondsRef.current = Math.max(maxOpenSecondsRef.current, elapsed);
     const nextIndex = phaseIndex + 1;
-    // Vibriert für die Phase, die hier gerade endet - egal ob per Timer oder
+    // Signal für die Phase, die hier gerade endet - egal ob per Timer oder
     // per Tippen auf "Weiter" bei einer offenen Phase. Die letzte Phase der
-    // letzten Runde bekommt das kräftigere Ende-Muster statt des normalen.
-    if (phase?.vibrate && navigator.vibrate) {
-      const isExerciseEnd = nextIndex >= phases.length && round >= totalRounds;
-      try {
-        navigator.vibrate(isExerciseEnd ? BREATHING_EXERCISE_END_VIBRATION : BREATHING_PHASE_VIBRATION);
-      } catch (_) {}
+    // letzten Runde bekommt das kräftigere Ende-Signal statt des normalen.
+    // Vibration wo möglich, sonst ein Ton (siehe signalBreathingPhaseEnd).
+    if (phase?.vibrate) {
+      signalBreathingPhaseEnd(nextIndex >= phases.length && round >= totalRounds);
     }
     if (nextIndex < phases.length) {
       setPhaseIndex(nextIndex);
@@ -18532,6 +18600,40 @@ function BreathingSessionView({ session, onFinish, onCancel }) {
     onFinish({ ...session, completedRounds: totalRounds, maxHoldSeconds: maxOpenSecondsRef.current });
   };
   advanceRef.current = goNext;
+
+  // Bildschirm an lassen, solange die Übung offen ist. Geht er aus, hält iOS
+  // die Seite an: kein Phasenwechsel, kein Ton, und die Übung stünde beim
+  // Wiederaufwecken irgendwo mitten in einer Phase. iOS gibt die Sperre
+  // selbst frei, sobald die App kurz in den Hintergrund geht - deshalb wird
+  // sie beim Zurückkommen neu angefordert.
+  useEffect(() => {
+    let lock = null;
+    let ended = false;
+    const request = () => {
+      if (ended || lock || !navigator.wakeLock?.request) return;
+      navigator.wakeLock.request("screen")
+        .then((l) => {
+          if (ended) { l.release?.().catch(() => {}); return; }
+          lock = l;
+          l.addEventListener?.("release", () => { if (lock === l) lock = null; });
+        })
+        .catch(() => { /* nicht gewährt - die Übung läuft trotzdem */ });
+    };
+    const onVisible = () => {
+      if (document.visibilityState === "visible") {
+        resumeAudioIfSuspended();
+        request();
+      }
+    };
+    request();
+    document.addEventListener("visibilitychange", onVisible);
+    return () => {
+      ended = true;
+      document.removeEventListener("visibilitychange", onVisible);
+      lock?.release?.().catch(() => {});
+      lock = null;
+    };
+  }, []);
 
   useEffect(() => {
     if (paused) return;
@@ -18553,6 +18655,9 @@ function BreathingSessionView({ session, onFinish, onCancel }) {
   }, [now, paused, isOpen, phase, elapsed, phaseSeconds]);
 
   const togglePause = () => {
+    // Ein Fingertipp ist die Gelegenheit, einen von iOS angehaltenen
+    // Audio-Kontext wieder zu wecken - ohne Tipp darf er das nicht.
+    unlockAudio();
     if (paused) {
       // Die im Pausenzustand vergangene Zeit darf nicht als Phasenfortschritt
       // zählen, deshalb wandert der Startzeitpunkt mit.
@@ -18995,8 +19100,11 @@ function BreathingEditor({ initial, onSave, onCancel }) {
 
       <label className="time-toggle-row" style={{ marginTop: 12 }}>
         <input type="checkbox" checked={vibrateOnPhaseEnd} onChange={toggleVibrateDefault} />
-        Vibration am Ende jeder Phase
+        Signal am Ende jeder Phase
       </label>
+      <p style={{ fontSize: 12, color: "var(--text-dim)", margin: "2px 0 0" }}>
+        Vibration, wo das Handy es erlaubt – auf dem iPhone ein leiser Ton.
+      </p>
 
       <label className="field-label" style={{ marginTop: 8 }}>Phasen</label>
       <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
@@ -19055,7 +19163,7 @@ function BreathingEditor({ initial, onSave, onCancel }) {
                 checked={!!p.vibrate}
                 onChange={(e) => updatePhase(idx, { vibrate: e.target.checked })}
               />
-              Vibration am Ende dieser Phase
+              Signal am Ende dieser Phase
             </label>
           </div>
         ))}

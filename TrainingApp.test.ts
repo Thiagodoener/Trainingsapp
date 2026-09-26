@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import {
+  signalBreathingPhaseEnd,
   AUSDAUER_SPORTARTEN,
   ausdauerSportart,
   getMonthMatrix,
@@ -2986,5 +2987,30 @@ describe("ausdauerSportart", () => {
     expect(ausdauerSportart("rad").label).toBe("Rad");
     expect(ausdauerSportart("kitesurfen").id).toBe("sonstige");
     expect(ausdauerSportart(undefined).id).toBe("sonstige");
+  });
+});
+
+describe("signalBreathingPhaseEnd", () => {
+  it("iPhone (kein navigator.vibrate): spielt den Ton", () => {
+    const toene = [];
+    const art = signalBreathingPhaseEnd(false, { navigator: {}, playTone: (ende) => toene.push(ende) });
+    expect(art).toBe("ton");
+    expect(toene).toEqual([false]);
+  });
+  it("Android: vibriert statt Ton", () => {
+    const muster = [];
+    const toene = [];
+    const art = signalBreathingPhaseEnd(true, {
+      navigator: { vibrate: (m) => { muster.push(m); return true; } },
+      playTone: (ende) => toene.push(ende),
+    });
+    expect(art).toBe("vibration");
+    expect(muster[0].length).toBe(5);
+    expect(toene).toEqual([]);
+  });
+  it("verweigerte Vibration: fällt auf den Ton zurück", () => {
+    const toene = [];
+    signalBreathingPhaseEnd(true, { navigator: { vibrate: () => false }, playTone: (e) => toene.push(e) });
+    expect(toene).toEqual([true]);
   });
 });

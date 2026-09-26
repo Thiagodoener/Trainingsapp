@@ -1,5 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
+  AUSDAUER_SPORTARTEN,
+  ausdauerSportart,
   getMonthMatrix,
   filterNutzung,
   nachNutzung,
@@ -2971,5 +2973,18 @@ describe("getMonthMatrix", () => {
       expect(wochen.at(-1).some((d) => d.getMonth() === m)).toBe(true);
       expect(wochen.at(-1).at(-1).getDay()).toBe(0);
     }
+  });
+});
+
+describe("ausdauerSportart", () => {
+  it("jede Sportart hat eine eigene Farbe", () => {
+    const farben = AUSDAUER_SPORTARTEN.map((s) => s.color);
+    expect(farben.every((f) => /^#[0-9a-f]{6}$/i.test(f))).toBe(true);
+    expect(new Set(farben).size).toBe(farben.length);
+  });
+  it("Unbekanntes landet bei Sonstige", () => {
+    expect(ausdauerSportart("rad").label).toBe("Rad");
+    expect(ausdauerSportart("kitesurfen").id).toBe("sonstige");
+    expect(ausdauerSportart(undefined).id).toBe("sonstige");
   });
 });

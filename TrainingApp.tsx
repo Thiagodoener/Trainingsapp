@@ -108,6 +108,8 @@ const CATEGORY_COLORS = SWATCH_COLORS;
 const BREATHING_COLOR = "#1f6fe5";
 // Grün für Ausdauer - deutlich getrennt vom kräftigen Blau der Atemübungen und
 // vom Akzentton der Kraft-Trainings, damit ein Blick auf den Monat reicht.
+// Jede Sportart hat inzwischen ihre eigene Farbe (AUSDAUER_SPORTARTEN); das
+// Grün bleibt die Farbe des Laufens und der Rückfall für Unbekanntes.
 const ENDURANCE_COLOR = "#5aa86e";
 const BREATHING_DIRECTIONS = [
   { id: "in", label: "Einatmen" },
@@ -2365,15 +2367,27 @@ export const TRIMP_KONSTANTEN = {
   frau: { a: 0.86, b: 1.67 },
 };
 
+// Jede Sportart hat ihre eigene Farbe, damit man im Kalender Lauf, Rad und
+// Wanderung auseinanderhält, ohne den Text zu lesen. Die Chips sind blass
+// getönt (siehe .cal-entry-endurance) - das unterscheidet Ausdauer weiterhin
+// von den voll deckenden Kategorie-Farben. Bewusst kein Blau: das gehört den
+// Workouts (blass) und den Atemübungen (kräftig).
 export const AUSDAUER_SPORTARTEN = [
-  { id: "laufen", label: "Laufen" },
-  { id: "rad", label: "Rad" },
-  { id: "schwimmen", label: "Schwimmen" },
-  { id: "rudern", label: "Rudern" },
-  { id: "airbike", label: "Airbike" },
-  { id: "wandern", label: "Wandern" },
-  { id: "sonstige", label: "Sonstige" },
+  { id: "laufen", label: "Laufen", color: ENDURANCE_COLOR },
+  { id: "rad", label: "Rad", color: "#e8a13e" },
+  { id: "schwimmen", label: "Schwimmen", color: "#2fb3a6" },
+  { id: "rudern", label: "Rudern", color: "#8a6f5c" },
+  { id: "airbike", label: "Airbike", color: "#d85a4f" },
+  { id: "wandern", label: "Wandern", color: "#a8b544" },
+  { id: "sonstige", label: "Sonstige", color: "#8f9296" },
 ];
+
+// Eine Sportart nachschlagen; Unbekanntes (alter Speicherstand, neue
+// Sportart der Uhr) landet bei "Sonstige" statt ohne Farbe und Namen.
+export function ausdauerSportart(id) {
+  return AUSDAUER_SPORTARTEN.find((s) => s.id === id)
+    || AUSDAUER_SPORTARTEN.find((s) => s.id === "sonstige");
+}
 
 // Ohne vollständiges Puls-Profil wird nicht gerechnet. Ein geschätzter Ruhe-
 // oder Maximalpuls (etwa aus "220 minus Alter") liegt regelmäßig um mehr als
@@ -5323,6 +5337,15 @@ function TrainingAppInner() {
     ausdauerAbgleichen({ still: true });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [loading, ausdauerSchluessel, ausdauerAbgleich]);
+
+  // Die Notiz ist das einzige, was an einer Einheit nachträglich geändert
+  // wird. Ein späterer Abgleich mit der Uhr fasst bestehende Einheiten nicht
+  // an (neueExterneEinheiten übernimmt nur unbekannte), die Notiz bleibt also.
+  const updateEnduranceNote = async (id, notiz) => {
+    await persistEnduranceLogs(
+      enduranceLogs.map((e) => (e.id === id ? { ...e, notiz } : e))
+    );
+  };
 
   // Löscht die Einheit und den Kalendereintrag, der auf sie zeigt - sonst
   // bliebe im Kalender ein Eintrag stehen, hinter dem nichts mehr steckt.
@@ -8383,7 +8406,7 @@ function TrainingAppInner() {
           color: #fff;
         }
         .cal-entry-endurance {
-          background: color-mix(in srgb, ${ENDURANCE_COLOR} 42%, transparent);
+          background: color-mix(in srgb, var(--sport-color, ${ENDURANCE_COLOR}) 42%, transparent);
           color: var(--text);
         }
         .cal-entry-more {
@@ -8411,6 +8434,12 @@ function TrainingAppInner() {
         .cal-detail-done {
           border-left: 2px solid var(--success);
           padding-left: 10px;
+        }
+        .endurance-notiz {
+          margin-top: 6px;
+          color: var(--text);
+          white-space: pre-wrap;
+          overflow-wrap: anywhere;
         }
         /* Der letzte Eintrag des Tages braucht keine eigene Abschlusslinie -
            die des umgebenden Abschnitts steht direkt darunter. */
@@ -8871,6 +8900,7 @@ function TrainingAppInner() {
             onStartScheduledBreathing={startBreathingSession}
             enduranceLogs={enduranceLogs}
             pulsProfil={pulsProfil}
+            onUpdateEnduranceNote={updateEnduranceNote}
             onLogEndurance={async (dateKey, daten) => {
               const tag = dateFromKey(dateKey) || new Date();
               const [std, min] = String(daten.uhrzeit || "12:00").split(":").map(Number);
@@ -10760,6 +10790,7 @@ function CalendarView({
   enduranceLogs = [],
   pulsProfil = null,
   onLogEndurance,
+  onUpdateEnduranceNote,
   deloadWeeks = [],
   onAddDeloadRange,
   onRemoveDeloadAt,
@@ -10786,6 +10817,8 @@ function CalendarView({
   // can be swapped for workout/breathing, and action entries additionally
   // get their category/text/duration reopened for editing.
   const [editingEntry, setEditingEntry] = useState(null);
+  // Notiz an einer Ausdauer-Einheit: { id, text } solange der Dialog offen ist.
+  const [notizEinheit, setNotizEinheit] = useState(null);
   const [editDate, setEditDate] = useState("");
   const [editActionCategory, setEditActionCategory] = useState(null);
   const [editActionText, setEditActionText] = useState("");
@@ -11127,10 +11160,15 @@ function CalendarView({
                         }
                         if (entry.type === "endurance") {
                           const einheit = enduranceById[entry.enduranceId];
+                          const sportart = einheit ? ausdauerSportart(einheit.sport) : null;
                           return (
-                            <span key={entry.id} className="cal-entry-chip cal-entry-endurance">
+                            <span
+                              key={entry.id}
+                              className="cal-entry-chip cal-entry-endurance"
+                              style={sportart ? { "--sport-color": sportart.color } : undefined}
+                            >
                               <Check size={9} />
-                              {AUSDAUER_SPORTARTEN.find((s) => s.id === einheit?.sport)?.label || "Ausdauer"}
+                              {sportart?.label || "Ausdauer"}
                             </span>
                           );
                         }
@@ -11388,16 +11426,30 @@ function CalendarView({
               const belastung = einheit
                 ? trimpWert(einheit.durationSeconds, einheit.avgHr, pulsProfil)
                 : 0;
+              const sportart = einheit ? ausdauerSportart(einheit.sport) : null;
               return (
                 <div key={entry.id} className="cal-detail-item cal-detail-done">
                   <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
                     <span className="ex-name">
-                      <Activity size={13} style={{ marginRight: 6, verticalAlign: -2, color: ENDURANCE_COLOR }} />
-                      {AUSDAUER_SPORTARTEN.find((s) => s.id === einheit?.sport)?.label || "Ausdauer"}
+                      <Activity size={13} style={{ marginRight: 6, verticalAlign: -2, color: sportart?.color || ENDURANCE_COLOR }} />
+                      {sportart?.label || "Ausdauer"}
                     </span>
-                    <button className="btn-icon" onClick={() => onDeleteEntry(entry.id)} title="Einheit entfernen">
-                      <Trash2 size={13} />
-                    </button>
+                    <div style={{ display: "flex", gap: 4, flexShrink: 0 }}>
+                      {/* Die Zahlen der Uhr bleiben unangetastet - was sich
+                          ergänzen lässt, ist nur, was die Uhr nicht weiß. */}
+                      {einheit && (
+                        <button
+                          className="btn-icon"
+                          onClick={() => setNotizEinheit({ id: einheit.id, text: einheit.notiz || "" })}
+                          title={einheit.notiz ? "Notiz bearbeiten" : "Notiz hinzufügen"}
+                        >
+                          <PencilLine size={13} />
+                        </button>
+                      )}
+                      <button className="btn-icon" onClick={() => onDeleteEntry(entry.id)} title="Einheit entfernen">
+                        <Trash2 size={13} />
+                      </button>
+                    </div>
                   </div>
                   {einheit ? (
                     <div style={{ fontSize: 12.5, color: "var(--text-dim)", marginTop: 6 }}>
@@ -11408,6 +11460,9 @@ function CalendarView({
                         belastung > 0 ? `Belastung ${fmtDecimal(belastung)}` : null,
                         einheit.quelle === "intervals" ? "von der Uhr" : null,
                       ].filter(Boolean).join(" · ")}
+                      {einheit.notiz ? (
+                        <div className="endurance-notiz">{einheit.notiz}</div>
+                      ) : null}
                     </div>
                   ) : (
                     <p style={{ fontSize: 12.5, color: "var(--text-dim)", marginTop: 6 }}>
@@ -11765,6 +11820,27 @@ function CalendarView({
                 </div>
               </>
             )}
+          </Modal>
+        )}
+
+        {notizEinheit && (
+          <Modal title="Notiz zur Einheit" onClose={() => setNotizEinheit(null)} width={420}>
+            <textarea
+              autoFocus
+              value={notizEinheit.text}
+              onChange={(e) => setNotizEinheit({ ...notizEinheit, text: e.target.value })}
+              placeholder="z. B. Beine schwer, Intervalle 6×400 m, mit Gegenwind…"
+            />
+            <button
+              className="btn btn-primary btn-block btn-sm"
+              style={{ marginTop: 10 }}
+              onClick={() => {
+                onUpdateEnduranceNote?.(notizEinheit.id, notizEinheit.text.trim());
+                setNotizEinheit(null);
+              }}
+            >
+              Speichern
+            </button>
           </Modal>
         )}
       </div>

@@ -1,6 +1,8 @@
 import { describe, it, expect } from "vitest";
 import {
   signalBreathingPhaseEnd,
+  lastBreathingExercise,
+  breathingWeekSummary,
   AUSDAUER_SPORTARTEN,
   ausdauerSportart,
   getMonthMatrix,
@@ -2991,18 +2993,18 @@ describe("ausdauerSportart", () => {
 });
 
 describe("signalBreathingPhaseEnd", () => {
-  it("iPhone (kein navigator.vibrate): spielt den Ton", () => {
+  it("iPhone (kein navigator.vibrate): Ton kündigt die nächste Phase an", () => {
     const toene = [];
-    const art = signalBreathingPhaseEnd(false, { navigator: {}, playTone: (ende) => toene.push(ende) });
+    const art = signalBreathingPhaseEnd("out", { navigator: {}, playTone: (n) => toene.push(n) });
     expect(art).toBe("ton");
-    expect(toene).toEqual([false]);
+    expect(toene).toEqual(["out"]);
   });
-  it("Android: vibriert statt Ton", () => {
+  it("Android: vibriert statt Ton, am Ende das kräftige Muster", () => {
     const muster = [];
     const toene = [];
-    const art = signalBreathingPhaseEnd(true, {
+    const art = signalBreathingPhaseEnd("end", {
       navigator: { vibrate: (m) => { muster.push(m); return true; } },
-      playTone: (ende) => toene.push(ende),
+      playTone: (n) => toene.push(n),
     });
     expect(art).toBe("vibration");
     expect(muster[0].length).toBe(5);
@@ -3010,7 +3012,38 @@ describe("signalBreathingPhaseEnd", () => {
   });
   it("verweigerte Vibration: fällt auf den Ton zurück", () => {
     const toene = [];
-    signalBreathingPhaseEnd(true, { navigator: { vibrate: () => false }, playTone: (e) => toene.push(e) });
-    expect(toene).toEqual([true]);
+    signalBreathingPhaseEnd("end", { navigator: { vibrate: () => false }, playTone: (n) => toene.push(n) });
+    expect(toene).toEqual(["end"]);
+  });
+});
+
+describe("lastBreathingExercise", () => {
+  const box = { id: "box", name: "Box" };
+  const seufzer = { id: "seufzer", name: "Seufzer" };
+  it("nimmt die zuletzt absolvierte Übung", () => {
+    const logs = [
+      { breathingId: "box", date: "2026-09-20T08:00:00Z" },
+      { breathingId: "seufzer", date: "2026-09-25T08:00:00Z" },
+      { breathingId: "box", date: "2026-09-22T08:00:00Z" },
+    ];
+    expect(lastBreathingExercise([box, seufzer], logs)).toBe(seufzer);
+  });
+  it("überspringt gelöschte Übungen, ohne Verlauf die erste", () => {
+    expect(lastBreathingExercise([box, seufzer], [{ breathingId: "weg", date: "2026-09-25T08:00:00Z" }])).toBe(box);
+    expect(lastBreathingExercise([box], [])).toBe(box);
+    expect(lastBreathingExercise([], [])).toBe(null);
+  });
+});
+
+describe("breathingWeekSummary", () => {
+  it("zählt die letzten 7 Tage, das längste Anhalten über alles", () => {
+    const now = new Date("2026-09-26T12:00:00Z").getTime();
+    const logs = [
+      { date: "2026-09-25T08:00:00Z", durationSeconds: 300, maxHoldSeconds: 45 },
+      { date: "2026-09-21T08:00:00Z", durationSeconds: 150, maxHoldSeconds: null },
+      { date: "2026-09-01T08:00:00Z", durationSeconds: 600, maxHoldSeconds: 92 },
+    ];
+    expect(breathingWeekSummary(logs, now)).toEqual({ sessions: 2, minutes: 8, bestHold: 92 });
+    expect(breathingWeekSummary([], now)).toEqual({ sessions: 0, minutes: 0, bestHold: 0 });
   });
 });

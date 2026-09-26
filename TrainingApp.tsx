@@ -209,6 +209,38 @@ const BREATHING_PHASE_VIBRATION = [50, 40, 50];
 // (letzte Phase der letzten Runde), nicht nur einen Phasenwechsel.
 const BREATHING_EXERCISE_END_VIBRATION = [150, 100, 150, 100, 150];
 
+// Das Signal am Phasenende. Auf dem iPhone gibt es keine Vibration aus einer
+// Web-App: Safari kennt navigator.vibrate gar nicht, und der Umweg über den
+// Haptik-Schalter (<input switch>) reagiert seit iOS 26.5 nur noch auf einen
+// echten Fingertipp, nicht mehr auf Code - also nie am Ende einer getakteten
+// Phase. Das Häkchen im Editor tat auf dem iPhone deshalb schlicht nichts.
+// Wo vibriert werden kann (Android), wird vibriert; überall sonst kommt ein
+// leiser Ton. navigator.vibrate liefert false, wenn der Browser die
+// Vibration verweigert - dann ebenfalls der Ton, statt gar nichts.
+//
+// `next` sagt, was als Nächstes kommt: die Richtung der folgenden Phase
+// ("in", "hold", "out") oder "end" für das Ende der ganzen Übung. Der Ton
+// kündigt damit die nächste Phase an (siehe BREATHING_NEXT_TONES) - so weiß
+// man auch mit geschlossenen Augen, ob jetzt ein- oder ausgeatmet wird.
+export function signalBreathingPhaseEnd(next, env = {}) {
+  const nav = env.navigator ?? (typeof navigator !== "undefined" ? navigator : null);
+  const play = env.playTone ?? playBreathingTone;
+  if (typeof nav?.vibrate === "function") {
+    try {
+      if (nav.vibrate(next === "end" ? BREATHING_EXERCISE_END_VIBRATION : BREATHING_PHASE_VIBRATION)) {
+        return "vibration";
+      }
+    } catch (_) {}
+  }
+  play(next);
+  return "ton";
+}
+
+// Tonhöhe je nächster Phase: hoch vor dem Einatmen (die Lunge füllt sich),
+// tief vor dem Ausatmen, dazwischen vor dem Halten. Drei Töne eines
+// Dur-Dreiklangs, damit sie nacheinander nicht schief klingen.
+const BREATHING_NEXT_TONES = { in: 659.25, hold: 523.25, out: 392.0 };
+
 // Exercise pickers only render a screenful at a time. Drawing all ~150
 // rows made every tap inside the picker redraw the entire list, which
 // felt like a stutter on each "Add".
@@ -4344,9 +4376,6 @@ function TrainingAppInner() {
   // zu werden. Beim Abgleich weggeworfen wären sie später nicht mehr zu holen.
   const [externeKraftAktivitaeten, setExterneKraftAktivitaeten] = useState([]);
   const [abgleichStatus, setAbgleichStatus] = useState({ laeuft: false, meldung: "" });
-  const [breathingManagerOpen, setBreathingManagerOpen] = useState(false);
-  // null = Liste, sonst die gerade bearbeitete Übung (ohne id = neu).
-  const [breathingEditing, setBreathingEditing] = useState(null);
   // Die laufende Atem-Sitzung. Liegt wie der Pausentimer in der Root-
   // Komponente, damit ein Tabwechsel sie nicht abräumt.
   const [breathingSession, setBreathingSession] = useState(null);
@@ -5063,7 +5092,13 @@ function TrainingAppInner() {
       showToast("Diese Atemübung hat noch keine Phasen.");
       return;
     }
-    setBreathingManagerOpen(false);
+    // Der Ton am Phasenende darf auf iOS nur spielen, wenn der Audio-Kontext
+    // durch einen Fingertipp geöffnet wurde - das ist genau dieser Tipp auf
+    // "Starten". Später, am Ende einer Phase, wäre es zu spät dafür. Die
+    // Sitzungsart kommt vorher, damit der Kontext gleich so startet (Ton auch
+    // bei Stummschalter, siehe setAudioSessionType).
+    setAudioSessionType("playback");
+    unlockAudio();
     setBreathingSession({ exercise, calendarEntryId, startedAt: Date.now() });
   };
   // Abschluss einer Atem-Sitzung: Protokoll schreiben und - wie beim
@@ -8534,6 +8569,64 @@ function TrainingAppInner() {
         .breathing-line polyline {
           stroke: color-mix(in srgb, ${BREATHING_COLOR} 45%, transparent);
         }
+        /* Kopf einer Unterseite: Zurück-Pfeil und Titel, gleich gebaut wie
+           die Monatszeile im Kalender. */
+        .page-head {
+          display: flex;
+          align-items: center;
+          gap: 6px;
+          margin-bottom: 12px;
+        }
+        .page-head-title {
+          font-family: var(--font-display);
+          font-weight: 700;
+          font-size: 24px;
+          letter-spacing: -0.3px;
+          min-width: 0;
+          overflow: hidden;
+          text-overflow: ellipsis;
+          white-space: nowrap;
+        }
+        .breathing-hero-kicker {
+          display: block;
+          font-size: 11px;
+          font-weight: 600;
+          letter-spacing: 0.08em;
+          text-transform: uppercase;
+          color: ${BREATHING_COLOR};
+          margin-bottom: 4px;
+        }
+        .breathing-hero-meta {
+          display: block;
+          font-size: 12.5px;
+          color: var(--text-dim);
+          margin: 4px 0 8px;
+        }
+        .breathing-card-row {
+          display: flex;
+          align-items: center;
+          gap: 8px;
+        }
+        .breathing-card-name {
+          display: block;
+          font-weight: 600;
+          overflow: hidden;
+          text-overflow: ellipsis;
+          white-space: nowrap;
+        }
+        .breathing-card .breathing-hero-meta {
+          margin-bottom: 0;
+        }
+        .breathing-curve {
+          display: block;
+          width: 100%;
+          max-width: none;
+          max-height: none;
+        }
+        .breathing-curve polyline {
+          stroke: ${BREATHING_COLOR};
+          opacity: 0.55;
+        }
         .breathing-dot {
           position: absolute;
           width: 16px;
@@ -8867,7 +8960,7 @@ function TrainingAppInner() {
               setAbgleichStatus({ laeuft: false, meldung: "" });
               setAbgleichOpen(true);
             }}
-            onManageBreathing={() => { setBreathingEditing(null); setBreathingManagerOpen(true); }}
+            onManageBreathing={() => setTab("breathing")}
             onOpenBackup={() => setBackupOpen(true)}
             onStartWorkout={(plan, entryId) => startScheduledWorkout(plan, entryId)}
             onStartBreathing={(exercise, entryId) => startBreathingSession(exercise, entryId)}
@@ -8875,6 +8968,15 @@ function TrainingAppInner() {
             // Derselbe Sprung, den der Kalender schon macht: in den Verlauf
             // und dieses Training gleich aufgeklappt.
             onOpenLog={(log) => { setTab("progress"); setHistoryFocusLogId(log.id); }}
+          />
+        ) : tab === "breathing" ? (
+          <BreathingPage
+            breathingExercises={breathingExercises}
+            breathingLogs={breathingLogs}
+            onBack={() => setTab("dashboard")}
+            onStart={(exercise) => startBreathingSession(exercise)}
+            onSave={saveBreathingExercise}
+            onDelete={deleteBreathingExercise}
           />
         ) : tab === "calendar" ? (
           <CalendarView
@@ -9270,87 +9372,6 @@ function TrainingAppInner() {
             >
               {backupMessage.text}
             </div>
-          )}
-        </Modal>
-      )}
-
-      {breathingManagerOpen && (
-        <Modal
-          title={breathingEditing ? (breathingEditing.id ? "Atemübung bearbeiten" : "Neue Atemübung") : "Atemübungen"}
-          width={420}
-          onClose={() => { setBreathingManagerOpen(false); setBreathingEditing(null); }}
-        >
-          {breathingEditing ? (
-            <BreathingEditor
-              // Auch eine Vorlage muss den Editor vorbefüllen. Nur die id
-              // fehlt ihr - daran hängt lediglich, ob gespeichert oder neu
-              // angelegt wird, nicht ob Felder übernommen werden.
-              initial={breathingEditing}
-              onCancel={() => setBreathingEditing(null)}
-              onSave={async (ex) => {
-                await saveBreathingExercise(ex);
-                setBreathingEditing(null);
-              }}
-            />
-          ) : (
-            <>
-              {breathingExercises.length === 0 && (
-                <div className="empty-state" style={{ padding: "14px 0" }}>
-                  Noch keine Atemübung angelegt. Nimm unten eine Vorlage oder baue dir eine eigene.
-                </div>
-              )}
-              <div className="modal-list">
-                {breathingExercises.map((b) => {
-                  const total = breathingTotalSeconds(b);
-                  return (
-                    <div className="modal-option" key={b.id}>
-                      <span style={{ minWidth: 0 }}>
-                        <span style={{ display: "block" }}>{b.name}</span>
-                        <span style={{ fontSize: 12, color: "var(--text-dim)" }}>
-                          {plural(breathingPhases(b).length, "Phase", "Phasen")} ·{" "}
-                          {plural(breathingRounds(b), "Runde", "Runden")}
-                          {total == null ? " · offene Dauer" : ` · ca. ${Math.round(total / 60)} Min.`}
-                        </span>
-                      </span>
-                      <span style={{ display: "flex", gap: 4, flexShrink: 0 }}>
-                        <button
-                          className="btn btn-primary btn-sm"
-                          onClick={() => startBreathingSession(b)}
-                          title="Starten"
-                        >
-                          <Play size={13} />
-                        </button>
-                        <button className="btn-icon" title="Bearbeiten" onClick={() => setBreathingEditing(b)}>
-                          <Pencil size={14} />
-                        </button>
-                        <button className="btn-icon" title="Löschen" onClick={() => deleteBreathingExercise(b.id)}>
-                          <Trash2 size={14} />
-                        </button>
-                      </span>
-                    </div>
-                  );
-                })}
-              </div>
-              <button
-                className="btn btn-primary btn-block btn-sm"
-                style={{ marginTop: 12 }}
-                onClick={() => setBreathingEditing({ phases: [] })}
-              >
-                <Plus size={14} /> Eigene Atemübung
-              </button>
-              <label className="field-label" style={{ marginTop: 14 }}>Vorlagen</label>
-              <div className="chip-row">
-                {BREATHING_TEMPLATES.map((t) => (
-                  <span
-                    key={t.name}
-                    className="chip chip-sm"
-                    onClick={() => setBreathingEditing({ ...t, phases: t.phases.map((p) => ({ ...p })) })}
-                  >
-                    <Plus size={11} /> {t.name}
-                  </span>
-                ))}
-              </div>
-            </>
           )}
         </Modal>
       )}
@@ -10036,7 +10057,7 @@ function TrainingAppInner() {
             Pläne
           </button>
           <button
-            className={`nav-btn ${tab === "dashboard" ? "active" : ""}`}
+            className={`nav-btn ${tab === "dashboard" || tab === "breathing" ? "active" : ""}`}
             onClick={() => setTab("dashboard")}
           >
             <Home size={19} />
@@ -10333,7 +10354,7 @@ function DashboardView({
   onOpenLog,
 }) {
   const todayKey = toDateKey(new Date());
-  // Das Zahnrad links oben. Gyms, Atemübungen, Sicherung und der
+  // Das Zahnrad links oben. Gyms, Sicherung und der
   // Hell/Dunkel-Umschalter lagen früher im Programm-Menü im Reiter "Pläne" -
   // sie gehören aber nicht zu einem Trainingsprogramm, sondern zur ganzen App.
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -10528,12 +10549,6 @@ function DashboardView({
             </button>
             <button
               className="program-menu-item"
-              onClick={() => { setSettingsOpen(false); onManageBreathing(); }}
-            >
-              <Wind size={14} /> Atemübungen
-            </button>
-            <button
-              className="program-menu-item"
               onClick={() => { setSettingsOpen(false); onEditBodyWeight(); }}
             >
               <User size={14} /> Körpergewicht
@@ -10632,6 +10647,18 @@ function DashboardView({
           })}
         </>
       )}
+
+      {/* Atemübungen direkt von der Startseite - vorher lagen sie nur im
+          Zahnrad-Menü zwischen Gyms und Bändern, als wären sie eine
+          Einstellung und nicht etwas, das man macht. Führt auf ihre eigene
+          Seite (BreathingPage). */}
+      <button
+        className="btn btn-ghost btn-block"
+        style={{ marginBottom: 12 }}
+        onClick={onManageBreathing}
+      >
+        <Wind size={15} /> Atemübungen
+      </button>
 
       {lastLog && (
         <div className="stats-grid" style={{ marginBottom: 4 }}>
@@ -18265,14 +18292,26 @@ function useMenuFlip(isOpen, setDropUp) {
 // triggered at an exact moment. iOS only allows sound after a user gesture,
 // so the context is created when the user taps "Start".
 let sharedAudioCtx = null;
+// "transient" means: a short signal tone. Music from another app is briefly
+// ducked and continues afterwards. "playback" would announce the beeps as
+// music of our own and stop Spotify entirely - which is exactly what happened
+// before. There is no silent loop either: it held the audio channel
+// permanently and pushed other apps out of the way.
+//
+// Die eine Ausnahme sind Atemübungen: Dort läuft ohnehin keine Musik, und
+// "transient" hat einen Haken - der Stummschalter am iPhone schaltet den Ton
+// mit ab, und der Ton ist dort das einzige Signal (siehe
+// signalBreathingPhaseEnd). Für die Dauer einer Atem-Sitzung gilt deshalb
+// "playback"; danach geht es zurück, damit die Pausenglocke im Training
+// Spotify weiter nur kurz leiser macht.
+let audioSessionType = "transient";
+function setAudioSessionType(type) {
+  audioSessionType = type;
+  try { if (navigator.audioSession) navigator.audioSession.type = type; } catch (_) {}
+}
 function unlockAudio() {
   try {
-    // "transient" means: a short signal tone. Music from another app is
-    // briefly ducked and continues afterwards. "playback" would announce the
-    // beeps as music of our own and stop Spotify entirely - which is exactly
-    // what happened before. There is no silent loop either: it held the audio
-    // channel permanently and pushed other apps out of the way.
-    if (navigator.audioSession) navigator.audioSession.type = "transient";
+    if (navigator.audioSession) navigator.audioSession.type = audioSessionType;
 
     // A context iOS has fully closed (not just suspended) is unusable and
     // has to be replaced, not reused - it would silently no-op forever.
@@ -18357,6 +18396,39 @@ function playBell(volume = 0.6) {
   try {
     scheduleBell(ctx, ctx.currentTime, volume, () => {});
   } catch (_) { /* sound is optional, never break the workout over it */ }
+}
+
+// Atemübung: bewusst KEINE Boxglocke wie bei der Pause. Ein weicher,
+// ausklingender Sinuston mit leiser Oktave darüber - hörbar mit geschlossenen
+// Augen, aber ohne einen aus der Ruhe zu reißen. Das Ende der ganzen Übung
+// bekommt drei aufsteigende Töne, damit man es vom Phasenwechsel
+// unterscheidet, ohne hinzusehen.
+function scheduleSoftTone(ctx, atTime, frequency, volume, decay) {
+  [{ ratio: 1, gain: 1, decay }, { ratio: 2, gain: 0.18, decay: decay * 0.5 }].forEach((p) => {
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.type = "sine";
+    osc.frequency.value = frequency * p.ratio;
+    gain.gain.setValueAtTime(0.0001, atTime);
+    gain.gain.linearRampToValueAtTime(Math.max(0.0001, volume * p.gain), atTime + 0.02);
+    gain.gain.exponentialRampToValueAtTime(0.0001, atTime + p.decay);
+    osc.connect(gain).connect(ctx.destination);
+    osc.start(atTime);
+    osc.stop(atTime + p.decay + 0.05);
+  });
+}
+
+function playBreathingTone(next = "hold") {
+  const ctx = unlockAudio();
+  if (!ctx) return;
+  try {
+    const t = ctx.currentTime;
+    if (next === "end") {
+      [523.25, 659.25, 783.99].forEach((f, i) => scheduleSoftTone(ctx, t + i * 0.22, f, 0.4, 1.4));
+    } else {
+      scheduleSoftTone(ctx, t, BREATHING_NEXT_TONES[next] || BREATHING_NEXT_TONES.hold, 0.4, 0.9);
+    }
+  } catch (_) { /* Ton ist Beiwerk, die Übung läuft auch ohne */ }
 }
 
 // The rest-end bell is placed on the audio clock the moment the rest starts,
@@ -18509,14 +18581,13 @@ function BreathingSessionView({ session, onFinish, onCancel }) {
   const goNext = () => {
     if (isOpen) maxOpenSecondsRef.current = Math.max(maxOpenSecondsRef.current, elapsed);
     const nextIndex = phaseIndex + 1;
-    // Vibriert für die Phase, die hier gerade endet - egal ob per Timer oder
+    // Signal für die Phase, die hier gerade endet - egal ob per Timer oder
     // per Tippen auf "Weiter" bei einer offenen Phase. Die letzte Phase der
-    // letzten Runde bekommt das kräftigere Ende-Muster statt des normalen.
-    if (phase?.vibrate && navigator.vibrate) {
-      const isExerciseEnd = nextIndex >= phases.length && round >= totalRounds;
-      try {
-        navigator.vibrate(isExerciseEnd ? BREATHING_EXERCISE_END_VIBRATION : BREATHING_PHASE_VIBRATION);
-      } catch (_) {}
+    // letzten Runde bekommt das kräftigere Ende-Signal statt des normalen.
+    // Vibration wo möglich, sonst ein Ton (siehe signalBreathingPhaseEnd).
+    if (phase?.vibrate) {
+      const nextPhase = nextIndex < phases.length ? phases[nextIndex] : round < totalRounds ? phases[0] : null;
+      signalBreathingPhaseEnd(nextPhase ? nextPhase.direction : "end");
     }
     if (nextIndex < phases.length) {
       setPhaseIndex(nextIndex);
@@ -18532,6 +18603,49 @@ function BreathingSessionView({ session, onFinish, onCancel }) {
     onFinish({ ...session, completedRounds: totalRounds, maxHoldSeconds: maxOpenSecondsRef.current });
   };
   advanceRef.current = goNext;
+
+  // Bildschirm an lassen, solange die Übung offen ist. Geht er aus, hält iOS
+  // die Seite an: kein Phasenwechsel, kein Ton, und die Übung stünde beim
+  // Wiederaufwecken irgendwo mitten in einer Phase. iOS gibt die Sperre
+  // selbst frei, sobald die App kurz in den Hintergrund geht - deshalb wird
+  // sie beim Zurückkommen neu angefordert.
+  // Solange die Sitzung offen ist, gilt "playback" (Ton trotz
+  // Stummschalter), danach wieder "transient" - siehe setAudioSessionType.
+  // Hier und nicht nur beim Start gesetzt, weil die Sitzung auf
+  // verschiedenen Wegen endet (fertig, abgebrochen, vorzeitig gespeichert).
+  useEffect(() => {
+    setAudioSessionType("playback");
+    return () => setAudioSessionType("transient");
+  }, []);
+
+  useEffect(() => {
+    let lock = null;
+    let ended = false;
+    const request = () => {
+      if (ended || lock || !navigator.wakeLock?.request) return;
+      navigator.wakeLock.request("screen")
+        .then((l) => {
+          if (ended) { l.release?.().catch(() => {}); return; }
+          lock = l;
+          l.addEventListener?.("release", () => { if (lock === l) lock = null; });
+        })
+        .catch(() => { /* nicht gewährt - die Übung läuft trotzdem */ });
+    };
+    const onVisible = () => {
+      if (document.visibilityState === "visible") {
+        resumeAudioIfSuspended();
+        request();
+      }
+    };
+    request();
+    document.addEventListener("visibilitychange", onVisible);
+    return () => {
+      ended = true;
+      document.removeEventListener("visibilitychange", onVisible);
+      lock?.release?.().catch(() => {});
+      lock = null;
+    };
+  }, []);
 
   useEffect(() => {
     if (paused) return;
@@ -18553,6 +18667,9 @@ function BreathingSessionView({ session, onFinish, onCancel }) {
   }, [now, paused, isOpen, phase, elapsed, phaseSeconds]);
 
   const togglePause = () => {
+    // Ein Fingertipp ist die Gelegenheit, einen von iOS angehaltenen
+    // Audio-Kontext wieder zu wecken - ohne Tipp darf er das nicht.
+    unlockAudio();
     if (paused) {
       // Die im Pausenzustand vergangene Zeit darf nicht als Phasenfortschritt
       // zählen, deshalb wandert der Startzeitpunkt mit.
@@ -18995,8 +19112,13 @@ function BreathingEditor({ initial, onSave, onCancel }) {
 
       <label className="time-toggle-row" style={{ marginTop: 12 }}>
         <input type="checkbox" checked={vibrateOnPhaseEnd} onChange={toggleVibrateDefault} />
-        Vibration am Ende jeder Phase
+        Signal am Ende jeder Phase
       </label>
+      <p style={{ fontSize: 12, color: "var(--text-dim)", margin: "2px 0 0" }}>
+        Vibration, wo das Handy es erlaubt – auf dem iPhone ein Ton, auch bei
+        Stummschalter: hoch vor dem Einatmen, tief vor dem Ausatmen, mittel vor
+        dem Halten.
+      </p>
 
       <label className="field-label" style={{ marginTop: 8 }}>Phasen</label>
       <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
@@ -19055,7 +19177,7 @@ function BreathingEditor({ initial, onSave, onCancel }) {
                 checked={!!p.vibrate}
                 onChange={(e) => updatePhase(idx, { vibrate: e.target.checked })}
               />
-              Vibration am Ende dieser Phase
+              Signal am Ende dieser Phase
             </label>
           </div>
         ))}
@@ -19076,6 +19198,232 @@ function BreathingEditor({ initial, onSave, onCancel }) {
         </button>
       </div>
     </>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Atemübungen als eigene Seite
+//
+// Vorher ein Blatt aus dem Zahnrad-Menü, in dem Starten, Bearbeiten und
+// Vorlagen übereinander lagen. Jetzt eine Unterseite der Startseite (kein
+// eigener Reiter - die Leiste unten ist mit fünf schon voll): oben groß die
+// Übung, mit der man am ehesten weitermacht, darunter der Rückblick, die
+// eigenen Übungen und die Vorlagen. Der Editor ist ebenfalls eine ganze
+// Seite, weil eine Übung mit vielen Phasen im Blatt kaum Platz hatte.
+// ---------------------------------------------------------------------------
+
+// Die Übung, mit der man am ehesten weitermacht: die zuletzt absolvierte,
+// sofern es sie noch gibt. Ohne Verlauf die erste der Liste.
+export function lastBreathingExercise(exercises, logs) {
+  const list = Array.isArray(exercises) ? exercises : [];
+  if (list.length === 0) return null;
+  const byId = Object.fromEntries(list.map((b) => [b.id, b]));
+  const neueste = [...(Array.isArray(logs) ? logs : [])]
+    .filter((l) => byId[l?.breathingId])
+    .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+  return neueste.length > 0 ? byId[neueste[0].breathingId] : list[0];
+}
+
+// Rückblick für die Seite: Sitzungen und Minuten der letzten 7 Tage -
+// rollierend wie die Kacheln der Startseite - und das längste Luftanhalten
+// überhaupt (0 = nie gemessen, weil keine Übung eine offene Phase hatte).
+export function breathingWeekSummary(logs, nowTs = Date.now()) {
+  const since = nowTs - 7 * 86400000;
+  let sessions = 0;
+  let seconds = 0;
+  let bestHold = 0;
+  (Array.isArray(logs) ? logs : []).forEach((l) => {
+    const hold = toNum(l?.maxHoldSeconds);
+    if (hold > bestHold) bestHold = hold;
+    const ts = new Date(l?.date).getTime();
+    if (!Number.isFinite(ts) || ts < since || ts > nowTs) return;
+    sessions += 1;
+    seconds += toNum(l?.durationSeconds);
+  });
+  return { sessions, minutes: Math.round(seconds / 60), bestHold: Math.round(bestHold) };
+}
+
+// Die Atemkurve einer Runde im Kleinen - dieselbe Linie, der man in der
+// Sitzung folgt, damit man eine Übung an ihrer Form wiedererkennt.
+function BreathingCurve({ exercise, height = 36 }) {
+  const points = useMemo(() => buildBreathingPath(breathingPhases(exercise)), [exercise]);
+  // Oben und unten etwas Luft, sonst schneidet der Rand die Linie an.
+  const polyline = points
+    .map((p) => `${(p.x * 100).toFixed(2)},${(8 + (1 - p.y) * 84).toFixed(2)}`)
+    .join(" ");
+  return (
+    <svg className="breathing-curve" style={{ height }} viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">
+      <polyline points={polyline} fill="none" strokeWidth="2" vectorEffect="non-scaling-stroke" />
+    </svg>
+  );
+}
+
+function breathingMeta(exercise) {
+  const total = breathingTotalSeconds(exercise);
+  return [
+    plural(breathingPhases(exercise).length, "Phase", "Phasen"),
+    plural(breathingRounds(exercise), "Runde", "Runden"),
+    total == null ? "offene Dauer" : `ca. ${Math.max(1, Math.round(total / 60))} Min.`,
+  ].join(" · ");
+}
+
+function fmtHoldSeconds(s) {
+  const m = Math.floor(s / 60);
+  const sec = Math.round(s % 60);
+  return m > 0 ? `${m}:${String(sec).padStart(2, "0")}` : `${sec} s`;
+}
+
+function BreathingPage({ breathingExercises = [], breathingLogs = [], onBack, onStart, onSave, onDelete }) {
+  // null = Übersicht, sonst die gerade bearbeitete Übung (ohne id = neu).
+  const [editing, setEditing] = useState(null);
+  const topRef = useRef(null);
+  const last = useMemo(
+    () => lastBreathingExercise(breathingExercises, breathingLogs),
+    [breathingExercises, breathingLogs]
+  );
+  const summary = useMemo(() => breathingWeekSummary(breathingLogs), [breathingLogs]);
+
+  // Wer den Editor unten bei den Vorlagen öffnet, soll oben beim Namen
+  // landen - und nach dem Speichern wieder oben auf der Übersicht. Gescrollt
+  // wird der Inhaltsbereich (.content) selbst; scrollIntoView würde die
+  // Überschrift bündig an den Rand schieben, auf dem iPhone also unter die
+  // Statusleiste.
+  const scrollToTop = () =>
+    requestAnimationFrame(() => {
+      const box = topRef.current?.closest?.(".content");
+      if (box) box.scrollTop = 0;
+    });
+  const openEditor = (exercise) => {
+    setEditing(exercise);
+    scrollToTop();
+  };
+  const closeEditor = () => {
+    setEditing(null);
+    scrollToTop();
+  };
+
+  if (editing) {
+    return (
+      <div ref={topRef}>
+        <div className="page-head">
+          <button className="btn-icon" onClick={closeEditor} title="Zurück">
+            <ChevronRight size={16} style={{ transform: "rotate(180deg)" }} />
+          </button>
+          <span className="page-head-title">{editing.id ? "Atemübung bearbeiten" : "Neue Atemübung"}</span>
+        </div>
+        <div className="card">
+          <BreathingEditor
+            // Auch eine Vorlage muss den Editor vorbefüllen. Nur die id
+            // fehlt ihr - daran hängt lediglich, ob gespeichert oder neu
+            // angelegt wird, nicht ob Felder übernommen werden.
+            initial={editing}
+            onCancel={closeEditor}
+            onSave={async (ex) => {
+              await onSave(ex);
+              closeEditor();
+            }}
+          />
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div ref={topRef}>
+      <div className="page-head">
+        <button className="btn-icon" onClick={onBack} title="Zurück zur Startseite">
+          <ChevronRight size={16} style={{ transform: "rotate(180deg)" }} />
+        </button>
+        <span className="page-head-title">Atemübungen</span>
+      </div>
+
+      {last && (
+        <div className="card breathing-hero">
+          <span className="breathing-hero-kicker">
+            {breathingLogs.some((l) => l.breathingId === last.id) ? "Zuletzt gemacht" : "Deine Übung"}
+          </span>
+          <div className="plan-title">{last.name}</div>
+          <div className="breathing-hero-meta">{breathingMeta(last)}</div>
+          <BreathingCurve exercise={last} height={64} />
+          <button className="btn btn-primary btn-block" style={{ marginTop: 12 }} onClick={() => onStart(last)}>
+            <Play size={15} /> Starten
+          </button>
+        </div>
+      )}
+
+      {breathingLogs.length > 0 && (
+        <>
+          <span className="stat-section-title">Letzte 7 Tage</span>
+          <div className="stats-grid stats-grid-secondary">
+            <div className="stat-item">
+              <span className="stat-value">{summary.sessions}</span>
+              <span className="stat-label">{summary.sessions === 1 ? "Sitzung" : "Sitzungen"}</span>
+            </div>
+            <div className="stat-item">
+              <span className="stat-value">{summary.minutes}</span>
+              <span className="stat-label">Minuten</span>
+            </div>
+            <div className="stat-item">
+              <span className="stat-value">{summary.bestHold > 0 ? fmtHoldSeconds(summary.bestHold) : "–"}</span>
+              <span className="stat-label">Längstes Anhalten</span>
+            </div>
+          </div>
+        </>
+      )}
+
+      <span className="stat-section-title">Deine Übungen</span>
+      {breathingExercises.length === 0 ? (
+        <div className="card">
+          <div className="empty-state" style={{ padding: "8px 0" }}>
+            Noch keine Atemübung angelegt. Nimm unten eine Vorlage oder baue dir eine eigene.
+          </div>
+        </div>
+      ) : (
+        breathingExercises.map((b) => (
+          <div className="card breathing-card" key={b.id}>
+            <div className="breathing-card-row">
+              <span style={{ minWidth: 0, flex: 1 }}>
+                <span className="breathing-card-name">{b.name}</span>
+                <span className="breathing-hero-meta">{breathingMeta(b)}</span>
+              </span>
+              <span style={{ display: "flex", gap: 4, flexShrink: 0 }}>
+                <button className="btn-icon" title="Bearbeiten" onClick={() => openEditor(b)}>
+                  <Pencil size={14} />
+                </button>
+                <button className="btn-icon" title="Löschen" onClick={() => onDelete(b.id)}>
+                  <Trash2 size={14} />
+                </button>
+                <button className="btn btn-primary btn-sm" title="Starten" onClick={() => onStart(b)}>
+                  <Play size={13} />
+                </button>
+              </span>
+            </div>
+            <BreathingCurve exercise={b} />
+          </div>
+        ))
+      )}
+
+      <button
+        className="btn btn-ghost btn-block"
+        style={{ marginTop: 4 }}
+        onClick={() => openEditor({ phases: [] })}
+      >
+        <Plus size={14} /> Eigene Atemübung
+      </button>
+
+      <span className="stat-section-title">Vorlagen</span>
+      <div className="chip-row chip-row-wrap" style={{ padding: "0 4px" }}>
+        {BREATHING_TEMPLATES.map((t) => (
+          <span
+            key={t.name}
+            className="chip chip-sm"
+            onClick={() => openEditor({ ...t, phases: t.phases.map((p) => ({ ...p })) })}
+          >
+            <Plus size={11} /> {t.name}
+          </span>
+        ))}
+      </div>
+    </div>
   );
 }
 
@@ -21034,7 +21382,7 @@ function BreathingProgressView({ breathingExercises = [], breathingLogs = [] }) 
     return (
       <div className="empty-state">
         <Wind size={26} />
-        <p>Noch keine Atemübungs-Sitzungen. Starte deine erste über das Programm-Menü oder den Kalender.</p>
+        <p>Noch keine Atemübungs-Sitzungen. Starte deine erste über „Atemübungen“ auf der Startseite oder über den Kalender.</p>
       </div>
     );
   }

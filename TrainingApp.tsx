@@ -18620,6 +18620,16 @@ function buildBreathingPath(phases) {
   return points;
 }
 
+// Der Countdown einer getakteten Phase. Bei ganzen Sekunden wie bisher
+// aufgerundet ("4, 3, 2, 1"). Hat die Phase Kommasekunden, zählt er in
+// Zehnteln - sonst stünde bei 4,5 s zuerst eine "5" da, und die Phase sähe
+// aus wie auf 5 Sekunden gerundet, obwohl sie genau 4,5 s dauert.
+export function breathingCountdownLabel(remaining, phaseSeconds) {
+  const rest = Math.max(0, toNum(remaining));
+  if (Number.isInteger(toNum(phaseSeconds))) return String(Math.ceil(rest));
+  return (Math.ceil(rest * 10 - 1e-9) / 10).toFixed(1).replace(".", ",");
+}
+
 function BreathingSessionView({ session, onFinish, onCancel }) {
   const { exercise } = session;
   const phases = breathingPhases(exercise);
@@ -18659,15 +18669,20 @@ function BreathingSessionView({ session, onFinish, onCancel }) {
       const nextPhase = nextIndex < phases.length ? phases[nextIndex] : round < totalRounds ? phases[0] : null;
       signalBreathingPhaseEnd(nextPhase ? nextPhase.direction : "end");
     }
+    // Die nächste Phase beginnt genau dort, wo diese laut Plan endet - nicht
+    // im Frame, in dem das Ende bemerkt wurde. Sonst käme pro Phase ein
+    // Bruchteil einer Sekunde dazu, und eine 4,5-s-Phase liefe in der Summe
+    // länger als eingestellt. Offene Phasen enden mit dem Tipp, also jetzt.
+    const nextStart = isOpen ? Date.now() : phaseStart + phaseSeconds * 1000;
     if (nextIndex < phases.length) {
       setPhaseIndex(nextIndex);
-      setPhaseStart(Date.now());
+      setPhaseStart(nextStart);
       return;
     }
     if (round < totalRounds) {
       setRound(round + 1);
       setPhaseIndex(0);
-      setPhaseStart(Date.now());
+      setPhaseStart(nextStart);
       return;
     }
     onFinish({ ...session, completedRounds: totalRounds, maxHoldSeconds: maxOpenSecondsRef.current });
@@ -18771,7 +18786,7 @@ function BreathingSessionView({ session, onFinish, onCancel }) {
   const remaining = isOpen ? elapsed : Math.max(0, phaseSeconds - elapsed);
   const timeLabel = isOpen
     ? `${Math.floor(remaining / 60)}:${String(Math.floor(remaining % 60)).padStart(2, "0")}`
-    : String(Math.ceil(remaining));
+    : breathingCountdownLabel(remaining, phaseSeconds);
 
   return (
     <div className="breathing-overlay">
@@ -19118,7 +19133,12 @@ function BreathingEditor({ initial, onSave, onCancel }) {
   const [vibrateOnPhaseEnd, setVibrateOnPhaseEnd] = useState(!!initial?.vibrateOnPhaseEnd);
   const [phases, setPhases] = useState(
     initial?.phases?.length
-      ? initial.phases.map((p) => ({ ...p, seconds: p.seconds == null ? "" : String(p.seconds), vibrate: !!p.vibrate }))
+      ? initial.phases.map((p) => ({
+          ...p,
+          // Mit Komma zurück ins Feld, so wie es eingetippt wurde ("4,5").
+          seconds: p.seconds == null ? "" : String(p.seconds).replace(".", ","),
+          vibrate: !!p.vibrate,
+        }))
       : [{ label: "Einatmen", direction: "in", seconds: "4", vibrate: false }]
   );
 
@@ -19156,7 +19176,9 @@ function BreathingEditor({ initial, onSave, onCancel }) {
         // bei der man selbst weitertippt statt einem Countdown zu folgen.
         // Kommazahlen sind erlaubt (toNum wandelt "4,5" -> 4.5), die
         // Session-Anzeige läuft ohnehin über echte Sekundenbruchteile.
-        seconds: String(p.seconds).trim() === "" ? null : Math.max(1, toNum(p.seconds) || 1),
+        // Kein Runden und keine Untergrenze von einer Sekunde mehr: 0,5 s
+        // oder 4,5 s werden genau so gespeichert, wie sie eingetippt sind.
+        seconds: String(p.seconds).trim() === "" ? null : toNum(p.seconds) > 0 ? Math.max(0.1, toNum(p.seconds)) : 1,
         vibrate: !!p.vibrate,
       })),
     });

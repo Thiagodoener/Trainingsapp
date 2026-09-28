@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import {
+  breathingCountdownLabel,
   signalBreathingPhaseEnd,
   lastBreathingExercise,
   breathingWeekSummary,
@@ -3045,5 +3046,20 @@ describe("breathingWeekSummary", () => {
     ];
     expect(breathingWeekSummary(logs, now)).toEqual({ sessions: 2, minutes: 8, bestHold: 92 });
     expect(breathingWeekSummary([], now)).toEqual({ sessions: 0, minutes: 0, bestHold: 0 });
+  });
+});
+
+describe("breathingCountdownLabel", () => {
+  it("ganze Sekunden: wie bisher aufgerundet", () => {
+    expect(breathingCountdownLabel(4, 4)).toBe("4");
+    expect(breathingCountdownLabel(3.2, 4)).toBe("4");
+    expect(breathingCountdownLabel(0, 4)).toBe("0");
+  });
+  it("Kommasekunden: Zehntel, beginnt genau beim eingestellten Wert", () => {
+    expect(breathingCountdownLabel(4.5, 4.5)).toBe("4,5");
+    expect(breathingCountdownLabel(4.46, 4.5)).toBe("4,5");
+    expect(breathingCountdownLabel(4.4, 4.5)).toBe("4,4");
+    expect(breathingCountdownLabel(0.05, 0.5)).toBe("0,1");
+    expect(breathingCountdownLabel(0, 4.5)).toBe("0,0");
   });
 });

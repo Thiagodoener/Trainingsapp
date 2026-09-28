@@ -16057,6 +16057,45 @@ function LogView({
     });
   };
 
+  // Die Rundenpause laesst sich mitten im Training nachstellen. Laeuft
+  // gerade eine, wird sie um den Unterschied verlaengert oder gekuerzt -
+  // sonst wirkte die neue Zeit erst in der naechsten Runde.
+  const setSessionRoundRest = (sec) => {
+    const next = Math.max(0, Math.round(Number(sec) || 0));
+    const deltaMs = (next - Math.max(0, toNum(session?.roundRestSeconds))) * 1000;
+    onUpdateSession({ ...session, roundRestSeconds: next });
+    const run = autoRunRef.current;
+    if (!run || run.phase !== "rest" || !run.isRoundRest || deltaMs === 0) return;
+    if (run.paused) {
+      applyAutoRun({ ...run, pausedLeftMs: Math.max(0, (run.pausedLeftMs || 0) + deltaMs) });
+    } else if (run.endsAt) {
+      applyAutoRun({ ...run, endsAt: Math.max(Date.now(), run.endsAt + deltaMs) });
+    }
+  };
+
+  // Verschiebt das Ende der laufenden Phase; nie in die Vergangenheit, sonst
+  // saehe der naechste Tick eine "negative" Restzeit.
+  const shiftAuto = (ms) => {
+    const run = autoRunRef.current;
+    if (!run || !run.endsAt || run.paused) return;
+    applyAutoRun({ ...run, endsAt: Math.max(Date.now(), run.endsAt + ms) });
+  };
+
+  // "Weiter" heisst: dieser Satz ist erledigt. Der anstehende Satz wird
+  // deshalb abgehakt, bevor es zum naechsten geht - in der Pause ist er es
+  // schon, dort wird nur die restliche Pausenzeit uebersprungen.
+  const advanceAuto = () => {
+    const run = autoRunRef.current;
+    if (!run) return;
+    if (run.phase !== "rest") {
+      const entry = (session?.entries || []).find((e) => e.id === run.entryId);
+      if (entry && !entry.sets[run.setIdx]?.done) toggleSetDoneSilently(run.entryId, run.setIdx);
+    }
+    const next = findNextSet(run.entryId, run.setIdx);
+    if (next) startAutoAt(next.entryId, next.setIdx);
+    else stopAuto();
+  };
+
   const anyAutoRun = (session?.entries || []).some((e) => entryAutoRuns(e));
   const firstUnfinishedSet = () => {
     for (const entry of session?.entries || []) {
@@ -16531,6 +16570,7 @@ function LogView({
   };
 
   const REST_PRESETS = [0, 30, 45, 60, 90, 120, 180];
+  const ROUND_REST_PRESETS = [0, 30, 60, 90, 120, 180];
 
   // In edit mode the clock stands still and shows the recorded duration,
   // so it is obvious that correcting values does not change how long the
@@ -16598,12 +16638,10 @@ function LogView({
           </div>
           <div className="rest-actions" style={{ marginTop: 8 }}>
             {autoRun.phase !== "waiting" && !autoRun.paused && (
-              <button
-                className="rest-btn"
-                onClick={() => applyAutoRun({ ...autoRun, endsAt: autoRun.endsAt + 15000 })}
-              >
-                +15s
-              </button>
+              <>
+                <button className="rest-btn" onClick={() => shiftAuto(-15000)}>-15s</button>
+                <button className="rest-btn" onClick={() => shiftAuto(15000)}>+15s</button>
+              </>
             )}
             {autoRun.phase !== "waiting" && (
               autoRun.paused ? (
@@ -16616,17 +16654,14 @@ function LogView({
                 </button>
               )
             )}
-            <button
-              className="rest-btn"
-              onClick={() => {
-                const next = findNextSet(autoRun.entryId, autoRun.setIdx);
-                if (next) startAutoAt(next.entryId, next.setIdx);
-                else stopAuto();
-              }}
-            >
+            <button className="rest-btn" onClick={advanceAuto}>
               <SkipForward size={13} /> Weiter
             </button>
-            <button className="rest-btn" onClick={stopAuto}>Stopp</button>
+            {/* Beenden nur aus der Pause heraus - neben "Pause" war ein
+                eigener Stopp-Knopf doppelt. */}
+            {autoRun.paused && (
+              <button className="rest-btn" onClick={stopAuto}>Beenden</button>
+            )}
           </div>
         </div>
       )}
@@ -16695,6 +16730,41 @@ function LogView({
                     </button>
                   )}
                 </div>
+
+                {anyAutoRun && (() => {
+                  const roundRestNow = Math.max(0, toNum(session.roundRestSeconds));
+                  const isCircuit = (session.autoOrder || "circuit") === "circuit";
+                  return (
+                    <div style={{ marginTop: 14, paddingTop: 12, borderTop: "1px solid var(--border)" }}>
+                      <span className="plan-title">{isCircuit ? "Rundenpause" : "Übungspause"}</span>
+                      <p style={{ margin: "4px 0 0", fontSize: 12.5, color: "var(--text-dim)" }}>
+                        {isCircuit
+                          ? "Pause der Automatik nach der letzten Übung einer Runde."
+                          : "Pause der Automatik nach dem letzten Satz einer Übung."}
+                      </p>
+                      <div className="chip-row" style={{ marginTop: 10, marginBottom: 8 }}>
+                        {ROUND_REST_PRESETS.map((sec) => (
+                          <span
+                            key={sec}
+                            className={`chip ${roundRestNow === sec ? "active" : ""}`}
+                            onClick={() => setSessionRoundRest(sec)}
+                          >
+                            {sec === 0 ? "Aus" : `${sec}s`}
+                          </span>
+                        ))}
+                      </div>
+                      <label className="field-label">Eigene Zeit (Sek.)</label>
+                      <input
+                        type="number"
+                        inputMode="numeric"
+                        min="0"
+                        step="5"
+                        value={roundRestNow}
+                        onChange={(e) => setSessionRoundRest(e.target.value)}
+                      />
+                    </div>
+                  );
+                })()}
 
                 <button
                   className="modal-option"

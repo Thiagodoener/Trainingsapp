@@ -1056,6 +1056,16 @@ Strichzeichnung auf Weiß (runder Lockenkopf, schmaler Schnauzer, offenes Grinse
 `icon-512.png`, `favicon.svg`). iOS übernimmt ein neues Symbol erst, wenn die App neu zum
 Home-Bildschirm hinzugefügt wird.
 
+**Statusleiste und Tab-Leiste auf dem iPhone (Sept. 2026).** Seit iOS 26 legt das iPhone unter
+die Statusleiste eine Unschärfe, sobald es am oberen Rand keine feste, einfarbige Fläche findet.
+Dagegen liegt dort jetzt ein fester Streifen in der Grundfarbe, genau so hoch wie die
+Statusleiste; WebKit übernimmt dessen Farbe und lässt die Unschärfe weg. Die Seite selbst scrollt
+nicht mehr (gescrollt wird nur der Inhaltsbereich): Vorher ließ sich das ganze Dokument per
+Wischen auf der Tab-Leiste oder durch die Tastatur ein Stück hochschieben und blieb dort – unten
+ein weißer Balken, oben rutschte Inhalt unter die Statusleiste. Nur solange ein Textfeld aktiv
+ist, darf iOS die Seite verschieben. Gut zu wissen: Die Statusleisten-Einstellung
+(`apple-mobile-web-app-status-bar-style`) liest iOS nur beim Hinzufügen zum Home-Bildschirm.
+
 ---
 
 ## Offene Punkte

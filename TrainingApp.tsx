@@ -4239,10 +4239,15 @@ class AppErrorBoundary extends React.Component {
   render() {
     if (!this.state.error) return this.props.children;
     return (
+      // Scrollt selbst: html/body sind gesperrt (app.css), und der Knopf
+      // zum Sichern muss auch bei langer Fehlermeldung erreichbar bleiben.
+      // "safe center" rutscht bei Ueberlaenge nach oben statt abzuschneiden.
       <div style={{
-        minHeight: "100vh", background: "#ffffff", color: "#1c1c1e",
-        padding: 24, fontFamily: "system-ui, -apple-system, sans-serif",
-        display: "flex", flexDirection: "column", justifyContent: "center", gap: 14,
+        position: "fixed", top: 0, right: 0, bottom: 0, left: 0, overflowY: "auto",
+        background: "#ffffff", color: "#1c1c1e",
+        padding: "calc(24px + env(safe-area-inset-top)) 24px calc(24px + env(safe-area-inset-bottom))",
+        fontFamily: "system-ui, -apple-system, sans-serif",
+        display: "flex", flexDirection: "column", justifyContent: "safe center", gap: 14,
       }}>
         <div style={{ fontSize: 22, fontWeight: 600 }}>Da ist etwas schiefgelaufen</div>
         <p style={{ fontSize: 15, lineHeight: 1.5, color: "#6e6e73", margin: 0 }}>
@@ -5491,7 +5496,10 @@ function TrainingAppInner() {
   // Nachfuehren bliebe oben ein dunkler Streifen ueber der hellen App stehen.
   useEffect(() => {
     const meta = document.querySelector('meta[name="theme-color"]');
-    const color = theme === "dark" ? "#000000" : "#ffffff";
+    // Dieselben Werte wie --bg der App (siehe .app-shell). Mit Weiss statt
+    // des hellgrauen Grunds lag jeder Spalt neben oder unter der App als
+    // weisser Balken da.
+    const color = theme === "dark" ? "#000000" : "#f2f2f7";
     if (meta) meta.setAttribute("content", color);
     // Siehe index.html: Weisse Statusleisten-Schrift (black-translucent) legt
     // iOS auf heller App einen dunklen, verschwommenen Verlauf unter - der
@@ -5509,6 +5517,51 @@ function TrainingAppInner() {
       el.style.colorScheme = theme === "dark" ? "dark" : "light";
     }
   }, [theme]);
+  // Die Seite selbst scrollt nie - gescrollt wird nur der Inhaltsbereich
+  // (.content). Auf dem iPhone liess sich das ganze Dokument trotzdem ein
+  // Stueck hochschieben (Wischen auf der Tab-Leiste, oder die Tastatur hatte
+  // es verschoben) und blieb dort stehen: unten ein leerer Balken unter der
+  // Navigation, oben rutschte der Inhalt unter die Statusleiste. app.css
+  // sperrt das Scrollen von html/body; was trotzdem durchrutscht, wird hier
+  // zurueckgesetzt. Ausnahme: Solange ein Textfeld aktiv ist, darf iOS die
+  // Seite verschieben, um das Feld ueber der Tastatur zu zeigen - danach
+  // geht sie auf 0 zurueck.
+  useEffect(() => {
+    const NO_TYPING = ["button", "checkbox", "radio", "range", "submit", "reset", "color", "file"];
+    const isTyping = () => {
+      const el = document.activeElement;
+      if (!el) return false;
+      if (el.isContentEditable || el.tagName === "TEXTAREA" || el.tagName === "SELECT") return true;
+      return el.tagName === "INPUT" && !NO_TYPING.includes(el.type);
+    };
+    const reset = () => {
+      if (isTyping()) return;
+      const vv = window.visualViewport;
+      // iOS 26 laesst nach dem Schliessen der Tastatur teils den sichtbaren
+      // Ausschnitt verschoben stehen (offsetTop > 0), obwohl scrollY 0 ist.
+      // Nur ohne Zoom pruefen, sonst wuerde Hineinzoomen zurueckgesetzt.
+      const shifted = vv && vv.scale < 1.01 && vv.offsetTop > 0.5;
+      if (window.scrollX || window.scrollY || shifted) window.scrollTo(0, 0);
+    };
+    // Die Tastatur faehrt noch ein, wenn focusout feuert; erst danach
+    // zuruecksetzen, sonst schiebt iOS gleich wieder.
+    let timer = null;
+    const resetLater = () => {
+      clearTimeout(timer);
+      timer = setTimeout(reset, 350);
+    };
+    window.addEventListener("scroll", reset, { passive: true });
+    document.addEventListener("focusout", resetLater);
+    window.visualViewport?.addEventListener("resize", resetLater);
+    document.addEventListener("visibilitychange", resetLater);
+    return () => {
+      clearTimeout(timer);
+      window.removeEventListener("scroll", reset);
+      document.removeEventListener("focusout", resetLater);
+      window.visualViewport?.removeEventListener("resize", resetLater);
+      document.removeEventListener("visibilitychange", resetLater);
+    };
+  }, []);
   // Turns a finished workout back into an editable session. The log is
   // removed from the history for the duration - finishing writes it back,
   // discarding restores nothing, which matches "the workout is running again".
@@ -5794,6 +5847,31 @@ function TrainingAppInner() {
              einem Kasten. */
           overflow: hidden;
           position: relative;
+        }
+
+        /* Fester Streifen in der Farbe des Seitengrunds, genau unter der
+           Statusleiste. Seit iOS 26 legt das iPhone dort eine Unschaerfe
+           ("scroll edge effect") ueber die App, sobald es am oberen Rand
+           keine feste Flaeche findet - der verschwommene Streifen oben.
+           WebKit prueft dafuer einen Punkt 4px unter dem Rand: Liegt dort
+           ein position:fixed-Element, mindestens 90% so breit wie der
+           Bildschirm, hoeher als 10px und mit einfarbigem Hintergrund,
+           nimmt iOS dessen Farbe und laesst die Unschaerfe weg. Der Streifen
+           deckt nur den ohnehin leeren Abstand oben (padding-top der App)
+           ab und ist deshalb unsichtbar. Ohne Statusleiste darueber (Browser,
+           Querformat) ist der Abstand 0 und der Streifen verschwindet.
+           z-index: ueber der Atemuebung (60), die ebenfalls bis oben reicht,
+           aber unter den Fenstern (ab 200), damit deren Abdunklung auch den
+           Bereich der Statusleiste erfasst. */
+        .status-bar-surface {
+          position: fixed;
+          top: 0;
+          left: 0;
+          right: 0;
+          height: env(safe-area-inset-top);
+          background: var(--bg);
+          pointer-events: none;
+          z-index: 100;
         }
 
         .content {
@@ -8663,6 +8741,8 @@ function TrainingAppInner() {
           padding: 10px;
         }
       `}</style>
+
+      <div className="status-bar-surface" aria-hidden="true" />
 
       <div
         className={`content ${session && tab !== "log" ? "with-session-bar" : ""}`}

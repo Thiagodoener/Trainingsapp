@@ -1056,15 +1056,22 @@ Strichzeichnung auf Weiß (runder Lockenkopf, schmaler Schnauzer, offenes Grinse
 `icon-512.png`, `favicon.svg`). iOS übernimmt ein neues Symbol erst, wenn die App neu zum
 Home-Bildschirm hinzugefügt wird.
 
-**Statusleiste und Tab-Leiste auf dem iPhone (Sept. 2026).** Seit iOS 26 legt das iPhone unter
-die Statusleiste eine Unschärfe, sobald es am oberen Rand keine feste, einfarbige Fläche findet.
-Dagegen liegt dort jetzt ein fester Streifen in der Grundfarbe, genau so hoch wie die
-Statusleiste; WebKit übernimmt dessen Farbe und lässt die Unschärfe weg. Die Seite selbst scrollt
-nicht mehr (gescrollt wird nur der Inhaltsbereich): Vorher ließ sich das ganze Dokument per
-Wischen auf der Tab-Leiste oder durch die Tastatur ein Stück hochschieben und blieb dort – unten
-ein weißer Balken, oben rutschte Inhalt unter die Statusleiste. Nur solange ein Textfeld aktiv
-ist, darf iOS die Seite verschieben. Gut zu wissen: Die Statusleisten-Einstellung
-(`apple-mobile-web-app-status-bar-style`) liest iOS nur beim Hinzufügen zum Home-Bildschirm.
+**Statusleiste und Tab-Leiste auf dem iPhone (Sept. 2026).** Seit iOS 26 legt das iPhone in der
+Home-Bildschirm-App eine Unschärfe unter die Statusleiste, die rund zwei Drittel ihrer Höhe weiter
+nach unten reicht (47 pt Statusleiste: unscharf bis etwa 78 pt). Von der Seite aus lässt sie sich
+nicht abschalten: WebKit blendet sie nur aus, wenn die umgebende App einen verdeckten Bereich
+meldet, und die Home-Bildschirm-App meldet keinen – ein fester, einfarbiger Streifen oben (erster
+Versuch) blieb deshalb wirkungslos. Stattdessen beginnt der Inhalt erst unter diesem Bereich
+(`--top-safe`, das 1,75-Fache des Statusleisten-Abstands); darüber liegt nur einfarbiger Grund.
+Das kostet rund 35 pt Höhe. Liegt nichts unter der Statusleiste, fällt der Zuschlag weg – etwa
+wenn iOS die App mit undurchsichtiger Statusleiste startet. Diese Einstellung
+(`apple-mobile-web-app-status-bar-style`) liest iOS nur beim Hinzufügen zum Home-Bildschirm; seit
+dem 23.9. steht sie auf `default`, wirksam also erst nach neuem Hinzufügen.
+
+Die Seite selbst scrollt nicht mehr (gescrollt wird nur der Inhaltsbereich): Vorher ließ sich das
+ganze Dokument per Wischen auf der Tab-Leiste oder durch die Tastatur ein Stück hochschieben und
+blieb dort – unten ein weißer Balken, oben rutschte Inhalt unter die Statusleiste. Nur solange ein
+Textfeld aktiv ist, darf iOS die Seite verschieben.
 
 ---
 

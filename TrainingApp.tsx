@@ -43,6 +43,7 @@ import {
   Activity,
   Link2,
   EyeOff,
+  MapPin,
 } from "lucide-react";
 import {
   LineChart,
@@ -1502,9 +1503,17 @@ function exerciseVolumeChange(currentSets, lastSets, isTimeBased, usesWeight) {
   return ((sum(currentSets) - lastTotal) / lastTotal) * 100;
 }
 
+// Name des Gyms, in dem ein Training stattfand. Null ohne Gym-Zuordnung
+// und bei einem inzwischen gelöschten Gym - dann steht lieber nichts da
+// als ein "Unbekanntes Gym" unter jedem alten Training.
+export function gymNameFor(gyms, gymId) {
+  if (!gymId || !Array.isArray(gyms)) return null;
+  return gyms.find((g) => g && g.id === gymId)?.name || null;
+}
+
 // Liefert die komplette Verlaufsliste einer Übung über alle Trainings hinweg
 // (jüngstes zuerst), inkl. der Notiz, die pro Trainingseinheit dazu hinterlegt wurde.
-function getExerciseTimeline(logs, exerciseId) {
+export function getExerciseTimeline(logs, exerciseId) {
   if (!exerciseId) return [];
   return (Array.isArray(logs) ? logs : [])
     .map((l) => {
@@ -1517,6 +1526,7 @@ function getExerciseTimeline(logs, exerciseId) {
       const noted = matching.find((e) => typeof e.notes === "string" && e.notes.trim());
       return {
         date: l.date,
+        gymId: l.gymId || null,
         sets: sets.filter((s) => s && s.done),
         rir: rirEntry ? Number(rirEntry.rir) : null,
         feeling: Number.isFinite(Number(l.feeling)) ? Number(l.feeling) : null,
@@ -13553,6 +13563,16 @@ function ExerciseDetailSheet({
                     {feelingLabel(t.feeling)}
                   </span>
                 )}
+                {/* In welchem Gym - die Gewichte sind von Gym zu Gym
+                    verschieden, ohne diese Angabe sieht ein Sprung von 30 auf
+                    25 kg wie ein Rückschritt aus. Fehlt, wenn ohne Gym
+                    trainiert oder das Gym inzwischen gelöscht wurde. */}
+                {gymNameFor(gyms, t.gymId) && (
+                  <span className="tag tag-equipment" style={{ marginLeft: 6 }}>
+                    <MapPin size={11} style={{ verticalAlign: -1, marginRight: 3 }} />
+                    {gymNameFor(gyms, t.gymId)}
+                  </span>
+                )}
                 {t.sets.length > 0 && (
                   <div style={{ marginTop: 8, display: "flex", flexWrap: "wrap", gap: 6 }}>
                     {t.sets.map((s, i) => (
@@ -21747,6 +21767,11 @@ function HistoryView({
                   <Clock size={12} /> {log.durationMinutes} Min.
                 </span>
               ) : null}
+              {gymNameFor(gyms, log.gymId) && (
+                <span title="In diesem Gym trainiert">
+                  <MapPin size={12} /> {gymNameFor(gyms, log.gymId)}
+                </span>
+              )}
               {feelingLabel(log.feeling) && (
                 <span title="Wie sich das Training angefühlt hat">
                   <Smile size={12} /> {feelingLabel(log.feeling)}

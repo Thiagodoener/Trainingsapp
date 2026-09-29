@@ -5747,6 +5747,19 @@ function TrainingAppInner() {
            Hier stehen die Werte des dunklen Modus; der helle Modus (Standard)
            ueberschreibt sie direkt darunter. */
         :root {
+          /* Oberer Rand der App: Statusleiste plus der Bereich darunter, den
+             iOS verwischt. In der Home-Bildschirm-App legt iOS 26 eine
+             Unschaerfe ("scroll edge effect") unter die Statusleiste, die
+             rund zwei Drittel ihrer Hoehe weiter nach unten reicht (iPhone
+             mit 47pt Statusleiste: unscharf bis etwa 78pt). Abschalten laesst
+             sie sich von der Seite aus nicht - WebKit blendet sie nur aus,
+             wenn die umgebende App einen verdeckten Bereich meldet, und die
+             Home-Bildschirm-App meldet keinen. Deshalb beginnt der Inhalt erst
+             unter diesem Bereich; darin liegt nur einfarbiger Grund, an dem es
+             nichts zu verwischen gibt. Liegt nichts unter der Statusleiste
+             (undurchsichtige Statusleiste, Browser, Querformat), ist der
+             Abstand 0 und der Zuschlag faellt mit weg. */
+          --top-safe: calc(env(safe-area-inset-top) * 1.75);
           /* Schriften: iOS-Systemschrift fuer Text, die runde Variante fuer
              Titel und Zahlen (wie Apple Fitness). Ausserhalb von Apple-
              Geraeten springen Inter und Nunito ein. */
@@ -5826,10 +5839,9 @@ function TrainingAppInner() {
              im dunklen Modus hell. */
           color-scheme: dark;
           /* Die Seite laeuft wegen viewport-fit=cover bis unter die
-             Statusleiste. Unten war der Abstand schon beruecksichtigt, oben
-             fehlte er - dadurch lag die Kopfzeile unter Uhrzeit und
-             Empfangsanzeige und war nicht antippbar. */
-          padding-top: env(safe-area-inset-top);
+             Statusleiste. Oben frei bleibt die Statusleiste samt dem
+             verwischten Bereich darunter (siehe --top-safe). */
+          padding-top: var(--top-safe);
           font-family: var(--font-ui);
           background: var(--bg);
           color: var(--text);
@@ -5847,31 +5859,6 @@ function TrainingAppInner() {
              einem Kasten. */
           overflow: hidden;
           position: relative;
-        }
-
-        /* Fester Streifen in der Farbe des Seitengrunds, genau unter der
-           Statusleiste. Seit iOS 26 legt das iPhone dort eine Unschaerfe
-           ("scroll edge effect") ueber die App, sobald es am oberen Rand
-           keine feste Flaeche findet - der verschwommene Streifen oben.
-           WebKit prueft dafuer einen Punkt 4px unter dem Rand: Liegt dort
-           ein position:fixed-Element, mindestens 90% so breit wie der
-           Bildschirm, hoeher als 10px und mit einfarbigem Hintergrund,
-           nimmt iOS dessen Farbe und laesst die Unschaerfe weg. Der Streifen
-           deckt nur den ohnehin leeren Abstand oben (padding-top der App)
-           ab und ist deshalb unsichtbar. Ohne Statusleiste darueber (Browser,
-           Querformat) ist der Abstand 0 und der Streifen verschwindet.
-           z-index: ueber der Atemuebung (60), die ebenfalls bis oben reicht,
-           aber unter den Fenstern (ab 200), damit deren Abdunklung auch den
-           Bereich der Statusleiste erfasst. */
-        .status-bar-surface {
-          position: fixed;
-          top: 0;
-          left: 0;
-          right: 0;
-          height: env(safe-area-inset-top);
-          background: var(--bg);
-          pointer-events: none;
-          z-index: 100;
         }
 
         .content {
@@ -7511,7 +7498,7 @@ function TrainingAppInner() {
           display: flex;
           align-items: flex-end;
           justify-content: center;
-          padding: calc(28px + env(safe-area-inset-top)) 0 0;
+          padding: max(calc(28px + env(safe-area-inset-top)), calc(var(--top-safe) + 8px)) 0 0;
           z-index: 300;
           /* The popup used to snap in; a short fade of the backdrop and a
              gentle rise of the card make it land instead of jump. */
@@ -7661,11 +7648,11 @@ function TrainingAppInner() {
           max-width: 480px;
           /* Hoehe am sichtbaren Bereich ausrichten und den Rand unten
              (Home-Indikator) freihalten, damit das Ende erreichbar bleibt. */
-          max-height: calc(100dvh - env(safe-area-inset-top) - 24px);
+          max-height: calc(100dvh - var(--top-safe) - 24px);
           /* Opens at a usable size right away. Sizing itself to its content
              meant the tabs sat just above the navigation bar and everything
              below had to be scrolled into view first. */
-          min-height: min(72dvh, calc(100dvh - env(safe-area-inset-top) - 24px));
+          min-height: min(72dvh, calc(100dvh - var(--top-safe) - 24px));
           background: var(--elevated);
           border-top: 1px solid var(--border);
           border-radius: 18px 18px 0 0;
@@ -7696,7 +7683,7 @@ function TrainingAppInner() {
         .move-sheet {
           width: 100%;
           max-width: 480px;
-          max-height: calc(100dvh - env(safe-area-inset-top) - 24px);
+          max-height: calc(100dvh - var(--top-safe) - 24px);
           overflow-y: auto;
           -webkit-overflow-scrolling: touch;
           overscroll-behavior: contain;
@@ -7782,7 +7769,7 @@ function TrainingAppInner() {
         }
         .floating-timer {
           position: fixed;
-          top: calc(env(safe-area-inset-top) + 8px);
+          top: calc(var(--top-safe) + 8px);
           right: 14px;
           z-index: 40;
           display: flex;
@@ -8213,7 +8200,7 @@ function TrainingAppInner() {
    sonst laesst sie sich nicht bestaetigen, wenn sie aus einem Popup
    heraus ausgeloest wurde. Fixed statt absolute, damit sie nicht vom
    scrollenden Inhaltsbereich beschnitten wird. */
-        .confirm-overlay{position:fixed;top:0;right:0;bottom:0;left:0;background:rgba(0,0,0,.55);display:flex;align-items:center;justify-content:center;z-index:400;padding:calc(24px + env(safe-area-inset-top)) 24px calc(24px + env(safe-area-inset-bottom))}
+        .confirm-overlay{position:fixed;top:0;right:0;bottom:0;left:0;background:rgba(0,0,0,.55);display:flex;align-items:center;justify-content:center;z-index:400;padding:calc(24px + var(--top-safe)) 24px calc(24px + env(safe-area-inset-bottom))}
         .confirm-card{background:var(--elevated);border:1px solid var(--border);border-radius:14px;padding:18px;max-width:320px;width:100%}
         .confirm-card p{margin:0 0 16px;font-size:14px;line-height:1.5}
         .confirm-actions{display:flex;gap:8px}
@@ -8570,7 +8557,7 @@ function TrainingAppInner() {
           background: var(--bg);
           display: flex;
           flex-direction: column;
-          padding: calc(env(safe-area-inset-top) + 14px) 18px 24px;
+          padding: calc(var(--top-safe) + 14px) 18px 24px;
         }
         .breathing-head {
           display: flex;
@@ -8741,8 +8728,6 @@ function TrainingAppInner() {
           padding: 10px;
         }
       `}</style>
-
-      <div className="status-bar-surface" aria-hidden="true" />
 
       <div
         className={`content ${session && tab !== "log" ? "with-session-bar" : ""}`}

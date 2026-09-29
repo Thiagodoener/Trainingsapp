@@ -105,6 +105,8 @@ import {
   plural,
   shortSet,
   isTimeBasedInLogs,
+  gymNameFor,
+  getExerciseTimeline,
 } from "./TrainingApp";
 
 // Diese Tests sichern die Rechenfunktionen ab - also das, was die App
@@ -3061,5 +3063,27 @@ describe("breathingCountdownLabel", () => {
     expect(breathingCountdownLabel(4.4, 4.5)).toBe("4,4");
     expect(breathingCountdownLabel(0.05, 0.5)).toBe("0,1");
     expect(breathingCountdownLabel(0, 4.5)).toBe("0,0");
+  });
+});
+
+describe("Gym im Verlauf", () => {
+  const gyms = [
+    { id: "g1", name: "McFit" },
+    { id: "g2", name: "Studio am See" },
+  ];
+  it("gymNameFor: Name nur, wenn das Gym noch existiert", () => {
+    expect(gymNameFor(gyms, "g2")).toBe("Studio am See");
+    expect(gymNameFor(gyms, "geloescht")).toBe(null);
+    expect(gymNameFor(gyms, null)).toBe(null);
+    expect(gymNameFor(undefined, "g1")).toBe(null);
+  });
+  it("getExerciseTimeline trägt das Gym jedes Trainings mit", () => {
+    const set = { reps: 10, weight: 30, done: true };
+    const logs = [
+      { id: "a", date: "2026-08-31T10:00:00Z", gymId: "g1", entries: [{ exerciseId: "x", sets: [set] }] },
+      { id: "b", date: "2026-09-14T10:00:00Z", entries: [{ exerciseId: "x", sets: [set] }] },
+    ];
+    const timeline = getExerciseTimeline(logs, "x");
+    expect(timeline.map((t) => t.gymId)).toEqual([null, "g1"]);
   });
 });

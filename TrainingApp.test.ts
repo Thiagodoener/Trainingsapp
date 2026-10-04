@@ -1351,6 +1351,28 @@ describe("Pokale: Rekorde im Nachhinein", () => {
     expect(volumen.value).toBe("450 kg");
   });
 
+  it("Regression: die Reserve-Angabe zaehlt beim 1RM-Pokal nur fuer den letzten Satz", () => {
+    // 37,5 x 10 ist ein frueher Satz, die 3 RIR gehoeren zum letzten (30 x 15).
+    // Bekam auch der erste Satz die Reserve, wurden daraus 13 Wdh. - zu viele
+    // fuer eine 1RM-Schaetzung, das 1RM wurde 0 und der Pokal fehlte, obwohl
+    // die 1RM-Kurve (Reserve nur am letzten Satz) den Rekord zeigt.
+    const logs = [
+      log(30, [satz({ weight: 30, reps: 10 })]),
+      training({
+        id: "neu",
+        date: new Date(Date.now() - 2 * TAG).toISOString(),
+        entries: [{
+          id: "e", exerciseId: "bankdruecken", rir: 3,
+          sets: [satz({ weight: 37.5, reps: 10 }), satz({ weight: 30, reps: 15 })],
+        }],
+      }),
+    ];
+    const verlauf = getExercisePRHistory(logs, "bankdruecken");
+    const einsRM = verlauf["neu"].find((pr: any) => pr.key === "best1RM");
+    expect(einsRM).toBeDefined();
+    expect(einsRM.value).toBe("50 kg");
+  });
+
   it("liefert fuer den Verlauf eine Uebersicht pro Training und Uebung", () => {
     const logs = [
       log(30, [satz({ weight: 100, reps: 8 })]),

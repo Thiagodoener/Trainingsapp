@@ -10243,12 +10243,19 @@ function prsAgainstHistory(entry, history, isTime) {
     if (key === "maxDuration") return toNum(set.duration);
     if (key === "maxReps") return toNum(set.reps) * 1000 + toNum(set.weight);
     if (key === "maxWeight") return toNum(set.weight);
-    if (key === "best1RM") return set1RM(set, entry.rir);
+    if (key === "best1RM") return set1RM(set, rirFuer(set));
     if (key === "maxSetVolume") return toNum(set.weight) * toNum(set.reps);
     return 0;
   };
+  // Die Reserve-Angabe gehoert nur zum LETZTEN Satz - dieselbe Regel wie in
+  // der Trainingsansicht, der Historie und der 1RM-Kurve (forEachPerformedSet).
+  // Frueher bekam hier jeder Satz sie: Aus 37,5 x 10 mit 3 RIR wurden
+  // rechnerisch 13 Wdh., das liegt ueber ONE_RM_MAX_REPS, das 1RM wurde 0 -
+  // und der Pokal fehlte auf der 1RM-Kurve, obwohl die Kurve den Rekord zeigt.
+  const letzterSatz = performed[performed.length - 1] || null;
+  const rirFuer = (set) => (set === letzterSatz ? entry.rir : null);
   performed.forEach((set) => {
-    const prs = describeSetPRs(set, history, isTime, hasWeight, entry.rir);
+    const prs = describeSetPRs(set, history, isTime, hasWeight, rirFuer(set));
     if (prs.length === 0) return;
     prs.forEach((pr) => {
       const wert = kennzahlWert(pr.key, set);

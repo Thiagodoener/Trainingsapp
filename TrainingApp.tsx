@@ -10232,9 +10232,28 @@ function prsAgainstHistory(entry, history, isTime) {
   let bester = null;
   let bestesErgebnis = [];
   let bestePunkte = -1;
+  // Fuer die Kurven reicht der beste Satz nicht: Jede Kurve zeigt ihre
+  // eigene Kennzahl, und die kann aus einem ANDEREN Satz kommen. Wer 32,5 x 10
+  // und danach 30 x 15 macht, holt den Gewichts-Rekord im ersten und den
+  // Satzvolumen-Rekord im zweiten Satz - mit nur dem schwersten Satz fehlte
+  // der Pokal auf der Satzvolumen-Kurve, obwohl der Punkt ein Rekord ist.
+  // Deshalb pro Kennzahl der Satz, der sie am weitesten getrieben hat.
+  const jeKennzahl = {};
+  const kennzahlWert = (key, set) => {
+    if (key === "maxDuration") return toNum(set.duration);
+    if (key === "maxReps") return toNum(set.reps) * 1000 + toNum(set.weight);
+    if (key === "maxWeight") return toNum(set.weight);
+    if (key === "best1RM") return set1RM(set, entry.rir);
+    if (key === "maxSetVolume") return toNum(set.weight) * toNum(set.reps);
+    return 0;
+  };
   performed.forEach((set) => {
     const prs = describeSetPRs(set, history, isTime, hasWeight, entry.rir);
     if (prs.length === 0) return;
+    prs.forEach((pr) => {
+      const wert = kennzahlWert(pr.key, set);
+      if (!jeKennzahl[pr.key] || wert > jeKennzahl[pr.key].wert) jeKennzahl[pr.key] = { pr, wert };
+    });
     // Derselbe Massstab wie in der Trainingsansicht: der schwerste Satz,
     // bei Gleichstand der mit den meisten Wiederholungen.
     const punkte = isTime
@@ -10249,7 +10268,8 @@ function prsAgainstHistory(entry, history, isTime) {
   // dort eine eigene Kurve fuer das Gesamtvolumen gibt.
   const gesamt = describeExercisePRs(performed, history, isTime, hasWeight, entry.rir);
   if (!bester && gesamt.length === 0) return null;
-  return { set: bester, prs: bestesErgebnis, gesamt };
+  const jeSatzKennzahl = Object.values(jeKennzahl).map((x) => x.pr);
+  return { set: bester, prs: bestesErgebnis, gesamt, jeKennzahl: jeSatzKennzahl };
 }
 
 // Dasselbe fuer ein einzelnes Training, mit frisch aufgebauter Historie.
@@ -10325,7 +10345,9 @@ export function getExercisePRHistory(logs, exerciseId, isTimeBased = false, gymI
     gymIndependent ? { [exerciseId]: true } : {},
     (log, entry, treffer) => {
       if (entry.exerciseId !== exerciseId) return;
-      map[log.id] = [...(map[log.id] || []), ...treffer.prs, ...treffer.gesamt];
+      // Fuer die Kurven: jeder Satz-Rekord, egal aus welchem Satz (siehe
+      // prsAgainstHistory), nicht nur die des schwersten.
+      map[log.id] = [...(map[log.id] || []), ...treffer.jeKennzahl, ...treffer.gesamt];
     }
   );
   return map;

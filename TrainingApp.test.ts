@@ -1333,6 +1333,24 @@ describe("Pokale: Rekorde im Nachhinein", () => {
     expect(keys).not.toContain("maxReps");
   });
 
+  it("Regression: der Satzvolumen-Pokal fehlt nicht, wenn der Rekord aus einem leichteren Satz kommt", () => {
+    // Der schwerste Satz (32,5 x 8) holt den Gewichts-Rekord, das hoechste
+    // Satzvolumen kommt aber aus 30 x 15. Frueher zaehlten fuer die Kurven nur
+    // die Rekorde des schwersten Satzes - der Pokal auf der
+    // Satzvolumen-Kurve blieb leer.
+    const logs = [
+      log(30, [satz({ weight: 30, reps: 14 })]),
+      log(2, [satz({ weight: 32.5, reps: 8 }), satz({ weight: 30, reps: 15 })]),
+    ];
+    const verlauf = getExercisePRHistory(logs, "bankdruecken");
+    const keys = verlauf["l2"].map((pr: any) => pr.key);
+    expect(keys).toContain("maxWeight");
+    expect(keys).toContain("maxSetVolume");
+    expect(keys).toContain("maxReps");
+    const volumen = verlauf["l2"].find((pr: any) => pr.key === "maxSetVolume");
+    expect(volumen.value).toBe("450 kg");
+  });
+
   it("liefert fuer den Verlauf eine Uebersicht pro Training und Uebung", () => {
     const logs = [
       log(30, [satz({ weight: 100, reps: 8 })]),

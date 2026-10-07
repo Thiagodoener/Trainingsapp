@@ -17977,7 +17977,10 @@ function LogView({
 // exercise detail sheet, so both always show identical numbers.
 // ---------------------------------------------------------------------------
 
-const GYM_LINE_COLORS = ["#4780c3", "#41707d", "#4f7a48", "#6f5f92", "#9a7414"];
+// Bewusst weit auseinanderliegende Farbtöne (Blau, Orange, Violett, Türkis,
+// Pink), damit zwei Gyms im selben Diagramm sofort unterscheidbar sind. Gelb
+// fehlt absichtlich - das ist die Farbe der Pokal-Symbole auf den Linien.
+const GYM_LINE_COLORS = ["#3b82f6", "#f97316", "#a855f7", "#14b8a6", "#ec4899"];
 
 // Jedes Gym bekommt überall dieselbe Farbe - in jeder Übung, jedem Diagramm.
 // Grundlage ist die Reihenfolge in der Gym-Verwaltung (gyms), NICHT die

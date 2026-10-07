@@ -2647,6 +2647,80 @@ export function neueExterneEinheiten(aktivitaeten, vorhandene) {
 }
 
 // ---------------------------------------------------------------------------
+// Geplante Ausdauer-Einheiten
+//
+// Eine Einheit, die man im Kalender für einen späteren Tag einträgt, hat noch
+// nicht stattgefunden. Sie wird deshalb nicht als absolviert abgelegt, sondern
+// als offener Termin: ein Kalendereintrag mit `geplant` (Sportart, Uhrzeit,
+// Dauer, Strecke) und noch ohne enduranceId. In der Belastungs-Statistik
+// taucht sie erst auf, wenn sie erledigt ist.
+//
+// Erledigt wird sie auf zwei Wegen: Die Uhr liefert über intervals.icu eine
+// passende Einheit, oder man hakt sie von Hand ab. Von Hand abgehakt entsteht
+// eine Einheit aus den geplanten Werten (vonHandAbgehakt). Kommt danach doch
+// noch die Aufzeichnung der Uhr, ersetzt sie diese - sonst stünde derselbe
+// Lauf doppelt in der Statistik, einmal geschätzt und einmal gemessen.
+// ---------------------------------------------------------------------------
+export function istGeplanteAusdauer(eintrag) {
+  return eintrag?.type === "endurance" && !!eintrag.geplant;
+}
+
+// Wartet der Eintrag noch auf die Uhr? Offen oder nur von Hand abgehakt.
+export function wartetAufUhr(eintrag) {
+  return istGeplanteAusdauer(eintrag) && (!eintrag.enduranceId || !!eintrag.vonHandAbgehakt);
+}
+
+// Start einer geplanten Einheit als Ortszeit. Ohne lesbare Uhrzeit 12:00 -
+// derselbe Ausweichwert wie beim Eintragen von Hand.
+export function geplanterStart(eintrag) {
+  const tag = dateFromKey(eintrag?.date);
+  if (!tag) return null;
+  const [std, min] = String(eintrag?.geplant?.uhrzeit || "12:00").split(":").map(Number);
+  return new Date(
+    tag.getFullYear(), tag.getMonth(), tag.getDate(),
+    Number.isFinite(std) ? std : 12, Number.isFinite(min) ? min : 0, 0
+  );
+}
+
+// Ordnet neue Einheiten von der Uhr den geplanten Terminen zu: gleicher Tag
+// und gleiche Sportart. Ein Termin mit Sportart "Sonstige" nimmt jede
+// Sportart an, aber nur, wenn kein Termin mit genau dieser Sportart frei ist.
+// Unter mehreren Kandidaten gewinnt die kleinste Abweichung zur geplanten
+// Uhrzeit - wie bei den Krafttrainings soll nicht die Reihenfolge der Daten
+// entscheiden. Jede Einheit erledigt höchstens einen Termin und umgekehrt.
+//
+// Eine andere Sportart hakt bewusst nichts ab: Der Rad-Arbeitsweg am Morgen
+// ist nicht der Lauf, der für den Abend geplant war.
+//
+// Ergebnis: { [einheit.id]: eintrag.id }
+export function ordneGeplanteAusdauer(neueEinheiten, eintraege) {
+  const offen = (Array.isArray(eintraege) ? eintraege : []).filter(wartetAufUhr);
+  const paare = [];
+  (Array.isArray(neueEinheiten) ? neueEinheiten : []).forEach((einheit) => {
+    const start = new Date(einheit?.date);
+    if (!einheit?.id || !Number.isFinite(start.getTime())) return;
+    const tag = toDateKey(start);
+    offen.forEach((eintrag) => {
+      if (eintrag.date !== tag) return;
+      const sport = eintrag.geplant.sport || "sonstige";
+      const genau = sport === einheit.sport;
+      if (!genau && sport !== "sonstige") return;
+      const abstand = Math.abs(start.getTime() - (geplanterStart(eintrag)?.getTime() ?? start.getTime()));
+      paare.push({ einheitId: einheit.id, eintragId: eintrag.id, genau, abstand });
+    });
+  });
+  paare.sort((a, b) => (a.genau === b.genau ? a.abstand - b.abstand : a.genau ? -1 : 1));
+  const zuordnung = {};
+  const vergeben = new Set();
+  paare.forEach((p) => {
+    if (zuordnung[p.einheitId] || vergeben.has(p.eintragId)) return;
+    zuordnung[p.einheitId] = p.eintragId;
+    vergeben.add(p.eintragId);
+  });
+  return zuordnung;
+}
+
+// ---------------------------------------------------------------------------
 // Eine Kraft-Aufzeichnung der Uhr dem passenden Training zuordnen
 //
 // Verglichen werden Zeiträume, nicht Zeitpunkte. Uhr und App werden fast nie
@@ -5217,6 +5291,61 @@ function TrainingAppInner() {
     ]);
     return log;
   };
+  // Eine Ausdauer-Einheit für einen späteren Tag vormerken - als offener
+  // Termin, nicht als absolvierte Einheit (siehe istGeplanteAusdauer).
+  const planEndurance = async (dateKey, geplant) => {
+    await persistCalendarEntries([
+      ...calendarEntries,
+      {
+        id: uid(),
+        date: dateKey,
+        type: "endurance",
+        enduranceId: null,
+        geplant,
+        vonHandAbgehakt: false,
+        erstelltAm: toDateKey(new Date()),
+      },
+    ]);
+  };
+  // Eine geplante Einheit von Hand abhaken oder das Abhaken zurücknehmen.
+  // Abgehakt entsteht eine Einheit aus den geplanten Werten; zurückgenommen
+  // verschwindet genau diese wieder. Was die Uhr geliefert hat, lässt sich
+  // so nicht wegklicken - das ist gemessen, nicht angekreuzt.
+  const toggleEnduranceDone = async (entryId) => {
+    const entry = calendarEntries.find((ce) => ce.id === entryId);
+    if (!istGeplanteAusdauer(entry)) return;
+    if (entry.enduranceId) {
+      if (!entry.vonHandAbgehakt) return;
+      await persistEnduranceLogs(enduranceLogs.filter((e) => e.id !== entry.enduranceId));
+      await persistCalendarEntries(
+        calendarEntries.map((ce) =>
+          ce.id === entryId ? { ...ce, enduranceId: null, vonHandAbgehakt: false } : ce
+        )
+      );
+      return;
+    }
+    const { uhrzeit, ...werte } = entry.geplant;
+    const log = {
+      id: uid(),
+      quelle: "hand",
+      externId: null,
+      sport: "sonstige",
+      durationSeconds: 0,
+      distanceMeters: null,
+      avgHr: null,
+      maxHr: null,
+      calories: null,
+      notiz: "",
+      ...werte,
+      date: (geplanterStart(entry) || new Date()).toISOString(),
+    };
+    await persistEnduranceLogs([...enduranceLogs, log]);
+    await persistCalendarEntries(
+      calendarEntries.map((ce) =>
+        ce.id === entryId ? { ...ce, enduranceId: log.id, vonHandAbgehakt: true } : ce
+      )
+    );
+  };
   // --- Ausdauer-Abgleich (intervals.icu) ------------------------------------
   // Kein Pförtner nötig, wenn intervals.icu Aufrufe direkt aus dem Browser
   // zulässt. Ob das so ist, ließ sich beim Bauen nicht prüfen - intervals.icu
@@ -5281,18 +5410,39 @@ function TrainingAppInner() {
 
       const neue = neueExterneEinheiten(aktivitaeten, enduranceLogs);
       if (neue.length > 0) {
+        // Passt eine neue Einheit zu einem geplanten Termin, hakt sie diesen
+        // ab, statt daneben einen zweiten Eintrag anzulegen. War der Termin
+        // schon von Hand abgehakt, ersetzt die Messung die Schätzung.
+        const zuordnung = ordneGeplanteAusdauer(neue, calendarEntries);
+        const eintragZuEinheit = Object.fromEntries(
+          Object.entries(zuordnung).map(([einheitId, eintragId]) => [eintragId, einheitId])
+        );
+        const ersetzt = new Set(
+          calendarEntries
+            .filter((ce) => eintragZuEinheit[ce.id] && ce.vonHandAbgehakt && ce.enduranceId)
+            .map((ce) => ce.enduranceId)
+        );
         // In EINEM Rutsch speichern, nicht je Einheit einzeln: Mehrere
         // aufeinanderfolgende Aufrufe läsen alle denselben veralteten Stand,
         // und alle bis auf den letzten gingen verloren.
-        await persistEnduranceLogs([...enduranceLogs, ...neue]);
+        await persistEnduranceLogs([
+          ...enduranceLogs.filter((e) => !ersetzt.has(e.id)),
+          ...neue,
+        ]);
         await persistCalendarEntries([
-          ...calendarEntries,
-          ...neue.map((e) => ({
-            id: uid(),
-            date: toDateKey(new Date(e.date)),
-            type: "endurance",
-            enduranceId: e.id,
-          })),
+          ...calendarEntries.map((ce) =>
+            eintragZuEinheit[ce.id]
+              ? { ...ce, enduranceId: eintragZuEinheit[ce.id], vonHandAbgehakt: false }
+              : ce
+          ),
+          ...neue
+            .filter((e) => !zuordnung[e.id])
+            .map((e) => ({
+              id: uid(),
+              date: toDateKey(new Date(e.date)),
+              type: "endurance",
+              enduranceId: e.id,
+            })),
         ]);
       }
 
@@ -5425,6 +5575,8 @@ function TrainingAppInner() {
         ? `Diesen Workout-Termin wirklich aus dem Kalender entfernen?`
         : entry?.type === "breathing"
         ? `Diese Atemübung wirklich aus dem Kalender entfernen?`
+        : istGeplanteAusdauer(entry) && !entry.enduranceId
+        ? `Diese geplante Ausdauer-Einheit wirklich aus dem Kalender entfernen?`
         : entry?.type === "endurance"
         ? // Deutlicher als bei den anderen Arten, weil hier mehr verschwindet
           // als ein Termin: Der Kalendereintrag IST die Ausdauer-Einheit, und
@@ -9078,7 +9230,16 @@ function TrainingAppInner() {
             enduranceLogs={enduranceLogs}
             pulsProfil={pulsProfil}
             onUpdateEnduranceNote={updateEnduranceNote}
+            onToggleEnduranceDone={toggleEnduranceDone}
             onLogEndurance={async (dateKey, daten) => {
+              // Für einen späteren Tag ist es eine Planung: offen, bis die
+              // Uhr die Einheit liefert oder sie von Hand abgehakt wird.
+              if (dateKey > toDateKey(new Date())) {
+                const { avgHr, maxHr, ...geplant } = daten;
+                await planEndurance(dateKey, geplant);
+                showToast("Ausdauer-Einheit geplant");
+                return;
+              }
               const tag = dateFromKey(dateKey) || new Date();
               const [std, min] = String(daten.uhrzeit || "12:00").split(":").map(Number);
               const { uhrzeit, ...rest } = daten;
@@ -10472,7 +10633,11 @@ function DashboardView({
   // Nur was heute noch offen ist - schon Erledigtes steht im Kalender und
   // im Verlauf, hier wäre es nur Ballast.
   const todayOpen = useMemo(
-    () => calendarEntries.filter((ce) => ce.date === todayKey && !ce.logId && ce.type !== "action"),
+    // Ausdauer-Einheiten haben kein logId und keinen Start-Knopf - sie
+    // gehören nicht hierher und ließen sonst eine leere "Heute"-Zeile stehen.
+    () => calendarEntries.filter(
+      (ce) => ce.date === todayKey && !ce.logId && ce.type !== "action" && ce.type !== "endurance"
+    ),
     [calendarEntries, todayKey]
   );
 
@@ -10921,6 +11086,7 @@ function CalendarView({
   enduranceLogs = [],
   pulsProfil = null,
   onLogEndurance,
+  onToggleEnduranceDone,
   onUpdateEnduranceNote,
   deloadWeeks = [],
   onAddDeloadRange,
@@ -11291,14 +11457,17 @@ function CalendarView({
                         }
                         if (entry.type === "endurance") {
                           const einheit = enduranceById[entry.enduranceId];
-                          const sportart = einheit ? ausdauerSportart(einheit.sport) : null;
+                          const sportId = einheit?.sport || entry.geplant?.sport;
+                          const sportart = sportId ? ausdauerSportart(sportId) : null;
                           return (
                             <span
                               key={entry.id}
                               className="cal-entry-chip cal-entry-endurance"
                               style={sportart ? { "--sport-color": sportart.color } : undefined}
                             >
-                              <Check size={9} />
+                              {/* Wie bei den Aktionen: ein Haken heißt
+                                  erledigt, keiner heißt noch offen. */}
+                              {entry.enduranceId && <Check size={9} />}
                               {sportart?.label || "Ausdauer"}
                             </span>
                           );
@@ -11548,6 +11717,56 @@ function CalendarView({
                 </div>
               );
             }
+            if (istGeplanteAusdauer(entry) && (!entry.enduranceId || entry.vonHandAbgehakt)) {
+              // Geplant: offen, bis die Uhr die Einheit liefert oder sie von
+              // Hand abgehakt wird. Von Hand abgehakt bleibt der Haken
+              // zurücknehmbar - eine Einheit der Uhr dagegen nicht (die
+              // landet unten bei den absolvierten Einheiten).
+              const g = entry.geplant;
+              const isDone = !!entry.enduranceId;
+              const sportart = ausdauerSportart(g.sport);
+              return (
+                <div key={entry.id} className={`cal-detail-item ${isDone ? "cal-detail-done" : ""}`}>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
+                    <span style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0 }}>
+                      <span
+                        className={`set-check ${isDone ? "checked" : ""}`}
+                        role="checkbox"
+                        aria-checked={isDone}
+                        title={isDone ? "Als offen markieren" : "Als erledigt markieren"}
+                        onClick={() => onToggleEnduranceDone?.(entry.id)}
+                      >
+                        {isDone && <Check size={13} color="var(--bg)" />}
+                      </span>
+                      <span style={{ minWidth: 0 }}>
+                        <span className="ex-name" style={{ display: "block", opacity: isDone ? 0.65 : 1 }}>
+                          <Activity size={13} style={{ marginRight: 6, verticalAlign: -2, color: sportart?.color || ENDURANCE_COLOR }} />
+                          {sportart?.label || "Ausdauer"}
+                        </span>
+                        <span style={{ fontSize: 12.5, color: "var(--text-dim)" }}>
+                          {[
+                            g.uhrzeit ? `${g.uhrzeit} Uhr` : null,
+                            g.durationSeconds ? `${Math.max(1, Math.round(g.durationSeconds / 60))} Min.` : null,
+                            g.distanceMeters ? `${fmtDecimal(g.distanceMeters / 1000)} km` : null,
+                            isDone ? "von Hand abgehakt" : "geplant",
+                          ].filter(Boolean).join(" · ")}
+                        </span>
+                      </span>
+                    </span>
+                    <div style={{ display: "flex", gap: 4, flexShrink: 0 }}>
+                      <button className="btn-icon" onClick={() => onDeleteEntry(entry.id)} title="Termin entfernen">
+                        <Trash2 size={13} />
+                      </button>
+                    </div>
+                  </div>
+                  {!isDone && (
+                    <p style={{ fontSize: 12.5, color: "var(--text-dim)", marginTop: 6 }}>
+                      Wird abgehakt, sobald die Uhr die Einheit liefert – oder du hakst sie selbst ab.
+                    </p>
+                  )}
+                </div>
+              );
+            }
             if (entry.type === "endurance") {
               const einheit = enduranceById[entry.enduranceId];
               // Anders als ein Workout-Termin ist eine Ausdauer-Einheit nie
@@ -11780,6 +11999,7 @@ function CalendarView({
             ) : addMode === "endurance" ? (
               <EnduranceLogForm
                 dateLabel={fmtDate(dateFromKey(selectedDate))}
+                geplant={selectedDate > todayKey}
                 pulsProfil={pulsProfil}
                 onSave={(daten) => { onLogEndurance?.(selectedDate, daten); closeAddDialog(); }}
               />
@@ -18991,7 +19211,10 @@ function BreathingSessionView({ session, onFinish, onCancel }) {
 //
 // Die Uhrzeit ist Pflicht und nicht bloß Zierde: Über sie wird die Einheit
 // später der Garmin-Aufzeichnung zugeordnet (Zeitfenster von ±5 Minuten).
-function EnduranceLogForm({ dateLabel, pulsProfil, onSave }) {
+//
+// Für einen späteren Tag wird daraus eine Planung (geplant): Puls gibt es
+// dann noch keinen, und gespeichert wird ein offener Termin.
+function EnduranceLogForm({ dateLabel, pulsProfil, onSave, geplant = false }) {
   const [sport, setSport] = useState("laufen");
   const [uhrzeit, setUhrzeit] = useState("18:00");
   const [minuten, setMinuten] = useState("");
@@ -19008,7 +19231,9 @@ function EnduranceLogForm({ dateLabel, pulsProfil, onSave }) {
   return (
     <>
       <p style={{ fontSize: 12.5, color: "var(--text-dim)", margin: "0 0 12px" }}>
-        Wird als absolvierte Einheit für {dateLabel} gespeichert.
+        {geplant
+          ? `Wird als geplante Einheit für ${dateLabel} eingetragen und erst abgehakt, wenn die Uhr sie liefert oder du sie selbst abhakst.`
+          : `Wird als absolvierte Einheit für ${dateLabel} gespeichert.`}
       </p>
       <label className="field-label">Sportart</label>
       <div className="chip-row chip-row-wrap" style={{ marginTop: 6, marginBottom: 10 }}>
@@ -19041,26 +19266,30 @@ function EnduranceLogForm({ dateLabel, pulsProfil, onSave }) {
       </div>
 
       <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
-        <div style={{ flex: 1 }}>
-          <label className="field-label">Ø-Puls</label>
-          <input
-            type="text"
-            inputMode="numeric"
-            placeholder="optional"
-            value={avgHr}
-            onChange={(e) => setAvgHr(e.target.value)}
-          />
-        </div>
-        <div style={{ flex: 1 }}>
-          <label className="field-label">Max-Puls</label>
-          <input
-            type="text"
-            inputMode="numeric"
-            placeholder="optional"
-            value={maxHr}
-            onChange={(e) => setMaxHr(e.target.value)}
-          />
-        </div>
+        {!geplant && (
+          <>
+            <div style={{ flex: 1 }}>
+              <label className="field-label">Ø-Puls</label>
+              <input
+                type="text"
+                inputMode="numeric"
+                placeholder="optional"
+                value={avgHr}
+                onChange={(e) => setAvgHr(e.target.value)}
+              />
+            </div>
+            <div style={{ flex: 1 }}>
+              <label className="field-label">Max-Puls</label>
+              <input
+                type="text"
+                inputMode="numeric"
+                placeholder="optional"
+                value={maxHr}
+                onChange={(e) => setMaxHr(e.target.value)}
+              />
+            </div>
+          </>
+        )}
         <div style={{ flex: 1 }}>
           <label className="field-label">Strecke in km</label>
           <input
@@ -19076,15 +19305,17 @@ function EnduranceLogForm({ dateLabel, pulsProfil, onSave }) {
       {/* Sagt offen, warum eine Belastungszahl fehlt, statt stumm 0 zu
           zeigen - der Unterschied zwischen "kein Puls da" und "kein Profil
           eingetragen" ist für die Behebung entscheidend. */}
-      <p className="deload-basis" style={{ marginTop: 10 }}>
-        {vorschau > 0 ? (
-          <>Belastung dieser Einheit: <b>{fmtDecimal(vorschau)}</b></>
-        ) : !pulsProfilVollstaendig(pulsProfil) ? (
-          "Ohne Puls-Profil (Zahnrad-Menü auf der Startseite) wird für diese Einheit keine Belastung berechnet. Die Einheit selbst wird trotzdem gespeichert."
-        ) : (
-          "Ohne Ø-Puls gibt es für diese Einheit keine Belastungszahl. Dauer und Strecke werden trotzdem gespeichert."
-        )}
-      </p>
+      {!geplant && (
+        <p className="deload-basis" style={{ marginTop: 10 }}>
+          {vorschau > 0 ? (
+            <>Belastung dieser Einheit: <b>{fmtDecimal(vorschau)}</b></>
+          ) : !pulsProfilVollstaendig(pulsProfil) ? (
+            "Ohne Puls-Profil (Zahnrad-Menü auf der Startseite) wird für diese Einheit keine Belastung berechnet. Die Einheit selbst wird trotzdem gespeichert."
+          ) : (
+            "Ohne Ø-Puls gibt es für diese Einheit keine Belastungszahl. Dauer und Strecke werden trotzdem gespeichert."
+          )}
+        </p>
+      )}
 
       <button
         className="btn btn-primary btn-block btn-sm"
@@ -19101,7 +19332,7 @@ function EnduranceLogForm({ dateLabel, pulsProfil, onSave }) {
           })
         }
       >
-        <Save size={14} /> Speichern
+        <Save size={14} /> {geplant ? "Planen" : "Speichern"}
       </button>
     </>
   );

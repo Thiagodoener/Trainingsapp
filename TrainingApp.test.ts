@@ -78,6 +78,8 @@ import {
   externeSportart,
   istKraftEinheit,
   neueExterneEinheiten,
+  ordneGeplanteAusdauer,
+  wartetAufUhr,
   intervalsAuthKopf,
   abgleichZeitraum,
   kraftZuordnungAbweichung,
@@ -3125,5 +3127,56 @@ describe("Gym im Verlauf", () => {
     ];
     const timeline = getExerciseTimeline(logs, "x");
     expect(timeline.map((t) => t.gymId)).toEqual([null, "g1"]);
+  });
+});
+
+describe("Geplante Ausdauer-Einheiten", () => {
+  // Datum als Ortszeit, wie es auch von intervals.icu ankommt.
+  const einheit = (id, sport, zeit) => ({ id, sport, date: new Date(zeit).toISOString() });
+  const plan = (id, date, sport, uhrzeit, extra = {}) => ({
+    id, date, type: "endurance", enduranceId: null,
+    geplant: { sport, uhrzeit, durationSeconds: 2700 }, ...extra,
+  });
+
+  it("hakt den geplanten Termin am selben Tag mit derselben Sportart ab", () => {
+    const zuordnung = ordneGeplanteAusdauer(
+      [einheit("u1", "laufen", "2026-10-10T18:05:00")],
+      [plan("p1", "2026-10-10", "laufen", "18:00")]
+    );
+    expect(zuordnung).toEqual({ u1: "p1" });
+  });
+
+  it("hakt nichts an einem anderen Tag oder mit anderer Sportart ab", () => {
+    const eintraege = [plan("p1", "2026-10-10", "laufen", "18:00")];
+    expect(ordneGeplanteAusdauer([einheit("u1", "laufen", "2026-10-11T18:00:00")], eintraege)).toEqual({});
+    expect(ordneGeplanteAusdauer([einheit("u1", "rad", "2026-10-10T08:00:00")], eintraege)).toEqual({});
+  });
+
+  it("nimmt bei mehreren Terminen den mit der naechsten Uhrzeit", () => {
+    const zuordnung = ordneGeplanteAusdauer(
+      [einheit("abend", "laufen", "2026-10-10T19:00:00"), einheit("morgen", "laufen", "2026-10-10T07:10:00")],
+      [plan("p-frueh", "2026-10-10", "laufen", "07:00"), plan("p-spaet", "2026-10-10", "laufen", "18:30")]
+    );
+    expect(zuordnung).toEqual({ morgen: "p-frueh", abend: "p-spaet" });
+  });
+
+  it("laesst Sonstige nur greifen, wenn kein Termin mit genau der Sportart frei ist", () => {
+    const eintraege = [plan("p-sonst", "2026-10-10", "sonstige", "18:00"), plan("p-lauf", "2026-10-10", "laufen", "10:00")];
+    expect(ordneGeplanteAusdauer([einheit("u1", "laufen", "2026-10-10T18:00:00")], eintraege)).toEqual({ u1: "p-lauf" });
+    expect(ordneGeplanteAusdauer([einheit("u2", "rad", "2026-10-10T18:00:00")], eintraege)).toEqual({ u2: "p-sonst" });
+  });
+
+  it("ersetzt ein Abhaken von Hand, aber keine Einheit der Uhr", () => {
+    const vonHand = plan("p1", "2026-10-10", "laufen", "18:00", { enduranceId: "h1", vonHandAbgehakt: true });
+    const vonUhr = plan("p2", "2026-10-10", "laufen", "18:00", { enduranceId: "extern-1", vonHandAbgehakt: false });
+    expect(wartetAufUhr(vonHand)).toBe(true);
+    expect(wartetAufUhr(vonUhr)).toBe(false);
+    expect(ordneGeplanteAusdauer([einheit("u1", "laufen", "2026-10-10T18:00:00")], [vonUhr, vonHand])).toEqual({ u1: "p1" });
+  });
+
+  it("laesst normale Ausdauer-Eintraege ohne Planung in Ruhe", () => {
+    const erledigt = { id: "c1", date: "2026-10-10", type: "endurance", enduranceId: "x" };
+    expect(wartetAufUhr(erledigt)).toBe(false);
+    expect(ordneGeplanteAusdauer([einheit("u1", "laufen", "2026-10-10T18:00:00")], [erledigt])).toEqual({});
   });
 });

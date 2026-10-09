@@ -7285,6 +7285,19 @@ function TrainingAppInner() {
           color: var(--accent);
           margin-bottom: 8px;
         }
+        /* Auswahl, die sich mitten in einer Karte aufklappt (z. B. Übung
+           ersetzen). Ohne eigene Fläche lief sie nahtlos in den Inhalt
+           darunter über - Rahmen in Akzentfarbe und Schatten heben sie
+           sichtbar ab, auch im Dunkelmodus, wo der Schatten kaum wirkt. */
+        .inline-panel {
+          margin: 10px 0 12px;
+          padding: 12px;
+          background: var(--elevated);
+          border: 1.5px solid var(--accent);
+          border-radius: 14px;
+          box-shadow: 0 8px 26px rgba(0,0,0,calc(var(--shadow-strength) * 2.2));
+        }
+        .inline-panel .ex-row:last-child { padding-bottom: 4px; }
         .chip.filter-new {
           color: var(--accent);
           font-weight: 600;
@@ -17319,7 +17332,7 @@ function LogView({
             </div>
 
             {replacingExerciseId === entry.id && (
-              <div style={{ marginTop: 10, paddingTop: 10, borderTop: "1px solid var(--border)" }}>
+              <div className="inline-panel">
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
                   <span className="plan-title">Übung ersetzen</span>
                   <button className="btn-icon" onClick={() => { setReplacingExerciseId(null); setAddExerciseQuery(""); resetAddFilters(); }}>

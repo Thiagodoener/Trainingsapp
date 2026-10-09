@@ -8021,7 +8021,11 @@ function TrainingAppInner() {
           color: var(--text-dim);
           cursor: grab;
           touch-action: none;
-          padding: 2px;
+          /* Größere Trefferfläche für den Daumen, ohne das Layout zu
+             verschieben: der Innenabstand wird per negativem Rand wieder
+             ausgeglichen. Vorher war der Griff nur 20px groß. */
+          padding: 10px 8px;
+          margin: -8px -6px;
         }
         .set-num {
           font-family: var(--font-ui);
@@ -12227,14 +12231,39 @@ function CalendarView({
 // drag only CSS transforms move, which keeps it smooth.
 // ---------------------------------------------------------------------------
 
-const LONG_PRESS_MS = 500;
+// Der Griff ist nur zum Ziehen da (touch-action: none, man kann von dort
+// ohnehin nicht scrollen) - eine kurze Haltezeit reicht also, um ein
+// versehentliches Antippen von echtem Ziehen zu unterscheiden.
+const LONG_PRESS_MS = 300;
 const SHIFT_TRANSITION = "transform 200ms cubic-bezier(0.2, 0, 0, 1)";
 // How close to the top/bottom edge of the scrollable area a drag has to get
 // before it starts auto-scrolling, and how fast that scroll goes at most -
 // without this a list longer than one screen simply can't be reordered from
 // bottom to top (or back), since the target row is off-screen the whole time.
-const AUTO_SCROLL_EDGE = 70;
-const AUTO_SCROLL_MAX_SPEED = 16;
+const AUTO_SCROLL_EDGE = 90;
+const AUTO_SCROLL_MAX_SPEED = 18;
+
+// Der Bereich von .content, den man tatsächlich sieht. .content reicht
+// oben unter die Statusleiste und den klebenden Pausen-Timer und unten
+// unter die Navigationsleiste - die Ränder, an denen das automatische
+// Scrollen anspringt, lagen dadurch genau dort, wo der Finger beim Ziehen
+// nie hinkommt, und die Seite lief nicht mit.
+function visibleScrollBounds(container) {
+  const rect = container.getBoundingClientRect();
+  let top = rect.top;
+  let bottom = rect.bottom;
+  container.querySelectorAll(".rest-timer, .auto-run-bar").forEach((el) => {
+    const r = el.getBoundingClientRect();
+    // Nur wenn er gerade oben klebt, verdeckt er etwas.
+    if (r.height && r.top <= top + 2) top = Math.max(top, r.bottom);
+  });
+  const dock = document.querySelector(".bottom-dock");
+  if (dock) {
+    const r = dock.getBoundingClientRect();
+    if (r.height && r.top < bottom) bottom = Math.max(top + 2 * AUTO_SCROLL_EDGE, r.top);
+  }
+  return { top, bottom };
+}
 
 // While a row is being dragged the browser would otherwise select the text
 // under the finger, leaving words and numbers highlighted in blue.
@@ -12321,7 +12350,7 @@ function useDragReorder({ items, getId, onReorder }) {
     if (draggingIdRef.current === null) return;
     const container = document.querySelector(".content");
     if (container) {
-      const rect = container.getBoundingClientRect();
+      const rect = visibleScrollBounds(container);
       const y = pendingYRef.current;
       let speed = 0;
       if (y < rect.top + AUTO_SCROLL_EDGE) {
@@ -12401,8 +12430,34 @@ function useDragReorder({ items, getId, onReorder }) {
     };
   }, [draggingId]);
 
+  // iOS startet bei langem Druck die Textauswahl (und bricht dabei die
+  // Berührung mit touchcancel ab), bevor das Ziehen überhaupt beginnt.
+  // React registriert touchstart passiv, preventDefault wirkt dort nicht -
+  // deshalb ein eigener, nicht-passiver Listener nur für die Griffe.
+  useEffect(() => {
+    const onTouchStart = (e) => {
+      if (e.cancelable && e.target?.closest?.(".drag-handle")) e.preventDefault();
+    };
+    document.addEventListener("touchstart", onTouchStart, { passive: false });
+    return () => document.removeEventListener("touchstart", onTouchStart);
+  }, []);
+
   const startItemPress = (id, clientY) => {
     pressStartYRef.current = clientY;
+    // Schon ab dem Antippen sperren, nicht erst wenn das Ziehen beginnt:
+    // in der Haltezeit davor wurden sonst die Wörter daneben markiert.
+    setDragSelectionBlocked(true);
+    // Loslassen neben dem Griff muss die Haltezeit ebenfalls abbrechen,
+    // sonst beginnt das Ziehen danach ohne Finger und hängt fest.
+    const endPress = () => {
+      window.removeEventListener("mouseup", endPress);
+      window.removeEventListener("touchend", endPress);
+      window.removeEventListener("touchcancel", endPress);
+      cancelItemPress();
+    };
+    window.addEventListener("mouseup", endPress);
+    window.addEventListener("touchend", endPress);
+    window.addEventListener("touchcancel", endPress);
     dragPressTimer.current = setTimeout(() => {
       dragPressTimer.current = null;
       const order = itemsRef.current.map(getId);
@@ -12442,6 +12497,7 @@ function useDragReorder({ items, getId, onReorder }) {
       clearTimeout(dragPressTimer.current);
       dragPressTimer.current = null;
     }
+    if (draggingIdRef.current === null) setDragSelectionBlocked(false);
   };
   // Scrolling with a finger that happens to rest on the handle should not
   // turn into a drag, so meaningful movement before the timer fires aborts.
@@ -12454,7 +12510,14 @@ function useDragReorder({ items, getId, onReorder }) {
     onTouchStart: (e) => startItemPress(id, e.touches[0].clientY),
     onTouchMove: (e) => maybeCancelPress(e.touches[0].clientY),
     onTouchEnd: cancelItemPress,
-    onMouseDown: (e) => startItemPress(id, e.clientY),
+    // Ohne das lief der Haltetimer weiter, wenn das System die Berührung
+    // abbrach - das Ziehen startete dann ohne Finger und hing fest.
+    onTouchCancel: cancelItemPress,
+    onMouseDown: (e) => {
+      // Verhindert, dass die Maus beim Ziehen Text markiert.
+      e.preventDefault();
+      startItemPress(id, e.clientY);
+    },
     onMouseMove: (e) => maybeCancelPress(e.clientY),
     onMouseUp: cancelItemPress,
   });

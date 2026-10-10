@@ -340,6 +340,14 @@ export const toNum = (value) => {
 // uebersprungen - eine Zeile "Geloeschte Uebung" in der Statistik waere
 // dort keine Information, sondern Rauschen.
 const GELOESCHTE_UEBUNG = "Gelöschte Übung";
+
+// Löschen einer Übung - für eigene und Standardübungen gleich, und überall
+// dort, wo sich die Übungsseite öffnet (Übungen, Training, Plan-Editor,
+// Fortschritt). Als Context statt als Prop, weil die Seite an fünf Stellen
+// mit jeweils eigener Prop-Kette eingebunden ist. Der Wert ist eine Funktion
+// (exercise, danach) => void, die erst nachfragt und dann löscht; ohne
+// Provider bleibt der Knopf einfach weg.
+const UebungLoeschenContext = React.createContext(null);
 export const exerciseName = (ex) => (ex && ex.name) || GELOESCHTE_UEBUNG;
 
 // Saved logs are read defensively everywhere: an entry written by an older
@@ -4120,6 +4128,7 @@ const BACKUP_KEYS = [
   "plan-folders",
   "exercise-notes",
   "exercise-name-overrides",
+  "deleted-exercises",
   "exercise-time-based",
   "exercise-gym-independent",
   "exercise-stats-excluded",
@@ -4420,6 +4429,10 @@ function TrainingAppInner() {
     !!deloadInfo?.dueAt && deloadSuggestionHiddenAt === toDateKey(new Date(deloadInfo.dueAt));
   const [exerciseNotes, setExerciseNotes] = useState({});
   const [exerciseNameOverrides, setExerciseNameOverrides] = useState({});
+  // IDs gelöschter Standardübungen. Die stehen fest im Code (EXERCISES) und
+  // lassen sich nicht wirklich entfernen - sie werden deshalb ausgeblendet.
+  // Eigene Übungen werden dagegen direkt aus custom-exercises entfernt.
+  const [deletedExercises, setDeletedExercises] = useState([]);
   const [exerciseSubgroupOverrides, setExerciseSubgroupOverrides] = useState({});
   const [exerciseEquipmentOverrides, setExerciseEquipmentOverrides] = useState({});
   // Nebenmuskelgruppen je Übung - überschreibt die Grundangabe aus EXERCISES
@@ -4539,7 +4552,7 @@ function TrainingAppInner() {
 
   useEffect(() => {
     (async () => {
-      const [p, l, c, f, en, no, tb, gi, statsEx, active, prog, activeProg, sg, ce, cc, eq, th, gy, activeGy, restEnd, brEx, brLogs, dw, di, dsh, bnd, snd, bw, sec, secSub, ausdauer, puls, abgleichSet, abgleichKey, externKraft, exTags, exTagAssign] = await Promise.all([
+      const [p, l, c, f, en, no, tb, gi, statsEx, active, prog, activeProg, sg, ce, cc, eq, th, gy, activeGy, restEnd, brEx, brLogs, dw, di, dsh, bnd, snd, bw, sec, secSub, ausdauer, puls, abgleichSet, abgleichKey, externKraft, exTags, exTagAssign, deletedEx] = await Promise.all([
         loadJSON("training-plans", []),
         loadJSON("workout-logs", []),
         loadJSON("custom-exercises", []),
@@ -4577,6 +4590,7 @@ function TrainingAppInner() {
         loadJSON("externe-kraft-aktivitaeten", []),
         loadJSON("exercise-tags", []),
         loadJSON("exercise-tag-assignments", {}),
+        loadJSON("deleted-exercises", []),
       ]);
       // Migration: users who already had folders before "programs" existed
       // get one default program that all their existing folders are
@@ -4602,6 +4616,7 @@ function TrainingAppInner() {
       setFolders(migratedFolders);
       setExerciseNotes(en);
       setExerciseNameOverrides(no);
+      setDeletedExercises(Array.isArray(deletedEx) ? deletedEx : []);
       setExerciseSubgroupOverrides(sg);
       setExerciseSecondaryOverrides(sec && typeof sec === "object" ? sec : {});
       setExerciseSecondarySubgroupOverrides(secSub && typeof secSub === "object" ? secSub : {});
@@ -4803,6 +4818,10 @@ function TrainingAppInner() {
   const persistExerciseNotes = async (next) => {
     setExerciseNotes(next);
     await saveJSON("exercise-notes", next);
+  };
+  const persistDeletedExercises = async (next) => {
+    setDeletedExercises(next);
+    await saveJSON("deleted-exercises", next);
   };
   const persistExerciseNameOverrides = async (next) => {
     setExerciseNameOverrides(next);
@@ -5017,7 +5036,7 @@ function TrainingAppInner() {
   const allPlans = plans;
   // Der Name-Override ersetzt exercise.name direkt am Objekt, genau wie
   // withSecondaryOverride es fuer exercise.secondary tut (siehe dort).
-  const allExercises = [...EXERCISES, ...customExercises].map((e) => {
+  const allExercises = [...EXERCISES, ...customExercises].filter((e) => !deletedExercises.includes(e.id)).map((e) => {
     let ex = e;
     if (exerciseNameOverrides[e.id]) ex = { ...ex, name: exerciseNameOverrides[e.id] };
     ex = withSecondaryOverride(ex, exerciseSecondaryOverrides);
@@ -5028,6 +5047,50 @@ function TrainingAppInner() {
 
   const handleUpdateExerciseNote = async (exerciseId, note) => {
     await persistExerciseNotes({ ...exerciseNotes, [exerciseId]: note });
+  };
+  const handleDeleteExercise = async (exerciseId) => {
+    if (customExercises.some((e) => e.id === exerciseId)) {
+      await persistCustomExercises(customExercises.filter((e) => e.id !== exerciseId));
+    } else if (!deletedExercises.includes(exerciseId)) {
+      await persistDeletedExercises([...deletedExercises, exerciseId]);
+    }
+  };
+  // Eine geloeschte Uebung verschwindet nicht nur aus der Liste: ihre
+  // Saetze stehen weiter in den Logs, werden aber von jeder Auswertung
+  // uebersprungen (die kennt die Uebung nicht mehr). Monate an Verlauf
+  // waeren also ohne Vorwarnung aus der Statistik weg - deshalb sagt die
+  // Rueckfrage, was tatsaechlich daran haengt.
+  const deleteExerciseQuestion = (exercise) => {
+    const trainings = (Array.isArray(logs) ? logs : []).filter(
+      (l) => logEntriesFor(l, exercise.id).length > 0
+    ).length;
+    const base = `Übung „${exercise.name}“ wirklich löschen?`;
+    // Ein laufendes Training ist noch kein Log - ohne diesen Satz stand hier
+    // "steckt in 0 Trainings", waehrend die Uebung gerade auf dem Bildschirm
+    // war. Die Saetze gehen dort nicht verloren; nur der Name ist weg.
+    const laeuft = !!session && logEntries(session).some((e) => e.exerciseId === exercise.id);
+    const teile = [];
+    if (trainings > 0) {
+      teile.push(
+        ` Sie steckt in ${trainings} ${trainings === 1 ? "Training" : "Trainings"} –` +
+        " deren Sätze verschwinden danach aus Verlauf und Statistik."
+      );
+    }
+    if (laeuft) {
+      teile.push(
+        ` Sie steht außerdem im laufenden Training – die Sätze dort bleiben stehen,` +
+        ` die Übung heißt danach aber nur noch „${GELOESCHTE_UEBUNG}“.`
+      );
+    }
+    return base + teile.join("");
+  };
+  const requestDeleteExercise = (exercise, danach) => {
+    askConfirm(deleteExerciseQuestion(exercise), () => {
+      // Erst die Übungsseite schließen, dann löschen: sonst stünde sie
+      // einen Moment lang mit einer Übung da, die es nicht mehr gibt.
+      danach?.();
+      handleDeleteExercise(exercise.id);
+    });
   };
   const handleRenameExercise = async (exerciseId, name) => {
     await persistExerciseNameOverrides({ ...exerciseNameOverrides, [exerciseId]: name });
@@ -5897,6 +5960,7 @@ function TrainingAppInner() {
   };
 
   return (
+    <UebungLoeschenContext.Provider value={requestDeleteExercise}>
     <div className={`app-shell ${theme === "light" ? "theme-light" : ""}`}>
       <style>{`
         @import url('https://fonts.googleapis.com/css2?family=Nunito:wght@500;600;700;800&family=Inter:wght@400;500;600;700&display=swap');
@@ -9290,9 +9354,6 @@ function TrainingAppInner() {
             onSetExerciseSecondary={handleSetExerciseSecondary}
             onSetExerciseSecondarySubgroup={handleSetExerciseSecondarySubgroup}
             onAddCustom={handleAddCustomExercise}
-            onDeleteCustom={async (id) => {
-              await persistCustomExercises(customExercises.filter((e) => e.id !== id));
-            }}
             onUpdateExerciseNote={handleUpdateExerciseNote}
             onRenameExercise={handleRenameExercise}
             timeBasedExercises={timeBasedExercises}
@@ -9303,7 +9364,6 @@ function TrainingAppInner() {
             onToggleStatsExcluded={handleToggleStatsExcluded}
             exerciseTagging={exerciseTagging}
             onRequestConfirm={askConfirm}
-            laufendeUebungsIds={session ? logEntries(session).map((e) => e.exerciseId) : []}
           />
         ) : tab === "plans" ? (
           building ? (
@@ -10333,6 +10393,7 @@ function TrainingAppInner() {
         </nav>
       </div>
     </div>
+    </UebungLoeschenContext.Provider>
   );
 }
 
@@ -13355,7 +13416,6 @@ function ExercisesView({
   onSetExerciseSecondary,
   onSetExerciseSecondarySubgroup,
   onAddCustom,
-  onDeleteCustom,
   onUpdateExerciseNote,
   onRenameExercise,
   timeBasedExercises,
@@ -13367,7 +13427,6 @@ function ExercisesView({
   exerciseTagging = KEINE_TAGS,
   onRequestConfirm,
   gyms = [],
-  laufendeUebungsIds = [],
 }) {
   const [query, setQuery] = useState("");
   const [filter, setFilter] = useState(LEERER_FILTER);
@@ -13382,36 +13441,6 @@ function ExercisesView({
   );
   const [creating, setCreating] = useState(false);
   const [selectedExerciseId, setSelectedExerciseId] = useState(null);
-
-  // Eine geloeschte Uebung verschwindet nicht nur aus der Liste: ihre
-  // Saetze stehen weiter in den Logs, werden aber von jeder Auswertung
-  // uebersprungen (die kennt die Uebung nicht mehr). Monate an Verlauf
-  // waeren also ohne Vorwarnung aus der Statistik weg - deshalb sagt die
-  // Rueckfrage, was tatsaechlich daran haengt.
-  const deleteExerciseQuestion = (exercise) => {
-    const trainings = (Array.isArray(logs) ? logs : []).filter(
-      (l) => logEntriesFor(l, exercise.id).length > 0
-    ).length;
-    const base = `Eigene Übung „${exercise.name}“ wirklich löschen?`;
-    // Ein laufendes Training ist noch kein Log - ohne diesen Satz stand hier
-    // "steckt in 0 Trainings", waehrend die Uebung gerade auf dem Bildschirm
-    // war. Die Saetze gehen dort nicht verloren; nur der Name ist weg.
-    const laeuft = (Array.isArray(laufendeUebungsIds) ? laufendeUebungsIds : []).includes(exercise.id);
-    const teile = [];
-    if (trainings > 0) {
-      teile.push(
-        ` Sie steckt in ${trainings} ${trainings === 1 ? "Training" : "Trainings"} –` +
-        " deren Sätze verschwinden danach aus Verlauf und Statistik."
-      );
-    }
-    if (laeuft) {
-      teile.push(
-        ` Sie steht außerdem im laufenden Training – die Sätze dort bleiben stehen,` +
-        ` die Übung heißt danach aber nur noch „${GELOESCHTE_UEBUNG}“.`
-      );
-    }
-    return base + teile.join("");
-  };
 
   // Look the exercise up live so a rename is reflected immediately instead
   // of the overlay being stuck on a stale snapshot.
@@ -13510,18 +13539,6 @@ function ExercisesView({
                     (ein Tap entfernt) zeigt und bearbeitet sie weiterhin. */}
                 <ExerciseTagDots tags={getExerciseTags(e.id, exerciseTagging.assignments, exerciseTagging.tags)} />
                 <span className="tag tag-equipment">{getExerciseEquipment(e, exerciseEquipmentOverrides)}</span>
-                {e.custom && (
-                  <button
-                    className="btn-icon"
-                    onClick={(ev) => {
-                      ev.stopPropagation();
-                      onRequestConfirm(deleteExerciseQuestion(e), () => onDeleteCustom(e.id));
-                    }}
-                    title="Eigene Übung löschen"
-                  >
-                    <Trash2 size={14} />
-                  </button>
-                )}
                 <ChevronRight size={15} color="var(--text-dim)" />
               </div>
             </div>
@@ -13593,6 +13610,7 @@ function ExerciseDetailSheet({
   // Welche Bestwert-Kachel gerade aufgeschlagen ist ({ title, wert, quelle }).
   const [bestInfo, setBestInfo] = useState(null);
   const [editingName, setEditingName] = useState(false);
+  const loescheUebung = React.useContext(UebungLoeschenContext);
   const [nameDraft, setNameDraft] = useState(exercise.name);
   const [renameError, setRenameError] = useState("");
   const [editingSubgroup, setEditingSubgroup] = useState(false);
@@ -13724,6 +13742,18 @@ function ExerciseDetailSheet({
                     <Check size={14} /> Speichern
                   </button>
                 </div>
+                {/* Löschen bewusst nur hier hinter dem Stift und nicht in der
+                    Listenzeile - dort lag der Mülleimer direkt neben dem
+                    Antippen-zum-Öffnen. Für eigene und Standardübungen gleich. */}
+                {loescheUebung && (
+                  <button
+                    className="btn btn-danger btn-sm btn-block"
+                    style={{ marginTop: 8 }}
+                    onClick={() => loescheUebung(exercise, onClose)}
+                  >
+                    <Trash2 size={14} /> Übung löschen
+                  </button>
+                )}
               </div>
             ) : (
               <div style={{ display: "flex", alignItems: "center", gap: 8 }}>

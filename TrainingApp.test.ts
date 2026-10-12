@@ -109,6 +109,16 @@ import {
   isTimeBasedInLogs,
   gymNameFor,
   getExerciseTimeline,
+  detectPlateau,
+  detectLoadWarning,
+  loadWarningBasis,
+  normalizeLoadWarningSettings,
+  DEFAULT_LOAD_WARNING_SETTINGS,
+  deloadWeekDays,
+  loadWarningDeloadFlags,
+  getPrimaryWorkingSetSeries,
+  warningSetSeries,
+  muscleLoadWarnings,
 } from "./TrainingApp";
 
 // Diese Tests sichern die Rechenfunktionen ab - also das, was die App
@@ -3178,5 +3188,272 @@ describe("Geplante Ausdauer-Einheiten", () => {
     const erledigt = { id: "c1", date: "2026-10-10", type: "endurance", enduranceId: "x" };
     expect(wartetAufUhr(erledigt)).toBe(false);
     expect(ordneGeplanteAusdauer([einheit("u1", "laufen", "2026-10-10T18:00:00")], [erledigt])).toEqual({});
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Belastungswarnung auf der Startseite (und in der Muskelgruppen-Karte):
+// Basis ohne Entlastungswochen, Hoechstwert-Bedingung, Rumpf in Saetzen.
+// Die Faelle a) bis d) sind die vorgegebenen Testfaelle; "kg" steht dort fuer
+// die Wochenlast einer Muskelgruppe.
+// ---------------------------------------------------------------------------
+
+describe("Belastungswarnung: Basis ohne Entlastungswochen", () => {
+  const F = false, T = true;
+  // b) und c): 4 normale Wochen, dann 4 markierte, dann das Akutfenster.
+  const flagsB = [F, F, F, F, T, T, T, T, F];
+  const werteB = (jetzt: number) => [10000, 10000, 10000, 10000, 5000, 5000, 5000, 5000, jetzt];
+
+  it("a) eine markierte Woche faellt aus der Basis - keine Warnung", () => {
+    const werte = [10000, 10000, 10000, 5000, 10000];
+    const flags = [F, F, F, T, F];
+    const w = detectLoadWarning(werte, flags)!;
+    expect(w.basis).toBe(10000);
+    expect(w.change).toBe(0);
+    expect(w.type).toBeNull();
+    expect(w.insufficient).toBe(false);
+  });
+
+  it("a) gilt genauso, wenn die markierte Woche weiter zurueckliegt", () => {
+    const w = detectLoadWarning([10000, 10000, 5000, 10000, 10000], [F, F, T, F, F])!;
+    expect(w.basis).toBe(10000);
+    expect(w.type).toBeNull();
+  });
+
+  it("b) ein Block aus 4 markierten Wochen ist zu lang: Basis 5.000, aber nicht ueber dem Hoechstwert", () => {
+    const w = detectLoadWarning(werteB(10000), flagsB)!;
+    expect(w.basis).toBe(5000);
+    expect(w.peak).toBe(10000);
+    expect(w.change).toBe(100);
+    // +100 % ueber der Basis, aber nur Rueckkehr auf das alte Niveau.
+    expect(w.type).toBeNull();
+  });
+
+  it("c) wie b, aber 12.000: ueber Basis und Hoechstwert -> Warnung", () => {
+    const w = detectLoadWarning(werteB(12000), flagsB)!;
+    expect(w.basis).toBe(5000);
+    expect(Math.round(w.change!)).toBe(140);
+    expect(w.type).toBe("overload");
+  });
+
+  it("ein Block von genau 2 Wochen wird noch ausgeklammert", () => {
+    const w = detectLoadWarning([10000, 10000, 10000, 10000, 5000, 5000, 10000], [F, F, F, F, T, T, F])!;
+    expect(w.basis).toBe(10000);
+  });
+
+  it("der Grenzwert fuer den Block ist einstellbar", () => {
+    // Mit 4 Wochen Grenzwert wird der Block aus b) wieder ausgeklammert ...
+    expect(detectLoadWarning(werteB(10000), flagsB, { maxDeloadBlockWeeks: 4 })!.basis).toBe(10000);
+    // ... und mit 1 Woche zaehlt schon ein Zwei-Wochen-Block normal mit.
+    const w = detectLoadWarning(
+      [10000, 10000, 10000, 10000, 5000, 5000, 10000],
+      [F, F, F, F, T, T, F],
+      { maxDeloadBlockWeeks: 1 }
+    )!;
+    expect(w.basis).toBe(7500);
+  });
+
+  it("ein Block, der ueber das 8-Wochen-Fenster hinausreicht, zaehlt in voller Laenge", () => {
+    // Akut an Position 10, das Fenster sind die Positionen 2-9. Der Block
+    // 1-3 ist drei Wochen lang, auch wenn nur zwei davon im Fenster liegen -
+    // er zaehlt also normal mit. Die leeren Wochen dazwischen sind Luecken.
+    const werte = [9000, 5000, 5000, 5000, 0, 0, 0, 0, 10000, 10000, 10000];
+    const flags = [F, T, T, T, F, F, F, F, F, F, F];
+    expect(loadWarningBasis(werte, flags).basis).toBe(7500);
+  });
+
+  it("die Basis geht hoechstens 8 Wochen zurueck", () => {
+    // Akut an Position 12, das Fenster sind die Positionen 4-11 - darin nur
+    // eine trainierte Woche. Die Wochen davor zaehlen nicht mehr.
+    const werte = [10000, 10000, 10000, 10000, 0, 0, 0, 0, 0, 0, 0, 10000, 10000];
+    const w = detectLoadWarning(werte)!;
+    expect(w.insufficient).toBe(true);
+    expect(w.type).toBeNull();
+  });
+
+  it("weniger als 2 Wochen ohne Markierung: keine Warnung, sondern 'zu wenig Daten'", () => {
+    const kurz = detectLoadWarning([10000, 30000])!;
+    expect(kurz.insufficient).toBe(true);
+    expect(kurz.type).toBeNull();
+    expect(kurz.change).toBeNull();
+    // Zwei markierte Wochen fallen weg, uebrig bleibt eine.
+    const markiert = detectLoadWarning([10000, 5000, 5000, 30000], [F, T, T, F])!;
+    expect(markiert.insufficient).toBe(true);
+    expect(markiert.type).toBeNull();
+    // Diese Woche nichts trainiert: nichts zu beurteilen.
+    expect(detectLoadWarning([10000, 10000, 0])).toBeNull();
+  });
+
+  it("das Akutfenster gehoert nie zur Basis", () => {
+    const w = detectLoadWarning([10000, 10000, 20000])!;
+    expect(w.basis).toBe(10000);
+    expect(w.peak).toBe(10000);
+    expect(w.type).toBe("overload");
+  });
+
+  it("warnt nur ueber dem Hoechstwert der 8 Wochen davor", () => {
+    // Basis 10.000 (die vier letzten Wochen), +35 % - aber vor fuenf Wochen
+    // waren es schon 14.000.
+    expect(detectLoadWarning([14000, 10000, 10000, 10000, 10000, 13500])!.type).toBeNull();
+    // Liegt die Spitze mehr als 8 Wochen zurueck, zaehlt sie nicht mehr.
+    const alt = [14000, 10000, 10000, 10000, 10000, 10000, 10000, 10000, 10000, 13500];
+    expect(detectLoadWarning(alt)!.type).toBe("overload");
+  });
+
+  it("der Hoechstwert schliesst markierte Wochen ein", () => {
+    // Eine markierte Woche mit 15.000 faellt aus der Basis, setzt aber den
+    // Hoechstwert - darunter wird nicht gewarnt.
+    expect(detectLoadWarning([10000, 10000, 10000, 15000, 14000], [F, F, F, T, F])!.type).toBeNull();
+  });
+
+  it("Wochen ohne Training bleiben Luecken, keine Nullen", () => {
+    // Jede zweite Woche trainiert: Die Basis ist 10.000, nicht 5.000.
+    const w = detectLoadWarning([10000, 0, 10000, 0, 10000, 0, 10000, 0, 10000])!;
+    expect(w.basis).toBe(10000);
+    expect(w.type).toBeNull();
+  });
+
+  it("Schwellen sind einstellbar, Standard = bisherige Werte (+15 % / +30 %)", () => {
+    expect(DEFAULT_LOAD_WARNING_SETTINGS).toEqual({ watchPct: 15, alertPct: 30, maxDeloadBlockWeeks: 2 });
+    const werte = [10, 10, 10, 10, 12];
+    expect(detectLoadWarning(werte)!.type).toBe("overload-watch");
+    expect(detectLoadWarning([10, 10, 10, 10, 14])!.type).toBe("overload");
+    expect(detectLoadWarning([10, 10, 10, 10, 11])!.type).toBeNull();
+    expect(detectLoadWarning(werte, null, { watchPct: 25, alertPct: 40 })!.type).toBeNull();
+    expect(detectLoadWarning(werte, null, { watchPct: 5, alertPct: 10 })!.type).toBe("overload");
+  });
+
+  it("unbrauchbare Einstellungen fallen auf den Standard zurueck", () => {
+    expect(normalizeLoadWarningSettings(null)).toEqual(DEFAULT_LOAD_WARNING_SETTINGS);
+    expect(
+      normalizeLoadWarningSettings({ watchPct: "abc", alertPct: -5, maxDeloadBlockWeeks: 1.5 })
+    ).toEqual(DEFAULT_LOAD_WARNING_SETTINGS);
+    expect(normalizeLoadWarningSettings({ watchPct: 20, alertPct: 45, maxDeloadBlockWeeks: 3 })).toEqual({
+      watchPct: 20, alertPct: 45, maxDeloadBlockWeeks: 3,
+    });
+  });
+});
+
+describe("Belastungswarnung: Entlastungswoche ab 4 markierten Tagen", () => {
+  const F = false, T = true;
+  const jetzt = new Date(2026, 9, 12, 17, 28).getTime(); // Montag, 12.10.2026
+
+  it("zaehlt die markierten Tage je 7-Tage-Fenster", () => {
+    // Fenster (alt -> neu): 22.9.-28.9., 29.9.-5.10., 6.10.-12.10.
+    // Markiert ist die Kalenderwoche Mo 28.9. bis So 4.10.
+    const markiert = [{ start: "2026-09-28", end: "2026-10-04" }];
+    expect(deloadWeekDays(markiert, 3, jetzt)).toEqual([1, 6, 0]);
+    expect(loadWarningDeloadFlags(markiert, 3, jetzt)).toEqual([F, T, F]);
+    // Zum Vergleich: deloadWeekFlags (Diagramme, Plateau) markiert schon das
+    // Fenster, das nur einen Randtag abbekommt.
+    expect(deloadWeekFlags(markiert, 3, jetzt)).toEqual([T, T, F]);
+  });
+
+  it("3 markierte Tage machen noch keine Entlastungswoche, 4 schon", () => {
+    expect(loadWarningDeloadFlags([{ start: "2026-09-29", end: "2026-10-01" }], 2, jetzt)).toEqual([F, F]);
+    expect(loadWarningDeloadFlags([{ start: "2026-09-29", end: "2026-10-02" }], 2, jetzt)).toEqual([T, F]);
+  });
+
+  it("ohne Markierung ist keine Woche eine Entlastung", () => {
+    expect(loadWarningDeloadFlags([], 3, jetzt)).toEqual([F, F, F]);
+    expect(deloadWeekDays(null, 2, jetzt)).toEqual([0, 0]);
+  });
+
+  it("die Kalender-Markierung wirkt bis in die Warnung", () => {
+    // Drei normale Wochen, dann die markierte Kalenderwoche, jetzt wieder normal.
+    const markiert = [{ start: "2026-09-28", end: "2026-10-04" }];
+    const werte = [10000, 10000, 10000, 10000, 5000, 10000];
+    const w = detectLoadWarning(werte, loadWarningDeloadFlags(markiert, werte.length, jetzt))!;
+    expect(w.basis).toBe(10000);
+    expect(w.type).toBeNull();
+  });
+});
+
+describe("Belastungswarnung: Rumpf zaehlt Arbeitssaetze statt kg", () => {
+  const jetzt = new Date(2026, 9, 12, 12).getTime();
+  const exBy: any = {
+    "kabel-crunches": { id: "kabel-crunches", group: "rumpf", equipment: "Kabelzug" },
+    crunches: { id: "crunches", group: "rumpf", equipment: "Körpergewicht" },
+    plank: { id: "plank", group: "rumpf", equipment: "Körpergewicht" },
+    kniebeuge: { id: "kniebeuge", group: "beine", equipment: "Langhantel", secondary: ["rumpf"] },
+    bankdruecken: { id: "bankdruecken", group: "brust", equipment: "Langhantel" },
+  };
+  // Ein Training mitten im Fenster "vor N Wochen".
+  const am = (wochenZurueck: number, entries: any[]) => ({
+    id: "w" + wochenZurueck,
+    date: new Date(jetzt - wochenZurueck * WOCHE - TAG).toISOString(),
+    planName: "Test",
+    durationMinutes: 45,
+    entries,
+  });
+  const kabel = (kg: number, n = 6) => ({
+    id: "k", exerciseId: "kabel-crunches",
+    sets: Array.from({ length: n }, () => satz({ weight: kg, reps: 15 })),
+  });
+
+  it("d) 4 Wochen à 6 Arbeitssaetze, jetzt 6 Saetze mit Zusatzgewicht -> keine Warnung, egal wie viel kg", () => {
+    [20, 60, 200].forEach((kg) => {
+      const logs = [4, 3, 2, 1].map((w) => am(w, [kabel(10)])).concat([am(0, [kabel(kg)])]);
+      const saetze = getPrimaryWorkingSetSeries(logs, exBy, "rumpf", {}, 6, jetzt);
+      expect(saetze.values).toEqual([0, 6, 6, 6, 6, 6]);
+      const w = detectLoadWarning(saetze.values)!;
+      expect(w.change).toBe(0);
+      expect(w.type).toBeNull();
+      // Gegenprobe: Gemessen an der Belastung haette dieselbe Woche Alarm
+      // geschlagen - genau das, was beim Rumpf nicht passieren soll.
+      const belastung = getMuscleLoadSeries(logs, exBy, {}, {}, 6, jetzt).find((g: any) => g.id === "rumpf")!;
+      expect(detectLoadWarning(belastung.values)!.type).toBe("overload");
+    });
+  });
+
+  it("zaehlt Koerpergewichts- und Haltesaetze je 1, Aufwaermsaetze und Nebengruppen nicht", () => {
+    const log = am(0, [
+      // 2: der Aufwaermsatz faellt weg, der Satz mit Zusatzgewicht zaehlt wie einer ohne
+      { id: "a", exerciseId: "crunches", sets: [
+        satz({ weight: 0, reps: 20, warmup: true }), satz({ weight: 0, reps: 20 }), satz({ weight: 10, reps: 15 }),
+      ] },
+      // 2: gehaltene Saetze ohne Gewicht und Wiederholungen
+      { id: "b", exerciseId: "plank", sets: [
+        satz({ weight: 0, reps: 0, duration: 60 }), satz({ weight: 0, reps: 0, duration: 90 }),
+      ] },
+      // 0: Rumpf ist hier nur Nebengruppe
+      { id: "c", exerciseId: "kniebeuge", sets: [satz({ weight: 100, reps: 5 }), satz({ weight: 100, reps: 5 })] },
+      // 1: der Dropsatz gehoert zum Satz davor, der nicht abgehakte zaehlt nicht
+      { id: "d", exerciseId: "kabel-crunches", sets: [
+        satz({ weight: 30 }), satz({ weight: 20, dropset: true }), satz({ done: false }),
+      ] },
+    ]);
+    expect(getPrimaryWorkingSetSeries([log], exBy, "rumpf", {}, 1, jetzt).values).toEqual([5]);
+  });
+
+  it("Untergruppen bekommen dieselbe Zaehlung", () => {
+    const r = getPrimaryWorkingSetSeries([am(0, [kabel(10, 3)])], exBy, "rumpf", { "kabel-crunches": ["bauch"] }, 1, jetzt);
+    expect(r.subs.bauch).toEqual([3]);
+    expect(r.subs.sonstige).toEqual([0]);
+  });
+
+  it("muscleLoadWarnings: Rumpf urteilt nach Saetzen, die anderen Gruppen nach Belastung", () => {
+    const bank = (kg: number) => ({ id: "b", exerciseId: "bankdruecken", sets: [satz({ weight: kg })] });
+    const logs = [4, 3, 2, 1].map((w) => am(w, [kabel(10), bank(60)])).concat([am(0, [kabel(60), bank(100)])]);
+    const reihen = getMuscleLoadSeries(logs, exBy, {}, {}, 6, jetzt);
+    const ergebnis = muscleLoadWarnings(reihen, {
+      setSeries: warningSetSeries(logs, exBy, {}, 6, jetzt),
+      historyWeeks: 52,
+    });
+    const rumpf = ergebnis.find((g: any) => g.id === "rumpf")!;
+    const brust = ergebnis.find((g: any) => g.id === "brust")!;
+    expect(rumpf.unit).toBe("sets");
+    expect(rumpf.warning!.change).toBe(0);
+    expect(rumpf.signal).toBeNull();
+    expect(brust.unit).toBe("load");
+    expect(brust.signal?.type).toBe("overload");
+  });
+
+  it("muscleLoadWarnings: ohne Ueberlastung bleibt das Plateau-Zeichen wie bisher", () => {
+    const reihen = [{ id: "brust", label: "Brust", values: [10, 10, 10, 10, 10], subs: [] }];
+    const [brust] = muscleLoadWarnings(reihen, { historyWeeks: 52 });
+    expect(brust.warning!.type).toBeNull();
+    expect(brust.signal?.type).toBe("plateau");
+    expect(detectPlateau([10, 10, 10, 10, 10], 52)?.type).toBe("plateau");
   });
 });

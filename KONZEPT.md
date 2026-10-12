@@ -260,7 +260,9 @@ Deshalb:
   Die Delle ist echt und soll sichtbar bleiben; sie wird markiert (hohler Punkt), nicht
   versteckt. Wo eine Zahl dadurch missverständlich wird, wird sie **beschriftet** statt
   gefiltert: „+184 % ggü. Entlastungswoche" statt „ggü. Vorwoche".
-- **Der Vergleichszeitraum wird nicht nach hinten verlängert.** Ein erster Anlauf suchte so
+- **Der Vergleichszeitraum wird nicht nach hinten verlängert** – das gilt noch für
+  `detectLoadSignal` (einzelne Übungen, Ausdauer), für die Muskelgruppen seit Okt. 2026 nicht
+  mehr (siehe unten). Ein erster Anlauf suchte so
   lange weiter zurück, bis wieder vier saubere Wochen zusammenkamen – und erzeugte damit
   Überlastungs-Meldungen, die es ohne Markierung nicht gab: Wer stetig mehr trainiert,
   dessen Wochen von vor zwei Monaten liegen tiefer, der Schnitt sinkt, und der normale
@@ -284,6 +286,33 @@ Deshalb:
 - **Die Wirkung wird je Übung gemessen**, nicht als Wochensumme: Sonst hinge das Ergebnis
   vor allem daran, wie viel Zeit gerade da war. Wer nach der Entlastung eine Einheit mehr
   schafft, sähe automatisch besser aus, ohne stärker geworden zu sein.
+
+**Belastungswarnung je Muskelgruppe: Basis ohne Entlastung, Warnung nur über dem Höchstwert.**
+Die Warnung auf der Startseite (und dieselbe in der Muskelgruppen-Karte, `muscleLoadWarnings`)
+verglich bis Okt. 2026 die letzten 7 Tage mit dem Vier-Wochen-Schnitt. Nach einer
+Entlastungsphase ist dieser Schnitt künstlich niedrig, die ganz normale Rückkehr stand als
+Überlastung da (gemeldet: Brust +85 %, Rumpf +143 %). Jetzt (`detectLoadWarning`):
+- **Akutwert** bleibt die Last der letzten 7 Tage.
+- **Basis:** von der Woche vor dem Akutfenster rückwärts die ersten vier Wochen ohne
+  Entlastung, höchstens acht Wochen zurück. Das Akutfenster gehört nie dazu; leere Wochen
+  bleiben Lücken. Weniger als zwei Wochen gefunden → keine Warnung, „zu wenig Daten".
+- **Entlastungswoche** ist ein 7-Tage-Fenster mit mindestens 4 markierten Tagen
+  (`loadWarningDeloadFlags`) – nicht schon jedes Fenster, das ein Zeitraum berührt.
+- **Nur kurze Blöcke werden ausgeklammert** (Standard: bis 2 Wochen, einstellbar). Ein
+  längerer Block ist eine eigene Phase; er zählt wie normale Wochen.
+- **Gewarnt wird nur, wenn der Akutwert über Basis × (1 + Schwelle) UND über der höchsten
+  Woche der acht Wochen davor liegt** (markiert oder nicht). Das ist die Antwort auf den
+  Einwand oben gegen das Verlängern: Ältere, tiefere Wochen drücken zwar die Basis, aber
+  wer nur auf ein Niveau zurückkehrt, das er schon hatte, überschreitet den Höchstwert nicht.
+- **Schwellen** sind einstellbar (Zahnrad auf der Startseite), Standard sind die bisherigen
+  Werte: Hinweis ab +15 %, Warnung ab +30 %.
+- **Rumpf zählt Arbeitssätze statt Belastung** (`getPrimaryWorkingSetSeries`): jeder abgehakte
+  Arbeitssatz einer Übung mit Rumpf als Hauptgruppe zählt 1, auch mit Körpergewicht oder
+  gehalten; Aufwärmsätze nicht, Dropsätze nicht als eigener Satz, Nebengruppen nicht. Beim
+  Rumpf sagt das Zusatzgewicht wenig über die Belastung – gemessen am Bestwert sprang die
+  Kurve schon, wenn nur die Scheibe wechselte. Die Historie wird rückwirkend aus den Sätzen
+  gerechnet. Das Plateau-Zeichen bleibt bei der Belastung, weil Satzzahlen zwangsläufig
+  stagnieren.
 
 **Die Zeitraum-Chips bedeuten überall dasselbe: Sie schneiden das Diagramm zu.**
 Bei den Übungs-Charts taten sie das bis Sept. 2026 nicht – dort standen sie nur in der

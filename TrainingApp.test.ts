@@ -1889,7 +1889,7 @@ describe("Sekunden nur da, wo in Sekunden gemessen wird", () => {
 
   it("Regression: ein Kraftsatz mit uebrig gebliebener Dauer zeigt kg x Wdh.", () => {
     const satzMitAltlast = satz({ weight: 60, reps: 8, duration: 30 });
-    expect(shortSet(satzMitAltlast, false)).toBe("60kg×8");
+    expect(shortSet(satzMitAltlast, false)).toBe("8×60kg");
   });
 
   it("Regression: ein Wiederholungssatz ohne Gewicht zeigt Wiederholungen", () => {
@@ -1903,7 +1903,7 @@ describe("Sekunden nur da, wo in Sekunden gemessen wird", () => {
 
   it("Baender behalten ihren Namen", () => {
     expect(shortSet(satz({ weight: 0, reps: 15, bandName: "Rot", duration: 30 }), false))
-      .toBe("Rot×15");
+      .toBe("15×Rot");
   });
 
   it("hat ein Satz nur eine Dauer, wird sie auch ohne Kennzeichen gezeigt", () => {

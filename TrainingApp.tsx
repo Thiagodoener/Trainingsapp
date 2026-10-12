@@ -14039,8 +14039,8 @@ function ExerciseDetailSheet({
               <span>Erreicht mit</span>
               <span>
                 {bestInfo.quelle.bandName
-                  ? `${bestInfo.quelle.bandName} × ${bestInfo.quelle.reps}`
-                  : `${fmtDecimal(bestInfo.quelle.weight)} kg × ${bestInfo.quelle.reps}`}
+                  ? `${bestInfo.quelle.reps} × ${bestInfo.quelle.bandName}`
+                  : `${bestInfo.quelle.reps} × ${fmtDecimal(bestInfo.quelle.weight)} kg`}
               </span>
             </div>
             <div className="modal-option">
@@ -18201,7 +18201,7 @@ export function buildPercentSeries(data, keys, compareWeeks, toleranceDays = PER
   });
 }
 
-// "80 kg × 8" - die Kurzschreibweise, in der ein Satz überall sonst in der App
+// "8 × 80 kg" - die Kurzschreibweise, in der ein Satz überall sonst in der App
 // auch auftaucht (Verlauf, "Letztes Mal"). Null, wo es nichts zu beschreiben
 // gibt, damit der Tooltip die Zeile dann einfach weglässt.
 // Kurzschreibweise fuer Satz-Listen ("Letztes Mal", Verlauf, Kalender).
@@ -18227,10 +18227,11 @@ export function shortSet(s, isTimeBased = false) {
   if (isTimeBased) return s.bandName ? `${s.bandName} · ${toNum(s.duration)}s` : `${toNum(s.duration)}s`;
   const weight = toNum(s.weight);
   const reps = toNum(s.reps);
-  // Bei einem Band sagt der Name mehr als die Kilogramm: "Rot ×15" ist die
+  // Bei einem Band sagt der Name mehr als die Kilogramm: "15×Rot" ist die
   // Angabe, mit der man am Gerät wieder etwas anfangen kann.
-  if (s.bandName) return `${s.bandName}×${reps}`;
-  if (weight > 0) return `${fmtDecimal(weight)}kg×${reps}`;
+  // Wiederholungen zuerst ("11×20kg"), wie man einen Satz auch ausspricht.
+  if (s.bandName) return `${reps}×${s.bandName}`;
+  if (weight > 0) return `${reps}×${fmtDecimal(weight)}kg`;
   // Weder Gewicht noch Wiederholungen, aber eine Dauer: Dann ist die Dauer
   // das Einzige, was der Satz ueberhaupt hergibt. Das rettet Saetze aus der
   // Zeit vor dieser Trennung, bei denen nur die Sekunden echt sind.
@@ -18243,7 +18244,7 @@ function describeSet(set) {
   const weight = toNum(set.weight);
   const reps = toNum(set.reps);
   if (reps <= 0) return null;
-  return weight > 0 ? `${fmtDecimal(weight)} kg × ${reps}` : `${reps} Wdh.`;
+  return weight > 0 ? `${reps} × ${fmtDecimal(weight)} kg` : `${reps} Wdh.`;
 }
 
 function ExerciseCharts({ logs, exerciseId, isTimeBased, theme, gyms = [], gymIndependent = false }) {
@@ -21524,7 +21525,7 @@ function ProgressView({
             <div className="strong-proof-row" key={titel}>
               <span className="strong-proof-label">{titel}</span>
               <span className="strong-proof-set">
-                {fmtDecimal(beleg.weight)} kg × {beleg.reps}
+                {beleg.reps} × {fmtDecimal(beleg.weight)} kg
                 {fmtRir(beleg.rir) ? `, ${fmtRir(beleg.rir)}` : ""}
               </span>
               <span className="strong-proof-meta">
@@ -21561,7 +21562,7 @@ function ProgressView({
           <div className="stat-hero" style={{ marginBottom: 10 }}>
             <span className="stat-hero-label">Erreicht mit</span>
             <span className="stat-hero-value">
-              {fmtDecimal(best1RMInfo.weight)} kg × {best1RMInfo.reps}
+              {best1RMInfo.reps} × {fmtDecimal(best1RMInfo.weight)} kg
             </span>
             <div style={{ marginTop: 4, fontSize: 12.5, color: "var(--text-dim)" }}>
               {fmtDate(best1RMInfo.date)}

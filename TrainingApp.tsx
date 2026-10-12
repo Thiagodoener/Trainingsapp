@@ -1912,12 +1912,15 @@ const STAT_EXPLANATIONS = {
       "Hauptgruppe voll, Nebengruppen halb. Dropsätze zählen mit.",
       "Der letzte Satz wird nach Reserve (RIR) leicht gewichtet.",
       "Körpergewichtsübungen: mit eingetragenem Körpergewicht in kg, sonst Wiederholungen.",
-      "Warnzeichen: ab +15 % Hinweis, ab +30 % Alarm, Plateau bei Stillstand über 4 Wochen.",
+      "Warnzeichen: ab +15 % Hinweis, ab +30 % Alarm (einstellbar über das Zahnrad auf der Startseite) – und nur, wenn die Woche auch über der höchsten der 8 Wochen davor liegt.",
+      "Für die Warnung zählt beim Rumpf die Zahl der Arbeitssätze, nicht die Belastung.",
+      "Plateau bei Stillstand über 4 Wochen.",
     ],
     formula: [
       "Satzwert = (kg × Wdh.) ÷ bester Satz der Übung",
       "RIR-Gewichtung: ±3 % je Stufe, max. ±12 %",
       "Änderung = (diese Woche − Schnitt davor) ÷ Schnitt",
+      "Warn-Schnitt: die 4 letzten Wochen ohne Entlastung, höchstens 8 zurück",
     ],
   },
   enduranceLoad: {
@@ -1968,6 +1971,7 @@ const STAT_EXPLANATIONS = {
     punkte: [
       "Eintragen: Tag antippen → „Entlastung ab hier\" → letzten Tag antippen.",
       "Keine Warnzeichen währenddessen, danach kein Vergleich gegen die Delle.",
+      "Für die Belastungswarnung zählt eine Woche ab 4 markierten Tagen als Entlastung. Blöcke über 2 Wochen (einstellbar) zählen dort wie normale Wochen.",
       "Nach jeder Entlastung: 2 Wochen davor gegen 2 Wochen danach.",
     ],
     formula: [
@@ -3023,6 +3027,17 @@ export function detectLoadSignal(values, historyWeeks = Infinity, deloadFlags = 
     }
   }
 
+  return detectPlateau(values, historyWeeks, deloadFlags);
+}
+
+// Der Plateau-Teil von detectLoadSignal, einzeln aufrufbar: Die Muskelgruppen
+// (Startseite und Muskelgruppen-Karte) rechnen die Überlastung inzwischen mit
+// eigener Basis (siehe detectLoadWarning), das Plateau aber unverändert so.
+export function detectPlateau(values, historyWeeks = Infinity, deloadFlags = null) {
+  if (!Array.isArray(values) || values.length === 0) return null;
+  if (!((values[values.length - 1] || 0) > 0)) return null;
+  if (Array.isArray(deloadFlags) && deloadFlags[values.length - 1]) return null;
+
   // Zwei Blöcke à zwei Wochen: die letzten beiden (einschließlich der
   // laufenden) gegen die beiden davor. Wochen ohne Training und markierte
   // Entlastungen zählen als Lücke, nicht als Null - sonst würde eine
@@ -3543,6 +3558,274 @@ function weeksBefore(values, endIdx, count, deloadFlags) {
     out.push(values[i] || 0);
   }
   return out.reverse();
+}
+
+// ---------------------------------------------------------------------------
+// Belastungswarnung je Muskelgruppe
+//
+// Gilt für die Startseite und die Muskelgruppen-Karte im Fortschritt-Tab -
+// beide zeigen dieselbe Auswertung (siehe muscleLoadWarnings). Bis Okt. 2026
+// rechnete dort detectLoadSignal: die letzten 7 Tage gegen den Schnitt der
+// vier Wochen davor. Nach einer Entlastungsphase ist genau dieser Schnitt
+// künstlich niedrig, und die ganz normale Rückkehr stand als Überlastung da
+// (gemeldet: Brust +85 %, Rumpf +143 %).
+//
+// Jetzt:
+// - Akutwert: unverändert die letzten 7 Tage.
+// - Basis: von der Woche vor dem Akutfenster rückwärts die ersten vier Wochen
+//   ohne Entlastung, höchstens acht Wochen zurück. Das Akutfenster gehört nie
+//   dazu. Wochen ohne Training bleiben Lücken, keine Nullen (KONZEPT.md).
+// - Entlastungswoche: mindestens 4 ihrer 7 Tage markiert. Ein einzelner
+//   markierter Randtag macht aus einer normalen Woche keine Entlastung.
+// - Ausgeklammert wird nur ein kurzer Block (Standard: bis 2 Wochen). Wer
+//   länger leichter trainiert, ist in einer anderen Phase - deren Niveau ist
+//   dann der Maßstab und keine Delle, über die man hinwegsieht.
+// - Gewarnt wird nur, wenn der Akutwert über Basis plus Schwelle UND über der
+//   höchsten Woche der acht Wochen davor liegt (markiert oder nicht). Die
+//   zweite Bedingung beantwortet den Einwand, der das Verlängern nach hinten
+//   früher verhindert hat: Bei steigender Belastung liegen ältere Wochen
+//   tiefer und drücken die Basis. Wer aber nur auf ein Niveau zurückkehrt,
+//   das er vor Kurzem schon hatte, überschreitet den Höchstwert nicht - und
+//   das ist keine Überlastung, egal wie tief die Basis liegt.
+// - Weniger als zwei brauchbare Wochen: keine Warnung, sondern "zu wenig
+//   Daten". Geraten wird nicht.
+//
+// Rumpf rechnet in Arbeitssätzen statt in Belastung (siehe
+// getPrimaryWorkingSetSeries). Das Plateau-Zeichen bleibt, wie es war
+// (detectPlateau). Einzelne Übungen und die Ausdauer nutzen weiterhin
+// detectLoadSignal.
+// ---------------------------------------------------------------------------
+
+// Die beiden Schwellen sind die bisherigen Werte aus detectLoadSignal und
+// lassen sich über das Zahnrad auf der Startseite ändern.
+export const DEFAULT_LOAD_WARNING_SETTINGS = Object.freeze({
+  watchPct: Math.round((OVERLOAD_WATCH_THRESHOLD - 1) * 100), // Hinweis ab +15 %
+  alertPct: Math.round((OVERLOAD_ALERT_THRESHOLD - 1) * 100), // Warnung ab +30 %
+  maxDeloadBlockWeeks: 2, // längere Entlastungsblöcke zählen wie normale Wochen
+});
+const LOAD_WARNING_BASE_WEEKS = 4;  // so viele Wochen bilden die Basis
+const LOAD_WARNING_LOOKBACK = 8;    // höchstens so weit zurück, auch für den Höchstwert
+const LOAD_WARNING_MIN_WEEKS = 2;   // darunter: "zu wenig Daten"
+export const DELOAD_WEEK_MIN_DAYS = 4; // ab so vielen markierten Tagen ist eine Woche Entlastung
+// Muskelgruppen, deren Warnung Arbeitssätze zählt statt Belastung zu messen.
+export const SET_COUNT_WARNING_GROUPS = ["rumpf"];
+
+// Gespeicherte Einstellungen lesen. Alles, was fehlt oder unbrauchbar ist,
+// fällt auf den Standard zurück - eine kaputte Angabe darf die Warnung nicht
+// abschalten.
+export function normalizeLoadWarningSettings(raw) {
+  const d = DEFAULT_LOAD_WARNING_SETTINGS;
+  const pct = (v, fallback) => {
+    const n = Number(v);
+    return v != null && Number.isFinite(n) && n > 0 && n <= 1000 ? n : fallback;
+  };
+  const weeks = Number(raw?.maxDeloadBlockWeeks);
+  return {
+    watchPct: pct(raw?.watchPct, d.watchPct),
+    alertPct: pct(raw?.alertPct, d.alertPct),
+    maxDeloadBlockWeeks:
+      raw?.maxDeloadBlockWeeks != null && Number.isInteger(weeks) && weeks >= 0 && weeks <= LOAD_WARNING_LOOKBACK
+        ? weeks
+        : d.maxDeloadBlockWeeks,
+  };
+}
+
+// Wie viele Tage jedes 7-Tage-Fensters markiert sind - passend zu den
+// Wochenreihen (alt -> neu, letzte Position = die letzten 7 Tage). Die Tage
+// eines Fensters sind die sieben Kalendertage, die heute minus 7·k Tage enden.
+// Geprüft wird jeweils die Tagesmitte, damit eine Zeitumstellung keinen Tag
+// in den Nachbarzeitraum kippt.
+export function deloadWeekDays(deloadWeeks, weekCount, nowTs = Date.now()) {
+  const n = Math.max(0, weekCount || 0);
+  const days = new Array(n).fill(0);
+  const ranges = deloadRanges(deloadWeeks);
+  if (ranges.length === 0 || n === 0) return days;
+  const now = new Date(nowTs);
+  for (let i = 0; i < n; i++) {
+    const weeksAgo = n - 1 - i;
+    for (let d = 0; d < 7; d++) {
+      const ts = new Date(now.getFullYear(), now.getMonth(), now.getDate() - weeksAgo * 7 - d, 12).getTime();
+      if (ranges.some((r) => ts >= r.startTs && ts < r.endTs)) days[i]++;
+    }
+  }
+  return days;
+}
+
+// Entlastungswochen im Sinn der Belastungswarnung: mindestens
+// DELOAD_WEEK_MIN_DAYS markierte Tage. Bewusst nicht deloadWeekFlags - das
+// markiert jedes Fenster, das ein Zeitraum auch nur berührt, und bleibt für
+// die Diagramme und die übrigen Warnungen, wie es ist.
+export function loadWarningDeloadFlags(deloadWeeks, weekCount, nowTs = Date.now()) {
+  return deloadWeekDays(deloadWeeks, weekCount, nowTs).map((d) => d >= DELOAD_WEEK_MIN_DAYS);
+}
+
+// Welche Wochen aus der Basis herausfallen: Entlastungswochen, aber nur in
+// zusammenhängenden Blöcken bis maxBlockWeeks. Gemessen wird der ganze Block,
+// auch wenn er über das Acht-Wochen-Fenster hinausreicht - drei Wochen
+// Entlastung werden nicht dadurch kurz, dass nur zwei davon im Fenster liegen.
+function shortDeloadBlocks(deloadFlags, length, maxBlockWeeks) {
+  const skip = new Array(length).fill(false);
+  if (!Array.isArray(deloadFlags)) return skip;
+  let i = 0;
+  while (i < length) {
+    if (!deloadFlags[i]) { i++; continue; }
+    let j = i;
+    while (j + 1 < length && deloadFlags[j + 1]) j++;
+    if (j - i + 1 <= maxBlockWeeks) {
+      for (let k = i; k <= j; k++) skip[k] = true;
+    }
+    i = j + 1;
+  }
+  return skip;
+}
+
+// Basis und Höchstwert für die Warnung. values: Wochenreihe alt -> neu, die
+// letzte Position ist das Akutfenster. deloadFlags: gleich lang, true =
+// Entlastungswoche (siehe loadWarningDeloadFlags). `basis` ist null, wenn
+// weniger als LOAD_WARNING_MIN_WEEKS brauchbare Wochen gefunden wurden.
+export function loadWarningBasis(
+  values,
+  deloadFlags = null,
+  maxDeloadBlockWeeks = DEFAULT_LOAD_WARNING_SETTINGS.maxDeloadBlockWeeks
+) {
+  const weeks = [];
+  let peak = 0;
+  if (!Array.isArray(values) || values.length === 0) return { basis: null, weeks, peak };
+  const last = values.length - 1;
+  const skip = shortDeloadBlocks(deloadFlags, values.length, maxDeloadBlockWeeks);
+  for (let i = last - 1; i >= 0 && last - i <= LOAD_WARNING_LOOKBACK; i--) {
+    const v = values[i] || 0;
+    // Der Höchstwert schaut auf alle acht Wochen, auch die markierten.
+    if (v > peak) peak = v;
+    if (weeks.length < LOAD_WARNING_BASE_WEEKS && !skip[i] && v > 0) weeks.push(v);
+  }
+  const basis =
+    weeks.length >= LOAD_WARNING_MIN_WEEKS ? weeks.reduce((sum, v) => sum + v, 0) / weeks.length : null;
+  return { basis, weeks, peak };
+}
+
+// Die Warnung für eine Wochenreihe. null heißt: diese Woche nichts trainiert,
+// also nichts zu beurteilen. Sonst ein Objekt mit
+// - type: "overload" | "overload-watch" | null
+// - insufficient: true, wenn die Basis fehlt ("zu wenig Daten")
+// - change: Prozent gegenüber der Basis (null ohne Basis)
+export function detectLoadWarning(values, deloadFlags = null, settings = null) {
+  if (!Array.isArray(values) || values.length === 0) return null;
+  const current = values[values.length - 1] || 0;
+  if (current <= 0) return null;
+  const s = normalizeLoadWarningSettings(settings);
+  const { basis, weeks, peak } = loadWarningBasis(values, deloadFlags, s.maxDeloadBlockWeeks);
+  if (basis == null) {
+    return { type: null, insufficient: true, current, basis: null, change: null, peak, weeks: weeks.length };
+  }
+  let type = null;
+  if (current > peak) {
+    // Liegt der Hinweis über der Warnschwelle, gibt es eben nur die Warnung.
+    if (current > basis * (1 + s.alertPct / 100)) type = "overload";
+    else if (current > basis * (1 + s.watchPct / 100)) type = "overload-watch";
+  }
+  return {
+    type,
+    insufficient: false,
+    current,
+    basis,
+    change: (current / basis - 1) * 100,
+    peak,
+    weeks: weeks.length,
+  };
+}
+
+// Wochenweise Arbeitssätze der Übungen, deren HAUPTgruppe groupId ist - für
+// die Rumpf-Warnung (SET_COUNT_WARNING_GROUPS). Beim Rumpf sagt das Gewicht
+// wenig über die Belastung: Ein Satz Crunches mit Scheibe ist kein Vielfaches
+// eines Satzes ohne, und eine Plank hat gar keine Kilogramm. Gemessen am
+// Bestwert sprang die Rumpf-Belastung deshalb schon, wenn nur das
+// Zusatzgewicht wechselte.
+//
+// Deshalb zählt jeder abgehakte Arbeitssatz genau 1, auch ein Satz mit
+// Körpergewicht und ein gehaltener Satz. Aufwärmsätze zählen nicht, Dropsätze
+// wie bei "Sätze pro Muskelgruppe" nicht als eigener Satz. Anders als dort
+// zählen Nebengruppen nicht mit: Eine Kniebeuge ist Rumpfarbeit, aber kein
+// Rumpftraining - als halber Rumpfsatz würde jeder Beintag die Warnung
+// verschieben.
+//
+// Gerechnet wird aus den protokollierten Sätzen, also rückwirkend für die
+// ganze Historie. Rückgabe alt -> neu; subs je Untergruppe (ohne Zuordnung
+// unter "sonstige"), wie bei den anderen Reihen.
+export function getPrimaryWorkingSetSeries(
+  logs, exBy, groupId, subgroupOverrides = {}, weekCount = 12, nowTs = Date.now()
+) {
+  const leer = () => new Array(weekCount).fill(0);
+  const values = leer();
+  const subWeeks = {};
+  (Array.isArray(logs) ? logs : []).forEach((l) => {
+    const ts = new Date(l?.date).getTime();
+    if (!Number.isFinite(ts)) return;
+    const idx = Math.max(0, Math.floor((nowTs - ts) / LOAD_WEEK_MS));
+    if (idx >= weekCount) return;
+    logEntries(l).forEach((e) => {
+      const ex = exBy?.[e.exerciseId];
+      if (!ex || ex.group !== groupId) return;
+      const count = performedWorkingSets(entrySets(e)).filter((s) => !s.dropset).length;
+      if (count === 0) return;
+      values[idx] += count;
+      const subs = getExerciseSubgroups(ex, subgroupOverrides);
+      (subs.length > 0 ? subs : ["sonstige"]).forEach((key) => {
+        if (!subWeeks[key]) subWeeks[key] = leer();
+        subWeeks[key][idx] += count;
+      });
+    });
+  });
+  const toSeries = (weeks) => (weeks ? [...weeks].reverse() : leer());
+  const subs = {};
+  (SUBGROUPS[groupId] || []).map((sg) => sg.id).concat(["sonstige"]).forEach((id) => {
+    subs[id] = toSeries(subWeeks[id]);
+  });
+  return { values: toSeries(values), subs };
+}
+
+// Die Satz-Reihen aller Gruppen aus SET_COUNT_WARNING_GROUPS, gleich lang wie
+// die Belastungsreihen, gegen die sie in muscleLoadWarnings getauscht werden.
+export function warningSetSeries(logs, exBy, subgroupOverrides, weekCount, nowTs = Date.now()) {
+  const out = {};
+  SET_COUNT_WARNING_GROUPS.forEach((groupId) => {
+    out[groupId] = getPrimaryWorkingSetSeries(logs, exBy, groupId, subgroupOverrides, weekCount, nowTs);
+  });
+  return out;
+}
+
+// Was Startseite und Muskelgruppen-Karte je Gruppe (und Untergruppe) zeigen -
+// an einer Stelle, damit beide dasselbe sagen. Die Überlastung kommt aus
+// detectLoadWarning (bei Rumpf mit den Satzzahlen), sonst bleibt das
+// Plateau-Zeichen aus der Belastungsreihe.
+//
+// warningFlags: loadWarningDeloadFlags (mindestens 4 markierte Tage).
+// plateauFlags: deloadWeekFlags, wie bisher für das Plateau.
+export function muscleLoadWarnings(
+  loadSeries,
+  { setSeries = null, warningFlags = null, plateauFlags = null, historyWeeks = Infinity, settings = null } = {}
+) {
+  const judge = (loadValues, warnValues) => {
+    const warning = detectLoadWarning(warnValues, warningFlags, settings);
+    const signal = warning?.type
+      ? { type: warning.type }
+      : detectPlateau(loadValues, historyWeeks, plateauFlags);
+    return { warning, signal };
+  };
+  return (Array.isArray(loadSeries) ? loadSeries : []).map((g) => {
+    const sets = setSeries?.[g.id] || null;
+    const subs = {};
+    (Array.isArray(g.subs) ? g.subs : []).forEach((sg) => {
+      subs[sg.id] = judge(sg.values, sets ? sets.subs?.[sg.id] || [] : sg.values);
+    });
+    return {
+      id: g.id,
+      label: g.label,
+      unit: sets ? "sets" : "load",
+      ...judge(g.values, sets ? sets.values : g.values),
+      subs,
+    };
+  });
 }
 
 // Wo die letzte Entlastung liegt und wie lange sie her ist. Ein schon
@@ -4161,6 +4444,7 @@ const BACKUP_KEYS = [
   "deload-weeks",
   "deload-interval",
   "deload-suggestion-hidden",
+  "load-warning-settings",
   "resistance-bands",
   "rest-sound",
   "body-weight",
@@ -4413,6 +4697,9 @@ function TrainingAppInner() {
   // eingetragen ist, verschiebt sich die Faelligkeit - und der Hinweis kommt
   // beim naechsten Mal von selbst wieder.
   const [deloadSuggestionHiddenAt, setDeloadSuggestionHiddenAt] = useState(null);
+  // Schwellen der Belastungswarnung und wie lange ein Entlastungsblock
+  // ausgeklammert wird (siehe detectLoadWarning). Ohne Eintrag: Standard.
+  const [warningSettings, setWarningSettings] = useState(DEFAULT_LOAD_WARNING_SETTINGS);
   // Widerstandsbänder: Name plus ungefährer kg-Wert. Ohne diese Liste war ein
   // Bandwechsel für die App unsichtbar - Bandübungen wurden ganz ohne Gewicht
   // geführt, ein stärkeres Band bei gleichen Wiederholungen sah aus wie
@@ -4552,7 +4839,7 @@ function TrainingAppInner() {
 
   useEffect(() => {
     (async () => {
-      const [p, l, c, f, en, no, tb, gi, statsEx, active, prog, activeProg, sg, ce, cc, eq, th, gy, activeGy, restEnd, brEx, brLogs, dw, di, dsh, bnd, snd, bw, sec, secSub, ausdauer, puls, abgleichSet, abgleichKey, externKraft, exTags, exTagAssign, deletedEx] = await Promise.all([
+      const [p, l, c, f, en, no, tb, gi, statsEx, active, prog, activeProg, sg, ce, cc, eq, th, gy, activeGy, restEnd, brEx, brLogs, dw, di, dsh, bnd, snd, bw, sec, secSub, ausdauer, puls, abgleichSet, abgleichKey, externKraft, exTags, exTagAssign, deletedEx, warnSet] = await Promise.all([
         loadJSON("training-plans", []),
         loadJSON("workout-logs", []),
         loadJSON("custom-exercises", []),
@@ -4591,6 +4878,7 @@ function TrainingAppInner() {
         loadJSON("exercise-tags", []),
         loadJSON("exercise-tag-assignments", {}),
         loadJSON("deleted-exercises", []),
+        loadJSON("load-warning-settings", null),
       ]);
       // Migration: users who already had folders before "programs" existed
       // get one default program that all their existing folders are
@@ -4647,6 +4935,7 @@ function TrainingAppInner() {
       setDeloadWeeks(Array.isArray(dw) ? dw : []);
       setDeloadInterval(Number.isFinite(Number(di)) && Number(di) > 0 ? Number(di) : null);
       setDeloadSuggestionHiddenAt(typeof dsh === "string" ? dsh : null);
+      setWarningSettings(normalizeLoadWarningSettings(warnSet));
       setBands(Array.isArray(bnd) ? bnd : []);
       setSoundOn(snd !== false);
       setBodyWeights(bodyWeightEntries(bw));
@@ -4801,6 +5090,11 @@ function TrainingAppInner() {
   const persistDeloadInterval = async (next) => {
     setDeloadInterval(next);
     await saveJSON("deload-interval", next);
+  };
+  const persistWarningSettings = async (next) => {
+    const clean = normalizeLoadWarningSettings(next);
+    setWarningSettings(clean);
+    await saveJSON("load-warning-settings", clean);
   };
   const persistGyms = async (next) => {
     setGyms(next);
@@ -5917,6 +6211,8 @@ function TrainingAppInner() {
   const [bodyWeightDraft, setBodyWeightDraft] = useState("");
   const [bodyWeightDate, setBodyWeightDate] = useState("");
   const [pulsProfilOpen, setPulsProfilOpen] = useState(false);
+  const [warningSettingsOpen, setWarningSettingsOpen] = useState(false);
+  const [warningDraft, setWarningDraft] = useState({ watchPct: "", alertPct: "", maxDeloadBlockWeeks: 2 });
   const [abgleichOpen, setAbgleichOpen] = useState(false);
   const [athletDraft, setAthletDraft] = useState("");
   const [schluesselDraft, setSchluesselDraft] = useState("");
@@ -9242,6 +9538,15 @@ function TrainingAppInner() {
             gymIndependentExercises={gymIndependentExercises}
             deloadWeeks={deloadWeeks}
             deloadStatusInfo={deloadInfo}
+            warningSettings={warningSettings}
+            onEditWarningSettings={() => {
+              setWarningDraft({
+                watchPct: fmtDecimal(warningSettings.watchPct),
+                alertPct: fmtDecimal(warningSettings.alertPct),
+                maxDeloadBlockWeeks: warningSettings.maxDeloadBlockWeeks,
+              });
+              setWarningSettingsOpen(true);
+            }}
             theme={theme}
             onToggleTheme={toggleTheme}
             onManageGyms={() => setGymManagerOpen(true)}
@@ -9522,6 +9827,7 @@ function TrainingAppInner() {
             deloadInterval={deloadInterval}
             onSetDeloadInterval={persistDeloadInterval}
             onSetDeloadGuess={setDeloadGuess}
+            warningSettings={warningSettings}
           />
         )}
         </div>
@@ -9848,6 +10154,102 @@ function TrainingAppInner() {
           </p>
         </Modal>
       )}
+
+      {warningSettingsOpen && (() => {
+        // Ganze und halbe Prozent reichen; leer oder unsinnig heißt: nicht speichern.
+        const watch = toNum(warningDraft.watchPct);
+        const alert = toNum(warningDraft.alertPct);
+        const valid = watch > 0 && watch <= 1000 && alert > 0 && alert <= 1000;
+        const d = DEFAULT_LOAD_WARNING_SETTINGS;
+        return (
+          <Modal title="Belastungswarnung" onClose={() => setWarningSettingsOpen(false)}>
+            <p className="deload-basis" style={{ marginTop: 0 }}>
+              Verglichen werden die letzten 7 Tage je Muskelgruppe mit dem
+              Schnitt der 4 Wochen davor – ohne markierte Entlastungswochen,
+              höchstens 8 Wochen zurück. Gewarnt wird nur, wenn die Woche
+              außerdem über der höchsten der 8 Wochen davor liegt. Rumpf zählt
+              Arbeitssätze statt kg.
+            </p>
+
+            <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
+              <div style={{ flex: 1 }}>
+                <label className="field-label">Hinweis ab + %</label>
+                <input
+                  type="text"
+                  inputMode="decimal"
+                  placeholder={String(d.watchPct)}
+                  value={warningDraft.watchPct}
+                  onChange={(e) => setWarningDraft((w) => ({ ...w, watchPct: e.target.value }))}
+                />
+              </div>
+              <div style={{ flex: 1 }}>
+                <label className="field-label">Warnung ab + %</label>
+                <input
+                  type="text"
+                  inputMode="decimal"
+                  placeholder={String(d.alertPct)}
+                  value={warningDraft.alertPct}
+                  onChange={(e) => setWarningDraft((w) => ({ ...w, alertPct: e.target.value }))}
+                />
+              </div>
+            </div>
+            <p className="deload-basis" style={{ marginTop: 8 }}>
+              Standard: Hinweis ab +{d.watchPct} %, Warnung ab +{d.alertPct} % über dem Schnitt.
+            </p>
+
+            <div style={{ marginTop: 12 }}>
+              <label className="field-label">Entlastung ausklammern bis</label>
+              <p className="deload-basis" style={{ marginTop: 4 }}>
+                Als Entlastungswoche zählt eine Woche mit mindestens{" "}
+                {DELOAD_WEEK_MIN_DAYS} markierten Tagen. Längere Blöcke zählen
+                wie normale Wochen – dann ist das leichtere Training die neue
+                Grundlage. Standard: {plural(d.maxDeloadBlockWeeks, "Woche", "Wochen")}.
+              </p>
+              <div className="chip-row" style={{ marginTop: 6 }}>
+                {[1, 2, 3, 4].map((weeks) => (
+                  <span
+                    key={weeks}
+                    className={`chip chip-sm ${warningDraft.maxDeloadBlockWeeks === weeks ? "active" : ""}`}
+                    onClick={() => setWarningDraft((w) => ({ ...w, maxDeloadBlockWeeks: weeks }))}
+                  >
+                    {plural(weeks, "Woche", "Wochen")}
+                  </span>
+                ))}
+              </div>
+            </div>
+
+            <div style={{ display: "flex", gap: 8, marginTop: 14 }}>
+              <button
+                className="btn btn-ghost btn-sm"
+                style={{ flex: 1 }}
+                onClick={() => setWarningDraft({
+                  watchPct: fmtDecimal(d.watchPct),
+                  alertPct: fmtDecimal(d.alertPct),
+                  maxDeloadBlockWeeks: d.maxDeloadBlockWeeks,
+                })}
+              >
+                Standard
+              </button>
+              <button
+                className="btn btn-primary btn-sm"
+                style={{ flex: 1 }}
+                disabled={!valid}
+                onClick={async () => {
+                  await persistWarningSettings({
+                    watchPct: watch,
+                    alertPct: alert,
+                    maxDeloadBlockWeeks: warningDraft.maxDeloadBlockWeeks,
+                  });
+                  setWarningSettingsOpen(false);
+                  showToast("Belastungswarnung gespeichert");
+                }}
+              >
+                <Check size={14} /> Speichern
+              </button>
+            </div>
+          </Modal>
+        );
+      })()}
 
       {pulsProfilOpen && (
         <Modal title="Puls-Profil" onClose={() => setPulsProfilOpen(false)}>
@@ -10684,6 +11086,8 @@ function DashboardView({
   onEditAbgleich = () => {},
   deloadWeeks = [],
   deloadStatusInfo = null,
+  warningSettings = DEFAULT_LOAD_WARNING_SETTINGS,
+  onEditWarningSettings = () => {},
   theme,
   onToggleTheme = () => {},
   onManageGyms = () => {},
@@ -10743,16 +11147,36 @@ function DashboardView({
     [deloadWeeks, loadSeries]
   );
 
-  const signals = useMemo(
-    () => loadSeries
-      .map((g) => ({
-        id: g.id,
-        label: g.label,
-        signal: detectLoadSignal(g.values, loadHistoryWeeks, deloadFlags),
-        change: muscleLoadChange(g.values, 4, loadHistoryWeeks, deloadFlags),
-      }))
-      .filter((g) => g.signal),
-    [loadSeries, loadHistoryWeeks, deloadFlags]
+  // Für die Überlastung zählt eine Woche erst ab 4 markierten Tagen als
+  // Entlastung (siehe loadWarningDeloadFlags); das Plateau bleibt bei den
+  // Flags oben.
+  const warningFlags = useMemo(
+    () => loadWarningDeloadFlags(deloadWeeks, loadSeries[0]?.values?.length || 0),
+    [deloadWeeks, loadSeries]
+  );
+  // Rumpf: Arbeitssätze statt Belastung - gleich lang wie die Belastungsreihen.
+  const setSeries = useMemo(
+    () => warningSetSeries(logs, exBy, exerciseSubgroupOverrides, loadSeries[0]?.values?.length || 0),
+    [logs, exBy, exerciseSubgroupOverrides, loadSeries]
+  );
+
+  const groupWarnings = useMemo(
+    () => muscleLoadWarnings(loadSeries, {
+      setSeries,
+      warningFlags,
+      plateauFlags: deloadFlags,
+      historyWeeks: loadHistoryWeeks,
+      settings: warningSettings,
+    }),
+    [loadSeries, setSeries, warningFlags, deloadFlags, loadHistoryWeeks, warningSettings]
+  );
+  const signals = useMemo(() => groupWarnings.filter((g) => g.signal), [groupWarnings]);
+  // Diese Woche trainiert, aber keine zwei brauchbaren Vergleichswochen:
+  // Statt still zu bleiben, steht das dabei - sonst sähe "nichts gemeldet"
+  // genauso aus wie "geprüft und unauffällig".
+  const insufficientGroups = useMemo(
+    () => groupWarnings.filter((g) => !g.signal && g.warning?.insufficient),
+    [groupWarnings]
   );
 
   const fatigueWarning = useMemo(
@@ -10918,6 +11342,15 @@ function DashboardView({
             </button>
             <button
               className="program-menu-item"
+              onClick={() => { setSettingsOpen(false); onEditWarningSettings(); }}
+            >
+              <AlertTriangle size={14} /> Belastungswarnung
+              <span style={{ marginLeft: "auto", color: "var(--text-dim)" }}>
+                ab +{fmtDecimal(Math.min(warningSettings.watchPct, warningSettings.alertPct))} %
+              </span>
+            </button>
+            <button
+              className="program-menu-item"
               onClick={() => { setSettingsOpen(false); onEditAbgleich(); }}
             >
               <Link2 size={14} /> Ausdauer-Abgleich
@@ -11071,23 +11504,41 @@ function DashboardView({
             </div>
           </div>
         )}
-        {signals.length === 0 && !fatigueWarning && !deloadStatusInfo?.due ? (
+        {signals.length === 0 && insufficientGroups.length === 0 && !fatigueWarning && !deloadStatusInfo?.due ? (
           <div style={{ color: "var(--text-dim)", fontSize: 13 }}>
             Keine Auffälligkeiten.
           </div>
         ) : (
-          signals.map((g) => (
-            <div className="dash-signal-row" key={g.id} onClick={onOpenProgress}>
-              <LoadSignalBadge signal={g.signal} />
-              <span className="dash-signal-label">{g.label}</span>
-              <span className="dash-signal-text">
-                {g.signal.type === "plateau"
-                  ? "seit Wochen keine Steigerung"
-                  : `${g.change != null && g.change > 0 ? "+" : ""}${g.change != null ? Math.round(g.change) : "?"} % ggü. 4-Wochen-Schnitt`}
-              </span>
-              <ChevronRight size={14} color="var(--text-dim)" />
-            </div>
-          ))
+          <>
+            {signals.map((g) => {
+              const change = g.warning?.change;
+              return (
+                <div
+                  className="dash-signal-row"
+                  key={g.id}
+                  onClick={onOpenProgress}
+                  title={g.unit === "sets" ? "Gezählt werden Arbeitssätze, nicht kg" : undefined}
+                >
+                  <LoadSignalBadge signal={g.signal} />
+                  <span className="dash-signal-label">{g.label}</span>
+                  <span className="dash-signal-text">
+                    {g.signal.type === "plateau"
+                      ? "seit Wochen keine Steigerung"
+                      : `${change != null && change > 0 ? "+" : ""}${change != null ? Math.round(change) : "?"} % ggü. Schnitt (ohne Entlastung)`}
+                  </span>
+                  <ChevronRight size={14} color="var(--text-dim)" />
+                </div>
+              );
+            })}
+            {insufficientGroups.map((g) => (
+              <div className="dash-signal-row" key={g.id} onClick={onOpenProgress}>
+                <LoadSignalBadge signal={null} />
+                <span className="dash-signal-label">{g.label}</span>
+                <span className="dash-signal-text">zu wenig Daten</span>
+                <ChevronRight size={14} color="var(--text-dim)" />
+              </div>
+            ))}
+          </>
         )}
       </div>
 
@@ -20256,6 +20707,7 @@ function ProgressView({
   deloadInterval = null,
   onSetDeloadInterval,
   onSetDeloadGuess,
+  warningSettings = DEFAULT_LOAD_WARNING_SETTINGS,
 }) {
   const [progressTab, setProgressTab] = useState(focusLogId ? "history" : "stats");
   useEffect(() => {
@@ -20574,6 +21026,22 @@ function ProgressView({
     () => deloadWeekFlags(deloadWeeks, muscleLoadSeries[0]?.values?.length || 0),
     [deloadWeeks, muscleLoadSeries]
   );
+  // Die Warnzeichen der Muskelgruppen: dieselbe Auswertung wie auf der
+  // Startseite (muscleLoadWarnings), damit ein Tipp von dort hierher nicht
+  // auf ein anderes Urteil trifft.
+  const loadGroupWarnings = useMemo(() => {
+    const weekCount = muscleLoadSeries[0]?.values?.length || 0;
+    const byId = {};
+    muscleLoadWarnings(muscleLoadSeries, {
+      setSeries: warningSetSeries(logs, exBy, exerciseSubgroupOverrides, weekCount),
+      warningFlags: loadWarningDeloadFlags(deloadWeeks, weekCount),
+      plateauFlags: loadDeloadFlags,
+      historyWeeks: loadHistoryWeeks,
+      settings: warningSettings,
+    }).forEach((g) => { byId[g.id] = g; });
+    return byId;
+  }, [muscleLoadSeries, logs, exBy, exerciseSubgroupOverrides, deloadWeeks, loadDeloadFlags,
+      loadHistoryWeeks, warningSettings]);
   const [loadCompareWeeks, setLoadCompareWeeks] = useState(1);
   // Welches der beiden Maße die Muskelgruppen-Karte gerade zeigt.
   const [muscleMode, setMuscleMode] = useState("sets");
@@ -20989,7 +21457,7 @@ function ProgressView({
                         <span className="muscle-week-label">{g.label}</span>
                         <Sparkline values={compareWindowSeries(g.values, loadCompareWeeks)} />
                         <LoadChangeBadge change={change} />
-                        <LoadSignalBadge signal={detectLoadSignal(g.values, loadHistoryWeeks, loadDeloadFlags)} />
+                        <LoadSignalBadge signal={loadGroupWarnings[g.id]?.signal || null} />
                         <span
                           className="muscle-week-chevron"
                           onClick={(e) => { e.stopPropagation(); toggleLoadGroupExpanded(g.id); }}
@@ -21008,7 +21476,7 @@ function ProgressView({
                               <span className="muscle-week-label">{sg.label}</span>
                               <Sparkline values={compareWindowSeries(sg.values, loadCompareWeeks)} />
                               <LoadChangeBadge change={muscleLoadChange(sg.values, loadCompareWeeks, loadHistoryWeeks)} />
-                              <LoadSignalBadge signal={detectLoadSignal(sg.values, loadHistoryWeeks, loadDeloadFlags)} />
+                              <LoadSignalBadge signal={loadGroupWarnings[g.id]?.subs?.[sg.id]?.signal || null} />
                             </div>
                           ))}
                         </div>

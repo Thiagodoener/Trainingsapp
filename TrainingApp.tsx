@@ -927,12 +927,13 @@ function emptyExerciseHistory() {
     // Per exercise (all sets of one workout added up): volume, reps, seconds.
     best1RM: 0,
     bestSetVolume: 0,
+    // Die meisten Wiederholungen in einem Satz - egal bei welchem Gewicht.
+    // Frueher zaehlte ein Wiederholungs-Rekord nur bei mindestens demselben
+    // Gewicht wie der bisherige. Dann galten 14 Wdh. bei 75 kg als "meiste
+    // Wiederholungen", obwohl es schon 17 bei 70 kg gab, und die 17 bekamen
+    // auf der Kurve "Maximale Wdh. pro Satz" keinen Pokal. Der Rekord heisst
+    // "meiste Wiederholungen" - also zaehlen genau die.
     bestSetReps: 0,
-    // Bei welchem Gewicht der Wiederholungs-Rekord aufgestellt wurde. Ohne das
-    // gilt ein leichter Ausbelastungssatz (20 Wdh. mit 40 kg) als Rekord fuer
-    // eine Uebung, die sonst mit 8 Wdh. bei 100 kg laeuft - und macht den
-    // Rekord bei echtem Arbeitsgewicht dauerhaft unschlagbar.
-    bestSetRepsWeight: 0,
     bestTotalVolume: 0,
     bestTotalReps: 0,
     bestTotalDuration: 0,
@@ -1024,10 +1025,8 @@ function addSessionToExerciseHistory(h, log, exerciseId, isTimeBased, newestFirs
 
   for (const set of doneSets) {
     const reps = toNum(set.reps);
-    const weightHere = toNum(set.weight);
-    if (reps > h.bestSetReps && weightHere >= h.bestSetRepsWeight) {
+    if (reps > h.bestSetReps) {
       h.bestSetReps = reps;
-      h.bestSetRepsWeight = weightHere;
       h.bestSetRepsRir = rirOf(set);
     }
     const vol = toNum(set.weight) * reps;
@@ -1080,19 +1079,34 @@ export function getExerciseHistory(logs, exerciseId, excludeSessionId, isTimeBas
   const sameGym = gymId ? all.filter((l) => l.gymId === gymId) : all;
   const past = gymId && sameGym.length > 0 ? sameGym : all;
 
-  // Gerechnet wird von ALT nach NEU, obwohl die Liste neueste-zuerst steht.
-  // Das ist keine Kosmetik: Der Wiederholungs-Rekord haengt an der Reihenfolge,
-  // weil er nur bei mindestens demselben Gewicht wie der bisherige zaehlt.
-  // Rueckwaerts gelesen entstand daraus ein "Bestwert", der aus den juengsten
-  // Saetzen zuerst gebaut wurde - ein aelterer Satz mit mehr Wiederholungen
-  // bei weniger Gewicht fiel dann still hinten runter, obwohl er zu seiner
-  // Zeit der Rekord war. Vorwaerts gelesen entsteht genau das, was die Regel
-  // sagt: der beste Wert, den es zu diesem Zeitpunkt zu schlagen gab.
+  // Gerechnet wird von ALT nach NEU, obwohl die Liste neueste-zuerst steht -
+  // derselbe Rechenweg wie beim Verlauf (walkLogPRs), der Training fuer
+  // Training vorwaerts laeuft.
   const h = emptyExerciseHistory();
   for (let i = past.length - 1; i >= 0; i--) {
     addSessionToExerciseHistory(h, past[i], exerciseId, isTimeBased, false);
   }
-  return finishExerciseHistory(h, false);
+  const result = finishExerciseHistory(h, false);
+  result.lastAnywhere = lastAnywhereOf(all, exerciseId, isTimeBased);
+  return result;
+}
+
+// Das wirklich letzte Mal, egal in welchem Gym. Bestwerte, Startwerte und der
+// Prozentvergleich bleiben beim Gym (die Gewichte sind dort andere), aber die
+// Zeile "Letztes Mal" soll zeigen, wann und was man diese Uebung zuletzt
+// ueberhaupt gemacht hat. Vorher stand da das letzte Mal in DIESEM Gym - wer
+// die Uebung zwischendurch woanders gemacht hatte, sah ein Datum von vor
+// Wochen.
+function lastAnywhereOf(allNewestFirst, exerciseId, isTimeBased) {
+  // Das erste Training mit abgehakten Saetzen ist es.
+  for (const log of allNewestFirst) {
+    const h = emptyExerciseHistory();
+    addSessionToExerciseHistory(h, log, exerciseId, isTimeBased);
+    if (h.lastSets) {
+      return { sets: h.lastSets, date: h.lastDate, rir: h.lastRir, gymId: log.gymId || null };
+    }
+  }
+  return null;
 }
 
 // Wie hart beendest du diese Übung üblicherweise? Median statt Mittelwert,
@@ -1577,9 +1591,9 @@ export function describeSetPRs(set, best, isTimeBased = false, hasWeight = true,
   const weight = toNum(set.weight);
   const reps = toNum(set.reps);
 
-  // Ein Wiederholungs-Rekord zaehlt nur bei mindestens demselben Gewicht wie
-  // der bisherige. Sonst waere jeder leichte Ausbelastungssatz ein "Rekord".
-  if (reps > 0 && reps > toNum(best.bestSetReps) && weight >= toNum(best.bestSetRepsWeight)) {
+  // Meiste Wiederholungen in einem Satz, unabhaengig vom Gewicht - siehe
+  // bestSetReps in emptyExerciseHistory.
+  if (reps > 0 && reps > toNum(best.bestSetReps)) {
     found.push({
       key: "maxReps",
       title: "Meiste Wiederholungen in einem Satz",
@@ -17964,17 +17978,26 @@ function LogView({
               </div>
             )}
 
-            {history.lastSets && (
+            {/* Das wirklich letzte Mal, egal in welchem Gym (siehe
+                lastAnywhereOf). War es ein anderes Gym, steht es dabei -
+                dort sind die Gewichte andere. */}
+            {history.lastAnywhere && (
               <div className="last-performance">
-                Letztes Mal ({fmtDate(history.lastDate)}):{" "}
-                {history.lastSets
+                Letztes Mal ({fmtDate(history.lastAnywhere.date)}
+                {history.lastAnywhere.gymId &&
+                history.lastAnywhere.gymId !== session.gymId &&
+                gymNameFor(gyms, history.lastAnywhere.gymId)
+                  ? `, ${gymNameFor(gyms, history.lastAnywhere.gymId)}`
+                  : ""}
+                ):{" "}
+                {history.lastAnywhere.sets
                   .map((s) =>
                     // Ohne Pfeil saehe ein Dropsatz in dieser Zeile wie ein
                     // Leistungseinbruch aus.
                     (s.dropset ? "↓" : "") + shortSet(s, isTimeBased)
                   )
                   .join(", ")}
-                {fmtRir(history.lastRir) ? ` · ${fmtRir(history.lastRir)}` : ""}
+                {fmtRir(history.lastAnywhere.rir) ? ` · ${fmtRir(history.lastAnywhere.rir)}` : ""}
               </div>
             )}
 

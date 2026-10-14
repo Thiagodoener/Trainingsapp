@@ -429,10 +429,20 @@ Dabei fielen zwei Fehler auf, die vorher unbemerkt in der Rechnung standen:
   Trainings außer dem einen ausgeschlossenen – also auch spätere. Im laufenden Training ist das
   egal, beim Nachschlagen nicht: Der Rekord vom Mai wäre keiner mehr, sobald er im Juli
   überboten wird. `logsBefore` schneidet jetzt bei jedem Nachschlagen alles Spätere ab.
-- **Der Wiederholungs-Rekord hing an der Leserichtung.** Er zählt nur bei mindestens demselben
+- **Der Wiederholungs-Rekord hing an der Leserichtung.** Er zählte nur bei mindestens demselben
   Gewicht wie der bisherige – und wurde rückwärts gerechnet, von neu nach alt. Ein älterer Satz
   mit mehr Wiederholungen bei weniger Gewicht fiel damit still hinten runter, obwohl er zu
   seiner Zeit der Rekord war. Gerechnet wird jetzt von alt nach neu.
+- **„Meiste Wiederholungen in einem Satz" heißt jetzt genau das.** Die Bedingung „mindestens
+  dasselbe Gewicht" ist entfallen. Mit ihr bekamen 17 × 70 kg nach 13 × 75 kg keinen Pokal auf
+  der Kurve „Maximale Wdh. pro Satz", und später galten 14 × 75 kg als „meiste Wiederholungen,
+  bisher 13" – obwohl es schon 17 gab. Fortschritt beim Gewicht zeigen Gewichts-, 1RM- und
+  Satzvolumen-Rekord.
+
+**„Letztes Mal" ist das wirklich letzte Mal.**
+Bestwerte, Startwerte und der Prozentvergleich bleiben beim Gym, weil die Gewichte dort andere
+sind. Die Zeile „Letztes Mal" im Training zeigt dagegen das jüngste Training mit dieser Übung,
+egal in welchem Gym (`lastAnywhere`); war es ein anderes Gym, steht dessen Name dabei.
 
 Und eine Rechnung, die vorher nicht getragen hätte: Für jedes Training die ganze Historie davor
 neu aufzubauen kostet bei 300 Trainings gut 700 ms – jedes Mal, wenn der Verlauf aufgeht. Die

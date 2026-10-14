@@ -1025,17 +1025,25 @@ describe("Regression: Rekorde und Live-Vergleich", () => {
       "bankdruecken"
     );
 
-  it("zaehlt einen leichten Ausbelastungssatz nicht als Wiederholungs-Rekord", () => {
-    // Normal: 8 Wdh. bei 100 kg. Dann ein Ausbrennsatz: 20 Wdh. bei 40 kg.
-    // Der ist kein Rekord - er ist ein anderer Satz.
-    const h = historieMit([[satz({ weight: 100, reps: 8 })]]);
-    const leicht = satz({ weight: 40, reps: 20 });
-    const titel = describeSetPRs(leicht, h).map((r) => r.title);
-    expect(titel).not.toContain("Meiste Wiederholungen in einem Satz");
-    // Bei gleichem oder hoeherem Gewicht zaehlt er weiterhin.
-    const schwerer = satz({ weight: 100, reps: 9 });
-    expect(describeSetPRs(schwerer, h).map((r) => r.title))
+  it("Regression: meiste Wiederholungen zaehlen unabhaengig vom Gewicht", () => {
+    // Erst 13 x 75 kg, dann 17 x 70 kg. Frueher zaehlte ein
+    // Wiederholungs-Rekord nur bei mindestens demselben Gewicht: Die 17
+    // bekamen keinen Pokal, und spaeter galten 14 x 75 kg als "meiste
+    // Wiederholungen in einem Satz" - mit "bisher 13", obwohl es 17 gab.
+    const h13 = historieMit([[satz({ weight: 75, reps: 13 })]]);
+    expect(describeSetPRs(satz({ weight: 70, reps: 17 }), h13).map((r) => r.title))
       .toContain("Meiste Wiederholungen in einem Satz");
+
+    const h17 = historieMit([
+      [satz({ weight: 75, reps: 13 })],
+      [satz({ weight: 70, reps: 17 })],
+    ]);
+    expect(h17.bestSetReps).toBe(17);
+    expect(describeSetPRs(satz({ weight: 75, reps: 14 }), h17).map((r) => r.title))
+      .not.toContain("Meiste Wiederholungen in einem Satz");
+    const rekord = describeSetPRs(satz({ weight: 60, reps: 18 }), h17)
+      .find((r) => r.key === "maxReps");
+    expect(rekord.previous).toBe("17 Wdh.");
   });
 
   it("laesst Koerpergewichts-Uebungen unveraendert", () => {
@@ -1480,14 +1488,10 @@ describe("Pokale: schneller Weg und langsamer Weg sagen dasselbe", () => {
 });
 
 
-describe("Wiederholungs-Rekord wird von alt nach neu gerechnet", () => {
-  it("Regression: ein alter Satz mit vielen Wdh. bleibt der Massstab", () => {
+describe("Wiederholungs-Rekord: der alte Satz mit vielen Wdh. bleibt der Massstab", () => {
+  it("Regression: ein alter Satz mit vielen Wdh. bei weniger Gewicht zaehlt", () => {
     // Reihenfolge: erst 12 Wdh. bei 60 kg, dann 6 Wdh. bei 100 kg.
-    // Der Wiederholungs-Rekord steht damit bei 12 Wdh./60 kg.
-    // Rueckwaerts gerechnet (so lief es frueher) waere zuerst der 100er-Satz
-    // dran gewesen - der 12er haette wegen "mindestens dasselbe Gewicht"
-    // nicht mehr gezaehlt, und 7 Wdh. bei 100 kg waeren faelschlich als
-    // "meiste Wiederholungen" durchgegangen.
+    // Der Wiederholungs-Rekord steht damit bei 12 Wdh.
     const logs = [
       training({ id: "a", date: new Date(Date.now() - 20 * TAG).toISOString(),
         entries: [{ id: "e", exerciseId: "bankdruecken", sets: [satz({ weight: 60, reps: 12 })] }] }),
@@ -1496,7 +1500,6 @@ describe("Wiederholungs-Rekord wird von alt nach neu gerechnet", () => {
     ];
     const history: any = getExerciseHistory(logs, "bankdruecken", "c");
     expect(history.bestSetReps).toBe(12);
-    expect(history.bestSetRepsWeight).toBe(60);
     // 7 Wdh. bei 100 kg sind damit kein Wiederholungs-Rekord.
     const prs = describeSetPRs(satz({ weight: 100, reps: 7 }), history);
     expect(prs.some((p: any) => p.key === "maxReps")).toBe(false);
@@ -3455,5 +3458,42 @@ describe("Belastungswarnung: Rumpf zaehlt Arbeitssaetze statt kg", () => {
     expect(brust.warning!.type).toBeNull();
     expect(brust.signal?.type).toBe("plateau");
     expect(detectPlateau([10, 10, 10, 10, 10], 52)?.type).toBe("plateau");
+  });
+});
+
+
+describe("Letztes Mal: das wirklich letzte Mal, egal in welchem Gym", () => {
+  const am = (id: string, tage: number, gymId: string, reps: number) =>
+    training({
+      id, gymId,
+      date: new Date(Date.now() - tage * TAG).toISOString(),
+      entries: [{ id: "e", exerciseId: "nackencurl", sets: [satz({ weight: 5, reps })] }],
+    });
+
+  it("Regression: zeigt das juengste Training, auch aus einem anderen Gym", () => {
+    // Im Gym "wald" zuletzt vor 30 Tagen, im Gym "fit" vor 5 Tagen.
+    const logs = [am("a", 30, "wald", 21), am("b", 5, "fit", 18)];
+    const h: any = getExerciseHistory(logs, "nackencurl", null, false, "wald");
+    // Bestwerte und Startwerte bleiben beim Gym ...
+    expect(h.lastSets[0].reps).toBe(21);
+    // ... die Zeile "Letztes Mal" nicht.
+    expect(h.lastAnywhere.sets[0].reps).toBe(18);
+    expect(h.lastAnywhere.date).toBe(logs[1].date);
+    expect(h.lastAnywhere.gymId).toBe("fit");
+  });
+
+  it("laesst das laufende Training und Trainings ohne abgehakte Saetze aus", () => {
+    const leer = training({
+      id: "c", gymId: "wald", date: new Date(Date.now() - 1 * TAG).toISOString(),
+      entries: [{ id: "e", exerciseId: "nackencurl", sets: [satz({ weight: 5, reps: 10, done: false })] }],
+    });
+    const logs = [am("a", 30, "wald", 21), am("b", 5, "fit", 18), leer, am("jetzt", 0, "wald", 22)];
+    const h: any = getExerciseHistory(logs, "nackencurl", "jetzt", false, "wald");
+    expect(h.lastAnywhere.sets[0].reps).toBe(18);
+  });
+
+  it("ist leer, wenn die Uebung noch nie gemacht wurde", () => {
+    const h: any = getExerciseHistory([am("a", 3, "wald", 10)], "bankdruecken", null, false, "wald");
+    expect(h.lastAnywhere).toBeNull();
   });
 });

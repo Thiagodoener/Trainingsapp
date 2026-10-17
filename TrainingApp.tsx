@@ -1092,7 +1092,7 @@ export function getExerciseHistory(logs, exerciseId, excludeSessionId, isTimeBas
   // also zaehlt jedes Gym. Bei einer gym-abhaengigen Uebung zaehlt nur das
   // aktuelle Gym - das letzte Mal woanders hilft dort nicht, die Gewichte sind
   // andere. Nur wer hier noch nie war, sieht das letzte Mal aus einem anderen
-  // Gym (mit dessen Namen), statt gar nichts.
+  // Gym, statt gar nichts.
   result.lastTime = lastTimeOf(past, exerciseId, isTimeBased);
   return result;
 }
@@ -17981,18 +17981,11 @@ function LogView({
             )}
 
             {/* Das letzte Mal: bei ueberall gleichen Uebungen aus jedem Gym,
-                sonst aus diesem (siehe getExerciseHistory). War es ein
-                anderes Gym, steht es dabei - dort sind die Gewichte andere. Vorne
-                steht nur das Datum, ohne "Letztes Mal" davor. */}
+                sonst aus diesem (siehe getExerciseHistory). Vorne steht nur
+                das Datum - kein "Letztes Mal", kein Gym-Name. */}
             {history.lastTime && (
               <div className="last-performance">
-                {fmtDate(history.lastTime.date)}
-                {history.lastTime.gymId &&
-                history.lastTime.gymId !== session.gymId &&
-                gymNameFor(gyms, history.lastTime.gymId)
-                  ? ` (${gymNameFor(gyms, history.lastTime.gymId)})`
-                  : ""}
-                :{" "}
+                {fmtDate(history.lastTime.date)}:{" "}
                 {history.lastTime.sets
                   .map((s) =>
                     // Ohne Pfeil saehe ein Dropsatz in dieser Zeile wie ein

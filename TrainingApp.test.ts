@@ -3462,7 +3462,7 @@ describe("Belastungswarnung: Rumpf zaehlt Arbeitssaetze statt kg", () => {
 });
 
 
-describe("Letztes Mal: das wirklich letzte Mal, egal in welchem Gym", () => {
+describe("Letztes Mal: ueberall gleiche Uebungen ueber alle Gyms, sonst pro Gym", () => {
   const am = (id: string, tage: number, gymId: string, reps: number) =>
     training({
       id, gymId,
@@ -3470,16 +3470,30 @@ describe("Letztes Mal: das wirklich letzte Mal, egal in welchem Gym", () => {
       entries: [{ id: "e", exerciseId: "nackencurl", sets: [satz({ weight: 5, reps })] }],
     });
 
-  it("Regression: zeigt das juengste Training, auch aus einem anderen Gym", () => {
+  it("zeigt bei einer ueberall gleichen Uebung das juengste Training aus jedem Gym", () => {
     // Im Gym "wald" zuletzt vor 30 Tagen, im Gym "fit" vor 5 Tagen.
+    // Ueberall gleich heisst: getExerciseHistory bekommt kein gymId.
+    const logs = [am("a", 30, "wald", 21), am("b", 5, "fit", 18)];
+    const h: any = getExerciseHistory(logs, "nackencurl", null, false, null);
+    expect(h.lastTime.sets[0].reps).toBe(18);
+    expect(h.lastTime.date).toBe(logs[1].date);
+    expect(h.lastTime.gymId).toBe("fit");
+  });
+
+  it("Regression: zeigt bei einer gym-abhaengigen Uebung das letzte Mal in diesem Gym", () => {
+    // Vorher stand hier das letzte Mal aus "fit", obwohl man in "wald"
+    // trainiert und die Gewichte dort andere sind.
     const logs = [am("a", 30, "wald", 21), am("b", 5, "fit", 18)];
     const h: any = getExerciseHistory(logs, "nackencurl", null, false, "wald");
-    // Bestwerte und Startwerte bleiben beim Gym ...
-    expect(h.lastSets[0].reps).toBe(21);
-    // ... die Zeile "Letztes Mal" nicht.
-    expect(h.lastAnywhere.sets[0].reps).toBe(18);
-    expect(h.lastAnywhere.date).toBe(logs[1].date);
-    expect(h.lastAnywhere.gymId).toBe("fit");
+    expect(h.lastTime.sets[0].reps).toBe(21);
+    expect(h.lastTime.date).toBe(logs[0].date);
+    expect(h.lastTime.gymId).toBe("wald");
+  });
+
+  it("faellt im ersten Training in einem neuen Gym auf die anderen Gyms zurueck", () => {
+    const logs = [am("a", 30, "wald", 21), am("b", 5, "fit", 18)];
+    const h: any = getExerciseHistory(logs, "nackencurl", null, false, "neu");
+    expect(h.lastTime.gymId).toBe("fit");
   });
 
   it("laesst das laufende Training und Trainings ohne abgehakte Saetze aus", () => {
@@ -3488,12 +3502,12 @@ describe("Letztes Mal: das wirklich letzte Mal, egal in welchem Gym", () => {
       entries: [{ id: "e", exerciseId: "nackencurl", sets: [satz({ weight: 5, reps: 10, done: false })] }],
     });
     const logs = [am("a", 30, "wald", 21), am("b", 5, "fit", 18), leer, am("jetzt", 0, "wald", 22)];
-    const h: any = getExerciseHistory(logs, "nackencurl", "jetzt", false, "wald");
-    expect(h.lastAnywhere.sets[0].reps).toBe(18);
+    expect((getExerciseHistory(logs, "nackencurl", "jetzt", false, "wald") as any).lastTime.sets[0].reps).toBe(21);
+    expect((getExerciseHistory(logs, "nackencurl", "jetzt", false, null) as any).lastTime.sets[0].reps).toBe(18);
   });
 
   it("ist leer, wenn die Uebung noch nie gemacht wurde", () => {
     const h: any = getExerciseHistory([am("a", 3, "wald", 10)], "bankdruecken", null, false, "wald");
-    expect(h.lastAnywhere).toBeNull();
+    expect(h.lastTime).toBeNull();
   });
 });

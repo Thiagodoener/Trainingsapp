@@ -439,10 +439,13 @@ Dabei fielen zwei Fehler auf, die vorher unbemerkt in der Rechnung standen:
   bisher 13" – obwohl es schon 17 gab. Fortschritt beim Gewicht zeigen Gewichts-, 1RM- und
   Satzvolumen-Rekord.
 
-**„Letztes Mal" ist das wirklich letzte Mal.**
-Bestwerte, Startwerte und der Prozentvergleich bleiben beim Gym, weil die Gewichte dort andere
-sind. Die Zeile „Letztes Mal" im Training zeigt dagegen das jüngste Training mit dieser Übung,
-egal in welchem Gym (`lastAnywhere`); war es ein anderes Gym, steht dessen Name dabei.
+**„Letztes Mal" folgt der Gym-Regel der Übung.**
+Bei einer Übung, die überall gleich ist, zeigt die Zeile „Letztes Mal" im Training das jüngste
+Training mit dieser Übung, egal in welchem Gym. Bei einer gym-abhängigen Übung zeigt sie das
+letzte Mal in dem Gym, in dem man gerade trainiert – wie Bestwerte, Startwerte und der
+Prozentvergleich, weil die Gewichte woanders andere sind (`lastTime`). Nur im ersten Training
+in einem neuen Gym kommt sie aus einem anderen Gym. War es ein anderes Gym, steht dessen Name
+dabei.
 
 Und eine Rechnung, die vorher nicht getragen hätte: Für jedes Training die ganze Historie davor
 neu aufzubauen kostet bei 300 Trainings gut 700 ms – jedes Mal, wenn der Verlauf aufgeht. Die

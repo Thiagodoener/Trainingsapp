@@ -1087,19 +1087,21 @@ export function getExerciseHistory(logs, exerciseId, excludeSessionId, isTimeBas
     addSessionToExerciseHistory(h, past[i], exerciseId, isTimeBased, false);
   }
   const result = finishExerciseHistory(h, false);
-  result.lastAnywhere = lastAnywhereOf(all, exerciseId, isTimeBased);
+  // "Letztes Mal" folgt derselben Gym-Regel wie die Bestwerte: bei einer
+  // Uebung, die ueberall gleich ist, kommt hier kein gymId an (effectiveGymId),
+  // also zaehlt jedes Gym. Bei einer gym-abhaengigen Uebung zaehlt nur das
+  // aktuelle Gym - das letzte Mal woanders hilft dort nicht, die Gewichte sind
+  // andere. Nur wer hier noch nie war, sieht das letzte Mal aus einem anderen
+  // Gym (mit dessen Namen), statt gar nichts.
+  result.lastTime = lastTimeOf(past, exerciseId, isTimeBased);
   return result;
 }
 
-// Das wirklich letzte Mal, egal in welchem Gym. Bestwerte, Startwerte und der
-// Prozentvergleich bleiben beim Gym (die Gewichte sind dort andere), aber die
-// Zeile "Letztes Mal" soll zeigen, wann und was man diese Uebung zuletzt
-// ueberhaupt gemacht hat. Vorher stand da das letzte Mal in DIESEM Gym - wer
-// die Uebung zwischendurch woanders gemacht hatte, sah ein Datum von vor
-// Wochen.
-function lastAnywhereOf(allNewestFirst, exerciseId, isTimeBased) {
+// Das juengste Training mit abgehakten Saetzen dieser Uebung, samt Gym.
+// Welche Trainings in Frage kommen, entscheidet getExerciseHistory.
+function lastTimeOf(logsNewestFirst, exerciseId, isTimeBased) {
   // Das erste Training mit abgehakten Saetzen ist es.
-  for (const log of allNewestFirst) {
+  for (const log of logsNewestFirst) {
     const h = emptyExerciseHistory();
     addSessionToExerciseHistory(h, log, exerciseId, isTimeBased);
     if (h.lastSets) {
@@ -17978,26 +17980,26 @@ function LogView({
               </div>
             )}
 
-            {/* Das wirklich letzte Mal, egal in welchem Gym (siehe
-                lastAnywhereOf). War es ein anderes Gym, steht es dabei -
-                dort sind die Gewichte andere. */}
-            {history.lastAnywhere && (
+            {/* Das letzte Mal: bei ueberall gleichen Uebungen aus jedem Gym,
+                sonst aus diesem (siehe getExerciseHistory). War es ein
+                anderes Gym, steht es dabei - dort sind die Gewichte andere. */}
+            {history.lastTime && (
               <div className="last-performance">
-                Letztes Mal ({fmtDate(history.lastAnywhere.date)}
-                {history.lastAnywhere.gymId &&
-                history.lastAnywhere.gymId !== session.gymId &&
-                gymNameFor(gyms, history.lastAnywhere.gymId)
-                  ? `, ${gymNameFor(gyms, history.lastAnywhere.gymId)}`
+                Letztes Mal ({fmtDate(history.lastTime.date)}
+                {history.lastTime.gymId &&
+                history.lastTime.gymId !== session.gymId &&
+                gymNameFor(gyms, history.lastTime.gymId)
+                  ? `, ${gymNameFor(gyms, history.lastTime.gymId)}`
                   : ""}
                 ):{" "}
-                {history.lastAnywhere.sets
+                {history.lastTime.sets
                   .map((s) =>
                     // Ohne Pfeil saehe ein Dropsatz in dieser Zeile wie ein
                     // Leistungseinbruch aus.
                     (s.dropset ? "↓" : "") + shortSet(s, isTimeBased)
                   )
                   .join(", ")}
-                {fmtRir(history.lastAnywhere.rir) ? ` · ${fmtRir(history.lastAnywhere.rir)}` : ""}
+                {fmtRir(history.lastTime.rir) ? ` · ${fmtRir(history.lastTime.rir)}` : ""}
               </div>
             )}
 

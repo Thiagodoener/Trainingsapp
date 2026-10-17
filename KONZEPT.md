@@ -444,8 +444,8 @@ Bei einer Übung, die überall gleich ist, zeigt die Zeile „Letztes Mal" im Tr
 Training mit dieser Übung, egal in welchem Gym. Bei einer gym-abhängigen Übung zeigt sie das
 letzte Mal in dem Gym, in dem man gerade trainiert – wie Bestwerte, Startwerte und der
 Prozentvergleich, weil die Gewichte woanders andere sind (`lastTime`). Nur im ersten Training
-in einem neuen Gym kommt sie aus einem anderen Gym. War es ein anderes Gym, steht dessen Name
-dabei.
+in einem neuen Gym kommt sie aus einem anderen Gym. Angezeigt wird nur das Datum vor den
+Sätzen – kein „Letztes Mal" davor und kein Gym-Name.
 
 Und eine Rechnung, die vorher nicht getragen hätte: Für jedes Training die ganze Historie davor
 neu aufzubauen kostet bei 300 Trainings gut 700 ms – jedes Mal, wenn der Verlauf aufgeht. Die

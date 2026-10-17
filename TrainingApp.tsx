@@ -17982,16 +17982,17 @@ function LogView({
 
             {/* Das letzte Mal: bei ueberall gleichen Uebungen aus jedem Gym,
                 sonst aus diesem (siehe getExerciseHistory). War es ein
-                anderes Gym, steht es dabei - dort sind die Gewichte andere. */}
+                anderes Gym, steht es dabei - dort sind die Gewichte andere. Vorne
+                steht nur das Datum, ohne "Letztes Mal" davor. */}
             {history.lastTime && (
               <div className="last-performance">
-                Letztes Mal ({fmtDate(history.lastTime.date)}
+                {fmtDate(history.lastTime.date)}
                 {history.lastTime.gymId &&
                 history.lastTime.gymId !== session.gymId &&
                 gymNameFor(gyms, history.lastTime.gymId)
-                  ? `, ${gymNameFor(gyms, history.lastTime.gymId)}`
+                  ? ` (${gymNameFor(gyms, history.lastTime.gymId)})`
                   : ""}
-                ):{" "}
+                :{" "}
                 {history.lastTime.sets
                   .map((s) =>
                     // Ohne Pfeil saehe ein Dropsatz in dieser Zeile wie ein

@@ -119,6 +119,8 @@ import {
   getPrimaryWorkingSetSeries,
   warningSetSeries,
   muscleLoadWarnings,
+  eintragVomLetztenMal,
+  uebungZusammenfuehren,
 } from "./TrainingApp";
 
 // Diese Tests sichern die Rechenfunktionen ab - also das, was die App
@@ -3509,5 +3511,68 @@ describe("Letztes Mal: ueberall gleiche Uebungen ueber alle Gyms, sonst pro Gym"
   it("ist leer, wenn die Uebung noch nie gemacht wurde", () => {
     const h: any = getExerciseHistory([am("a", 3, "wald", 10)], "bankdruecken", null, false, "wald");
     expect(h.lastTime).toBeNull();
+  });
+});
+
+describe("Übung im Training hinzufügen/ersetzen: Werte vom letzten Mal", () => {
+  const logs = [
+    {
+      id: "l1", date: "2026-10-12T10:00:00Z",
+      entries: [{ exerciseId: "dl", sets: [
+        { done: true, reps: 23, weight: 0 },
+        { done: true, reps: 26, weight: 0 },
+        { done: true, reps: 30, weight: 0 },
+      ] }],
+    },
+    {
+      id: "l0", date: "2026-10-05T10:00:00Z",
+      entries: [{ exerciseId: "dl", sets: [{ done: true, reps: 20, weight: 0 }] }],
+    },
+  ];
+
+  it("übernimmt Satzzahl und Wdh. vom letzten Training", () => {
+    const e = eintragVomLetztenMal(logs, { id: "neu", date: "2026-10-19T10:00:00Z" }, "dl");
+    expect(e.sets.map((s) => s.reps)).toEqual([23, 26, 30]);
+    expect(e.sets.every((s) => !s.done)).toBe(true);
+    expect(e.targetSets).toBe(3);
+    expect(e.targetReps).toBe(23);
+  });
+
+  it("übernimmt das Gewicht", () => {
+    const mitKg = [{ id: "x", date: "2026-10-12T10:00:00Z", entries: [{ exerciseId: "sd", sets: [
+      { done: true, reps: 11, weight: 22.5 }, { done: true, reps: 9, weight: 22.5 },
+    ] }] }];
+    const e = eintragVomLetztenMal(mitKg, { id: "neu", date: "2026-10-19T10:00:00Z" }, "sd");
+    expect(e.sets.map((s) => s.weight)).toEqual(["22,5", "22,5"]);
+    expect(e.targetWeight).toBe(22.5);
+  });
+
+  it("beim Bearbeiten eines alten Trainings zählt nur, was davor war", () => {
+    const e = eintragVomLetztenMal(logs, { id: "alt", date: "2026-10-08T10:00:00Z" }, "dl");
+    expect(e.sets.map((s) => s.reps)).toEqual([20]);
+  });
+
+  it("noch nie trainiert: nichts vorzubelegen", () => {
+    expect(eintragVomLetztenMal(logs, { id: "neu", date: "2026-10-19T10:00:00Z" }, "andere")).toBeNull();
+  });
+});
+
+describe("Doppelte Übungen zusammenführen", () => {
+  it("hängt Trainings, Pläne und das laufende Training um", () => {
+    const logs = [
+      { id: "l1", entries: [{ id: "e1", exerciseId: "eigen", sets: [] }, { id: "e2", exerciseId: "x", sets: [] }] },
+      { id: "l2", entries: [{ id: "e3", exerciseId: "x", sets: [] }] },
+    ];
+    const plans = [{ id: "p", items: [{ id: "i", exerciseId: "eigen" }] }];
+    const session = { id: "s", entries: [{ id: "e4", exerciseId: "eigen", sets: [] }] };
+    const neu = uebungZusammenfuehren({ logs, plans, session }, "eigen", "diamant-liegestuetz");
+    expect(neu.logs[0].entries.map((e) => e.exerciseId)).toEqual(["diamant-liegestuetz", "x"]);
+    expect(neu.logs[1]).toBe(logs[1]);
+    expect(neu.plans[0].items[0].exerciseId).toBe("diamant-liegestuetz");
+    expect(neu.session.entries[0].exerciseId).toBe("diamant-liegestuetz");
+  });
+
+  it("kommt ohne laufendes Training aus", () => {
+    expect(uebungZusammenfuehren({ logs: [], plans: [], session: null }, "a", "b").session).toBeNull();
   });
 });

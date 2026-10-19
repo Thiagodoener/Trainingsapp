@@ -348,6 +348,9 @@ const GELOESCHTE_UEBUNG = "Gelöschte Übung";
 // (exercise, danach) => void, die erst nachfragt und dann löscht; ohne
 // Provider bleibt der Knopf einfach weg.
 const UebungLoeschenContext = React.createContext(null);
+// Dasselbe für das Zusammenführen doppelter Übungen: { kandidaten, zusammenfuehren }
+// mit zusammenfuehren(quelle, ziel, danach).
+const UebungZusammenfuehrenContext = React.createContext(null);
 export const exerciseName = (ex) => (ex && ex.name) || GELOESCHTE_UEBUNG;
 
 // Saved logs are read defensively everywhere: an entry written by an older
@@ -4278,6 +4281,57 @@ export function letztesTrainingDerUebung(logs, exerciseId) {
   return best == null ? null : new Date(best).toISOString();
 }
 
+// Eine Übung, die mitten im Training dazukommt oder eine andere ersetzt,
+// startet mit dem, was zuletzt bei ihr geschafft wurde - Satzzahl, Wdh. und
+// kg -, genau wie beim Start aus einem Plan. Vorher kam sie leer bzw. mit
+// den Werten der ersetzten Übung und alles musste neu getippt werden.
+// null heißt: noch nie trainiert, es gibt nichts vorzubelegen.
+// Gerechnet wird nur mit Trainings VOR diesem (logsBefore): beim
+// nachträglichen Bearbeiten eines alten Trainings zählt nicht, was danach kam.
+export function eintragVomLetztenMal(logs, session, exerciseId, { timeBasedExercises, gymIndependentExercises } = {}) {
+  const vorher = session ? logsBefore(logs, session) : (Array.isArray(logs) ? logs : []);
+  const useTime = isTimeBasedInLogs(vorher, exerciseId, timeBasedExercises);
+  const history = getExerciseHistory(
+    vorher, exerciseId, session?.id ?? null, useTime,
+    effectiveGymId(exerciseId, session?.gymId || null, gymIndependentExercises)
+  );
+  const lastSets = history?.lastSets || [];
+  if (lastSets.length === 0) return null;
+  const sets = startSaetze({ setPlan: satzPlanAusSaetzen(lastSets), useTime }, lastSets, history.lastDate);
+  const firstWorking = sets.find((s) => !s.warmup) || sets[0] || {};
+  return {
+    targetSets: Math.max(1, sets.filter((s) => !s.warmup).length),
+    targetReps: toNum(firstWorking.reps) || 10,
+    targetWeight: toNum(firstWorking.weight) || 0,
+    targetUseTime: useTime,
+    targetDuration: toNum(firstWorking.duration) || 0,
+    sets,
+  };
+}
+
+// Zwei Übungen, die in Wahrheit dieselbe sind (z. B. eine selbst angelegte
+// "Diamant Liegestütze" neben der Standardübung "Diamant-Liegestütz"):
+// Verlauf, Statistik und "letztes Mal" hängen an der Übungs-ID, nicht am
+// Namen. Ohne Zusammenführen sieht die eine nie, was bei der anderen
+// trainiert wurde. Hier wandert jeder Verweis von vonId nach nachId - in den
+// Trainings, den Plänen und im laufenden Training.
+export function uebungZusammenfuehren({ logs, plans, session }, vonId, nachId) {
+  const umhaengen = (e) => (e && e.exerciseId === vonId ? { ...e, exerciseId: nachId } : e);
+  const mitEintraegen = (x) =>
+    x && Array.isArray(x.entries) && x.entries.some((e) => e?.exerciseId === vonId)
+      ? { ...x, entries: x.entries.map(umhaengen) }
+      : x;
+  return {
+    logs: (Array.isArray(logs) ? logs : []).map(mitEintraegen),
+    plans: (Array.isArray(plans) ? plans : []).map((p) =>
+      p && Array.isArray(p.items) && p.items.some((i) => i?.exerciseId === vonId)
+        ? { ...p, items: p.items.map(umhaengen) }
+        : p
+    ),
+    session: session ? mitEintraegen(session) : session,
+  };
+}
+
 // Die alten Einzelfelder, die andere Stellen noch lesen.
 export function planZusammenfassung(plan) {
   const { warm, arbeit } = satzPlanZaehlt(plan);
@@ -5402,6 +5456,34 @@ function TrainingAppInner() {
       handleDeleteExercise(exercise.id);
     });
   };
+  // Doppelte Übung in eine andere überführen: alle Trainings und Pläne zeigen
+  // danach auf das Ziel, die doppelte Übung verschwindet. Notiz und Einstellungen
+  // des Ziels bleiben; nur eine Notiz, die das Ziel noch nicht hat, kommt mit.
+  const requestMergeExercise = (quelle, ziel, danach) => {
+    const trainings = (Array.isArray(logs) ? logs : []).filter(
+      (l) => logEntriesFor(l, quelle.id).length > 0
+    ).length;
+    askConfirm(
+      `„${quelle.name}“ mit „${ziel.name}“ zusammenführen? ` +
+        (trainings > 0
+          ? `${trainings === 1 ? "Das eine Training" : `Die ${trainings} Trainings`} mit „${quelle.name}“ ${trainings === 1 ? "zählt" : "zählen"} danach zu „${ziel.name}“ – Verlauf, Statistik und Rekorde inklusive. `
+          : "") +
+        `„${quelle.name}“ wird anschließend gelöscht.`,
+      async () => {
+        danach?.();
+        const neu = uebungZusammenfuehren({ logs, plans, session }, quelle.id, ziel.id);
+        await persistLogs(neu.logs);
+        await persistPlans(neu.plans);
+        if (session) await updateSession(neu.session);
+        const notizQuelle = (exerciseNotes[quelle.id] || "").trim();
+        if (notizQuelle && !(exerciseNotes[ziel.id] || "").trim()) {
+          await persistExerciseNotes({ ...exerciseNotes, [ziel.id]: exerciseNotes[quelle.id] });
+        }
+        await handleDeleteExercise(quelle.id);
+        showToast(`„${quelle.name}“ ist jetzt Teil von „${ziel.name}“.`);
+      }
+    );
+  };
   const handleRenameExercise = async (exerciseId, name) => {
     await persistExerciseNameOverrides({ ...exerciseNameOverrides, [exerciseId]: name });
   };
@@ -6273,6 +6355,7 @@ function TrainingAppInner() {
 
   return (
     <UebungLoeschenContext.Provider value={requestDeleteExercise}>
+    <UebungZusammenfuehrenContext.Provider value={{ kandidaten: allExercises, zusammenfuehren: requestMergeExercise }}>
     <div className={`app-shell ${theme === "light" ? "theme-light" : ""}`}>
       <style>{`
         @import url('https://fonts.googleapis.com/css2?family=Nunito:wght@500;600;700;800&family=Inter:wght@400;500;600;700&display=swap');
@@ -10811,6 +10894,7 @@ function TrainingAppInner() {
         </nav>
       </div>
     </div>
+    </UebungZusammenfuehrenContext.Provider>
     </UebungLoeschenContext.Provider>
   );
 }
@@ -14078,6 +14162,17 @@ function ExerciseDetailSheet({
   const [bestInfo, setBestInfo] = useState(null);
   const [editingName, setEditingName] = useState(false);
   const loescheUebung = React.useContext(UebungLoeschenContext);
+  const zusammenfuehrenCtx = React.useContext(UebungZusammenfuehrenContext);
+  // null = Auswahl zu; sonst der Suchtext der Auswahl.
+  const [mergeQuery, setMergeQuery] = useState(null);
+  const mergeKandidaten = useMemo(() => {
+    if (mergeQuery === null || !zusammenfuehrenCtx) return [];
+    const norm = (t) => String(t || "").toLowerCase().replace(/[^a-z0-9äöüß]/g, "");
+    const q = norm(mergeQuery);
+    return zusammenfuehrenCtx.kandidaten
+      .filter((k) => k.id !== exercise.id && norm(k.name).includes(q))
+      .slice(0, 20);
+  }, [mergeQuery, zusammenfuehrenCtx, exercise.id]);
   const [nameDraft, setNameDraft] = useState(exercise.name);
   const [renameError, setRenameError] = useState("");
   const [editingSubgroup, setEditingSubgroup] = useState(false);
@@ -14146,6 +14241,7 @@ function ExerciseDetailSheet({
 
   const startEditingName = () => {
     setNameDraft(exercise.name);
+    setMergeQuery(null);
     setRenameError("");
     setEditingName(true);
   };
@@ -14221,6 +14317,50 @@ function ExerciseDetailSheet({
                     <Trash2 size={14} /> Übung löschen
                   </button>
                 )}
+                {zusammenfuehrenCtx && (mergeQuery === null ? (
+                  <button
+                    className="btn btn-ghost btn-sm btn-block"
+                    style={{ marginTop: 8 }}
+                    onClick={() => setMergeQuery(exercise.name.split(/[\s-]+/)[0] || "")}
+                  >
+                    <Link2 size={14} /> Mit anderer Übung zusammenführen
+                  </button>
+                ) : (
+                  <div style={{ marginTop: 10 }}>
+                    <div style={{ fontSize: 12.5, color: "var(--text-dim)", marginBottom: 6 }}>
+                      Doppelt angelegt? Wähle die Übung, in die „{exercise.name}“ aufgehen soll.
+                      Ihr Verlauf kommt mit.
+                    </div>
+                    <input
+                      type="text"
+                      value={mergeQuery}
+                      placeholder="Übung suchen"
+                      onChange={(e) => setMergeQuery(e.target.value)}
+                    />
+                    <div style={{ display: "flex", flexDirection: "column", gap: 4, marginTop: 6 }}>
+                      {mergeKandidaten.map((k) => (
+                        <button
+                          key={k.id}
+                          className="btn btn-ghost btn-sm btn-block"
+                          style={{ justifyContent: "flex-start" }}
+                          onClick={() => zusammenfuehrenCtx.zusammenfuehren(exercise, k, onClose)}
+                        >
+                          {k.name}
+                        </button>
+                      ))}
+                      {mergeKandidaten.length === 0 && (
+                        <div style={{ fontSize: 12.5, color: "var(--text-dim)" }}>Keine passende Übung.</div>
+                      )}
+                    </div>
+                    <button
+                      className="btn btn-ghost btn-sm btn-block"
+                      style={{ marginTop: 6 }}
+                      onClick={() => setMergeQuery(null)}
+                    >
+                      Abbrechen
+                    </button>
+                  </div>
+                ))}
               </div>
             ) : (
               <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
@@ -17295,6 +17435,8 @@ function LogView({
       ),
     });
   };
+  const vomLetztenMal = (exerciseId) =>
+    eintragVomLetztenMal(logs, session, exerciseId, { timeBasedExercises, gymIndependentExercises });
   const addExerciseToSession = (exerciseId) => {
     onUpdateSession({
       ...session,
@@ -17310,6 +17452,7 @@ function LogView({
           targetDuration: 0,
           sets: [],
           notes: "",
+          ...vomLetztenMal(exerciseId),
         },
       ],
     });
@@ -17323,17 +17466,19 @@ function LogView({
       entries: session.entries.filter((e) => e.id !== entryId),
     });
   };
-  // Swaps an exercise for a different one mid-workout. The target values
-  // (planned sets/reps/weight) carry over since they describe the slot in
-  // the workout, but the sets actually logged so far are cleared — they
-  // were performed on the old exercise and would otherwise misattribute
-  // that weight/reps to the new exercise's history and stats.
+  // Swaps an exercise for a different one mid-workout. The sets logged so
+  // far are cleared — they were performed on the old exercise and would
+  // otherwise misattribute that weight/reps to the new exercise's history.
+  // Was die neue Übung zuletzt geschafft hat, steht danach gleich wieder
+  // drin (Sätze und Zielwerte); nur bei einer noch nie trainierten Übung
+  // bleiben die Zielwerte des Platzes stehen.
   const replaceExerciseInSession = (entryId, newExerciseId) => {
+    const letztesMal = vomLetztenMal(newExerciseId);
     onUpdateSession({
       ...session,
       entries: session.entries.map((e) =>
         e.id === entryId
-          ? { ...e, exerciseId: newExerciseId, sets: [], notes: "" }
+          ? { ...e, exerciseId: newExerciseId, sets: [], notes: "", ...letztesMal }
           : e
       ),
     });

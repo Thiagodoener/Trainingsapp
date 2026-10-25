@@ -2279,6 +2279,14 @@ describe("Einheiten von der Uhr uebernehmen (intervals.icu)", () => {
     expect(externeSportart({ sport_type: "Swim" })).toBe("schwimmen");
   });
 
+  it("erkennt ein Airbike am Namen, auch wenn die Uhr keinen Modus dafür hat", () => {
+    expect(externeSportart({ type: "Other", name: "Airbike 10x 10on 50off" })).toBe("airbike");
+    expect(externeSportart({ type: "HighIntensityIntervalTraining", name: "Air Bike Intervalle" })).toBe("airbike");
+    expect(externeSportart({ type: "Other", name: "Assault-Bike" })).toBe("airbike");
+    expect(externeSportart({ type: "Other", name: "Seilspringen" })).toBe("sonstige");
+    expect(externeSportart({ type: "Ride", name: "Feierabendrunde" })).toBe("rad");
+  });
+
   it("verliert eine unbekannte Sportart nicht, sondern bucht sie unter Sonstige", () => {
     const e = externZuEinheit({ ...lauf, type: "Kitesurf" })!;
     expect(e.sport).toBe("sonstige");

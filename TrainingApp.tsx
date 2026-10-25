@@ -2579,10 +2579,16 @@ export function istKraftEinheit(aktivitaet) {
   return EXTERNE_KRAFT_ARTEN.includes(externeArt(aktivitaet));
 }
 
+// Viele Uhren kennen kein Airbike; die Einheit wird dann unter einem anderen
+// Modus aufgezeichnet und meist nur im Namen als Airbike erkennbar. Der Name
+// geht deshalb vor der Art der Uhr.
+const AIRBIKE_NAME = /\b(air\s*-?\s*bike|assault\s*-?\s*bike|echo\s*-?\s*bike|fan\s*-?\s*bike)/i;
+
 // Unbekannte Sportarten landen bei "sonstige", statt verworfen zu werden: Die
 // Einheit hat stattgefunden, und eine Sportart, die diese App nicht kennt, ist
 // kein Grund, die geleistete Arbeit zu verschweigen.
 export function externeSportart(aktivitaet) {
+  if (AIRBIKE_NAME.test(aktivitaet?.name || "")) return "airbike";
   return EXTERNE_SPORTARTEN[externeArt(aktivitaet)] || "sonstige";
 }
 
@@ -6011,9 +6017,11 @@ function TrainingAppInner() {
   // Die Notiz ist das einzige, was an einer Einheit nachträglich geändert
   // wird. Ein späterer Abgleich mit der Uhr fasst bestehende Einheiten nicht
   // an (neueExterneEinheiten übernimmt nur unbekannte), die Notiz bleibt also.
-  const updateEnduranceNote = async (id, notiz) => {
+  // Notiz und Sportart lassen sich nachträglich ändern - die Sportart, weil
+  // die Uhr nicht jede kennt (Airbike landet dort etwa unter "Sonstige").
+  const updateEnduranceNote = async (id, notiz, sport) => {
     await persistEnduranceLogs(
-      enduranceLogs.map((e) => (e.id === id ? { ...e, notiz } : e))
+      enduranceLogs.map((e) => (e.id === id ? { ...e, notiz, ...(sport ? { sport } : {}) } : e))
     );
   };
 
@@ -12430,12 +12438,13 @@ function CalendarView({
                     </span>
                     <div style={{ display: "flex", gap: 4, flexShrink: 0 }}>
                       {/* Die Zahlen der Uhr bleiben unangetastet - was sich
-                          ergänzen lässt, ist nur, was die Uhr nicht weiß. */}
+                          ändern lässt, ist nur, was die Uhr nicht weiß:
+                          Notiz und Sportart. */}
                       {einheit && (
                         <button
                           className="btn-icon"
-                          onClick={() => setNotizEinheit({ id: einheit.id, text: einheit.notiz || "" })}
-                          title={einheit.notiz ? "Notiz bearbeiten" : "Notiz hinzufügen"}
+                          onClick={() => setNotizEinheit({ id: einheit.id, text: einheit.notiz || "", sport: ausdauerSportart(einheit.sport).id })}
+                          title="Einheit bearbeiten"
                         >
                           <PencilLine size={13} />
                         </button>
@@ -12819,7 +12828,20 @@ function CalendarView({
         )}
 
         {notizEinheit && (
-          <Modal title="Notiz zur Einheit" onClose={() => setNotizEinheit(null)} width={420}>
+          <Modal title="Einheit bearbeiten" onClose={() => setNotizEinheit(null)} width={420}>
+            <label className="field-label">Sportart</label>
+            <div className="chip-row chip-row-wrap" style={{ marginTop: 6, marginBottom: 10 }}>
+              {AUSDAUER_SPORTARTEN.map((s) => (
+                <span
+                  key={s.id}
+                  className={`chip chip-sm ${notizEinheit.sport === s.id ? "active" : ""}`}
+                  onClick={() => setNotizEinheit({ ...notizEinheit, sport: s.id })}
+                >
+                  {s.label}
+                </span>
+              ))}
+            </div>
+            <label className="field-label">Notiz</label>
             <textarea
               autoFocus
               value={notizEinheit.text}
@@ -12830,7 +12852,7 @@ function CalendarView({
               className="btn btn-primary btn-block btn-sm"
               style={{ marginTop: 10 }}
               onClick={() => {
-                onUpdateEnduranceNote?.(notizEinheit.id, notizEinheit.text.trim());
+                onUpdateEnduranceNote?.(notizEinheit.id, notizEinheit.text.trim(), notizEinheit.sport);
                 setNotizEinheit(null);
               }}
             >

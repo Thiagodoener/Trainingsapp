@@ -1066,6 +1066,17 @@ Name und Pausen des Workouts ändern zählt nicht. Das automatische Nachziehen d
 einem Training (Satz für Satz) setzt das Datum ebenfalls nicht – das hat ja nicht man selbst
 geändert.
 
+**Aus dem Plan kommt nur, was man im Plan wirklich geändert hat.** Bisher hing das
+Änderungsdatum am ganzen Plan-Eintrag: Eine Änderung an einem einzigen Wert, und das nächste
+Training startete mit *allen* Planwerten der Übung – auch mit Wdh. und kg, die man gar nicht
+angefasst hatte und die oft Wochen alt waren (z. B. wenn das letzte Training aus einem anderen
+Workout kam und den Plan nicht nachgezogen hat). Dann stand oben „28.09.: 12×15 kg", in den
+Feldern aber 14 × 12,5 kg. Jetzt merkt sich jeder Satz im Plan, wann welches Feld (Wdh., kg,
+Sekunden, Band) geändert wurde (`geaendertAm`). Beim Start kommt genau dieses Feld dieses
+Satzes aus dem Plan, wenn die Änderung nach dem letzten Training liegt; alles andere vom letzten
+Mal. Ein neues Band bringt sein kg mit. Das alte Datum am ganzen Eintrag (`werteGeaendertAm`)
+sagt nicht, welches Feld gemeint war, und wird nicht mehr ausgewertet.
+
 **Filter: Chip-Reihen, die beim Scrollen Platz machen.** Die Variante mit drei Knöpfen und
 aufklappender Liste (kurz im Einsatz) war zu umständlich – zu viele Tipps pro Filter. Zurück
 also zu Chips (ein Tipp pro Filter): Muskelgruppe, Untergruppe (erst wenn eine Gruppe gewählt

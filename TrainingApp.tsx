@@ -4129,18 +4129,21 @@ export function satzPlanAusSaetzen(sets) {
 
 // Ein Feld eines Satzes ändern. Satz 1 gibt den Wert an die folgenden
 // Arbeitssätze weiter, jeder andere Satz merkt sich, dass er abweicht.
-export function satzPlanAendern(plan, index, feld, werte) {
+// Mit `zeit` merkt sich jeder Satz, dessen Feld sich dadurch ändert, wann das
+// war (geaendertAm) - danach richtet sich der Trainingsstart (startSaetze).
+export function satzPlanAendern(plan, index, feld, werte, zeit = null) {
   const erster = plan.findIndex((s) => s.kind !== "warmup");
   const schluessel = SATZ_FELDER[feld] || [feld];
   const nur = Object.fromEntries(schluessel.map((k) => [k, werte[k] ?? null]));
+  const stempel = (s) => (zeit ? { geaendertAm: { ...(s.geaendertAm || {}), [feld]: zeit } } : {});
   return plan.map((s, i) => {
     if (i === index) {
       return i === erster || s.kind === "warmup"
-        ? { ...s, ...nur }
-        : { ...s, ...nur, eigen: { ...(s.eigen || {}), [feld]: true } };
+        ? { ...s, ...nur, ...stempel(s) }
+        : { ...s, ...nur, ...stempel(s), eigen: { ...(s.eigen || {}), [feld]: true } };
     }
     if (index === erster && i > index && s.kind !== "warmup" && !s.eigen?.[feld]) {
-      return { ...s, ...nur };
+      return { ...s, ...nur, ...stempel(s) };
     }
     return s;
   });
@@ -4206,16 +4209,19 @@ export function satzPlanBereinigt(plan) {
 }
 
 // Die Sätze, mit denen ein Training startet. Die Satzzahl kommt immer aus dem
-// Plan. Die Werte kommen vom letzten Training - es sei denn, die Werte genau
-// dieser Übung wurden im Plan geändert, nachdem sie zuletzt trainiert wurde:
-// Dann gilt der Plan (z. B. "ab jetzt das grüne Band").
+// Plan. Die Werte kommen vom letzten Training - außer genau die Felder eines
+// Satzes, die im Plan geändert wurden, nachdem die Übung zuletzt trainiert
+// wurde: Die kommen aus dem Plan (z. B. "ab jetzt das grüne Band").
+// Früher galt dann der GANZE Plan-Eintrag, samt aller Werte, die man gar
+// nicht angefasst hatte - die waren oft Wochen alt, und das Training startete
+// mit anderen Zahlen als denen, die oben unter dem letzten Mal stehen.
+// Das alte werteGeaendertAm am Eintrag sagt nicht, welches Feld gemeint war,
+// und wird deshalb nicht mehr ausgewertet.
 export function startSaetze(item, lastSets, letztesTraining) {
   const plan = satzPlanVon(item);
   const useTime = !!item?.useTime;
-  const geaendert = item?.werteGeaendertAm ? new Date(item.werteGeaendertAm).getTime() : 0;
   const zuletzt = letztesTraining ? new Date(letztesTraining).getTime() : 0;
-  const planGilt = !zuletzt || geaendert > zuletzt;
-  const alt = planGilt ? [] : (Array.isArray(lastSets) ? lastSets : []);
+  const alt = !zuletzt ? [] : (Array.isArray(lastSets) ? lastSets : []);
   const altWarm = alt.filter((s) => s.warmup);
   const altArbeit = alt.filter((s) => !s.warmup);
   let w = 0;
@@ -4224,11 +4230,20 @@ export function startSaetze(item, lastSets, letztesTraining) {
     const warm = p.kind === "warmup";
     const quelle = warm ? altWarm : altArbeit;
     const idx = warm ? w++ : a++;
-    const ref = quelle.length ? quelle[Math.min(idx, quelle.length - 1)] : null;
-    const reps = ref && toNum(ref.reps) > 0 ? toNum(ref.reps) : toNum(p.reps) || 10;
-    const weight = ref && toNum(ref.weight) > 0 ? toNum(ref.weight) : toNum(p.weight) || 0;
-    const duration = ref && toNum(ref.duration) > 0 ? toNum(ref.duration) : toNum(p.duration) || 30;
-    const band = ref?.bandId ? ref : p.bandId ? p : null;
+    const letzter = quelle.length ? quelle[Math.min(idx, quelle.length - 1)] : null;
+    // Für jedes Feld einzeln: im Plan geändert seit dem letzten Training?
+    const neuImPlan = (feld) => {
+      const t = p.geaendertAm?.[feld] ? new Date(p.geaendertAm[feld]).getTime() : 0;
+      return t > zuletzt;
+    };
+    // Ein Band bringt sein kg mit - ein neues Band im Plan also auch das Gewicht.
+    const bandNeu = neuImPlan("band");
+    const vomLetztenMal = (feld, ausPlan = neuImPlan(feld)) =>
+      !ausPlan && letzter && toNum(letzter[feld]) > 0 ? toNum(letzter[feld]) : null;
+    const reps = vomLetztenMal("reps") ?? (toNum(p.reps) || 10);
+    const weight = vomLetztenMal("weight", neuImPlan("weight") || bandNeu) ?? (toNum(p.weight) || 0);
+    const duration = vomLetztenMal("duration") ?? (toNum(p.duration) || 30);
+    const band = !bandNeu && letzter?.bandId ? letzter : p.bandId ? p : null;
     return {
       reps,
       // Gleich deutsch vorbelegt, damit nicht erst "62.5" dasteht.
@@ -4244,7 +4259,7 @@ export function startSaetze(item, lastSets, letztesTraining) {
 }
 
 // Nach dem Training: der Plan übernimmt, was tatsächlich geschafft wurde,
-// Satz für Satz. Das ist keine Änderung durch dich - werteGeaendertAm bleibt.
+// Satz für Satz. Das ist keine Änderung durch dich - geaendertAm bleibt.
 export function satzPlanNachTraining(item, sets) {
   const plan = satzPlanVon(item);
   const done = (Array.isArray(sets) ? sets : []).filter((s) => s.done);
@@ -9583,7 +9598,7 @@ function TrainingAppInner() {
                         cleaned.entries.find((e) => !e.planItemId && e.exerciseId === item.exerciseId);
                       if (!entry) return item;
                       // Satz für Satz, damit eine Pyramide eine Pyramide
-                      // bleibt. werteGeaendertAm wird dabei nicht angefasst:
+                      // bleibt. geaendertAm wird dabei nicht angefasst:
                       // Das hier hast nicht du im Plan geändert.
                       const next = satzPlanNachTraining(item, entrySets(entry));
                       if (next === item) return item;
@@ -15105,15 +15120,16 @@ function PlanBuilder({
   };
 
   // Werte eines Satzes ändern. Nur das zählt als "Plan geändert" - danach
-  // startet das nächste Training dieser Übung mit den Plan-Werten statt mit
-  // denen vom letzten Mal. Sätze hinzufügen oder entfernen zählt nicht.
+  // startet das nächste Training dieser Übung bei genau diesen Feldern mit
+  // den Plan-Werten, alles andere bleibt beim letzten Mal. Sätze hinzufügen
+  // oder entfernen zählt nicht.
   const aendereSatz = (itemId, idx, feld, werte) => {
     setItems((cur) =>
-      cur.map((i) =>
-        i.id === itemId
-          ? { ...i, setPlan: satzPlanAendern(i.setPlan, idx, feld, werte), werteGeaendertAm: new Date().toISOString() }
-          : i
-      )
+      cur.map((i) => {
+        if (i.id !== itemId) return i;
+        const { werteGeaendertAm, ...rest } = i;
+        return { ...rest, setPlan: satzPlanAendern(i.setPlan, idx, feld, werte, new Date().toISOString()) };
+      })
     );
   };
   const satzHinzufuegen = (itemId) => {

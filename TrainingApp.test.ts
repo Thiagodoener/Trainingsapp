@@ -2952,16 +2952,44 @@ describe("Trainingsstart: Plan oder letztes Mal", () => {
     { reps: 11, weight: 10, bandId: "r", bandName: "Rot (lang)", bandColor: "#d64541", done: true },
   ];
 
+  const mitAenderung = (index, feld, werte, zeit) => ({
+    ...item,
+    setPlan: satzPlanAendern(item.setPlan, index, feld, werte, zeit),
+  });
+
   it("nimmt das letzte Mal, wenn der Plan seitdem nicht geaendert wurde", () => {
-    const sets = startSaetze({ ...item, werteGeaendertAm: "2026-09-01T10:00:00Z" }, letztes, "2026-09-10T10:00:00Z");
+    const sets = startSaetze(mitAenderung(0, "reps", { reps: 10 }, "2026-09-01T10:00:00Z"), letztes, "2026-09-10T10:00:00Z");
     expect(sets.map((s) => s.reps)).toEqual([12, 11]);
     expect(sets[0].bandName).toBe("Rot (lang)");
   });
 
-  it("nimmt den Plan, wenn die Werte der Uebung danach geaendert wurden", () => {
+  it("nimmt das Band aus dem Plan samt kg, wenn es danach geaendert wurde - den Rest vom letzten Mal", () => {
+    const gruen = { bandId: "g", bandName: "Grün (kurz)", bandColor: "#3fa45b", weight: 4 };
+    const sets = startSaetze(mitAenderung(0, "band", gruen, "2026-09-12T10:00:00Z"), letztes, "2026-09-10T10:00:00Z");
+    expect(sets.map((s) => s.bandName)).toEqual(["Grün (kurz)", "Grün (kurz)"]);
+    expect(sets.map((s) => s.weight)).toEqual(["4", "4"]);
+    expect(sets.map((s) => s.reps)).toEqual([12, 11]);
+  });
+
+  it("nimmt nur den geaenderten Satz aus dem Plan", () => {
+    const sets = startSaetze(mitAenderung(1, "reps", { reps: 15 }, "2026-09-12T10:00:00Z"), letztes, "2026-09-10T10:00:00Z");
+    expect(sets.map((s) => s.reps)).toEqual([12, 15]);
+    expect(sets[0].bandName).toBe("Rot (lang)");
+  });
+
+  it("wertet das alte Aenderungsdatum am ganzen Eintrag nicht mehr aus", () => {
     const sets = startSaetze({ ...item, werteGeaendertAm: "2026-09-12T10:00:00Z" }, letztes, "2026-09-10T10:00:00Z");
-    expect(sets.map((s) => s.reps)).toEqual([10, 10]);
-    expect(sets[0].bandName).toBe("Grün (kurz)");
+    expect(sets.map((s) => s.reps)).toEqual([12, 11]);
+    expect(sets[0].bandName).toBe("Rot (lang)");
+  });
+
+  it("merkt sich beim Aendern, wann welches Feld welches Satzes geaendert wurde", () => {
+    const plan = satzPlanAendern(item.setPlan, 0, "reps", { reps: 8 }, "2026-09-12T10:00:00Z");
+    expect(plan.map((s) => s.geaendertAm)).toEqual([
+      { reps: "2026-09-12T10:00:00Z" },
+      { reps: "2026-09-12T10:00:00Z" },
+    ]);
+    expect(satzPlanAendern(item.setPlan, 0, "reps", { reps: 8 })[0].geaendertAm).toBeUndefined();
   });
 
   it("nimmt den Plan, wenn die Uebung noch nie trainiert wurde", () => {
@@ -2984,10 +3012,10 @@ describe("Trainingsstart: Plan oder letztes Mal", () => {
   });
 
   it("uebernimmt nach dem Training die Werte Satz fuer Satz, ohne das Aenderungsdatum", () => {
-    const vorher = { ...item, werteGeaendertAm: "2026-09-01T10:00:00Z" };
+    const vorher = { ...item, setPlan: satzPlanAendern(item.setPlan, 0, "reps", { reps: 10 }, "2026-09-01T10:00:00Z") };
     const nachher = satzPlanNachTraining(vorher, letztes);
     expect(nachher.setPlan.map((s) => s.reps)).toEqual([12, 11]);
-    expect(nachher.werteGeaendertAm).toBe("2026-09-01T10:00:00Z");
+    expect(nachher.setPlan[0].geaendertAm).toEqual({ reps: "2026-09-01T10:00:00Z" });
     expect(nachher.reps).toBe(12);
     expect(satzPlanNachTraining(vorher, [])).toBe(vorher);
   });

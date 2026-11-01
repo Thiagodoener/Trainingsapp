@@ -70,6 +70,8 @@ import {
   getExerciseMeta,
   exerciseGroupShares,
   withSecondaryOverride,
+  withGroupOverride,
+  hauptgruppeWechseln,
   trimpWert,
   pulsProfilVollstaendig,
   getEnduranceLoadSeries,
@@ -1973,6 +1975,60 @@ describe("Der Automatik-Modus taktet, er misst nicht", () => {
   });
 });
 
+
+describe("Hauptmuskelgruppe (Agonist) ist änderbar", () => {
+  const schraeg = { id: "schraeg", group: "brust", secondary: ["schultern", "arme"] };
+
+  it("ohne Override bleibt die Grundangabe stehen", () => {
+    expect(withGroupOverride(schraeg, {})).toBe(schraeg);
+    expect(withGroupOverride(schraeg, null)).toBe(schraeg);
+  });
+
+  it("ein Override ersetzt die Hauptgruppe und damit die Anteile", () => {
+    const ex = withGroupOverride(schraeg, { schraeg: "schultern" });
+    expect(ex.group).toBe("schultern");
+    // Schultern sind jetzt Hauptgruppe und zaehlen nicht doppelt.
+    expect(exerciseGroupShares(ex)).toEqual([["schultern", 1], ["arme", 0.5]]);
+  });
+
+  it("ein unbekannter Wert wird ignoriert", () => {
+    expect(withGroupOverride(schraeg, { schraeg: "gibtsnicht" })).toBe(schraeg);
+  });
+
+  it("Wechsel entfernt Untergruppen und die neue Hauptgruppe aus den Nebengruppen", () => {
+    const ex = { ...schraeg, secondarySubgroups: { schultern: ["vordere-schulter"], arme: ["trizeps"] } };
+    const next = hauptgruppeWechseln({
+      exercise: ex,
+      baseGroup: "brust",
+      groupId: "schultern",
+      subgroupOverrides: { schraeg: ["brust-oben"], andere: ["lat"] },
+    });
+    expect(next.groupOverrides).toEqual({ schraeg: "schultern" });
+    expect(next.subgroupOverrides).toEqual({ andere: ["lat"] });
+    expect(next.secondaryOverrides).toEqual({ schraeg: ["arme"] });
+    expect(next.secondarySubgroupOverrides).toEqual({ schraeg: { arme: ["trizeps"] } });
+  });
+
+  it("Zurück zur ursprünglichen Gruppe löscht den Override", () => {
+    const ex = { ...schraeg, group: "schultern", secondary: ["arme"] };
+    const secondaryOverrides = { schraeg: ["arme"] };
+    const next = hauptgruppeWechseln({
+      exercise: ex,
+      baseGroup: "brust",
+      groupId: "brust",
+      groupOverrides: { schraeg: "schultern", x: "beine" },
+      secondaryOverrides,
+    });
+    expect(next.groupOverrides).toEqual({ x: "beine" });
+    // Brust war keine Nebengruppe - die Nebengruppen bleiben unangetastet.
+    expect(next.secondaryOverrides).toBe(secondaryOverrides);
+  });
+
+  it("gleiche oder ungültige Gruppe ändert nichts", () => {
+    expect(hauptgruppeWechseln({ exercise: schraeg, baseGroup: "brust", groupId: "brust" })).toBeNull();
+    expect(hauptgruppeWechseln({ exercise: schraeg, baseGroup: "brust", groupId: "quatsch" })).toBeNull();
+  });
+});
 
 describe("Nebenmuskelgruppen sind änderbar", () => {
   const bankdruecken = { id: "bankdruecken", group: "brust", secondary: ["schultern", "arme"] };

@@ -4441,7 +4441,6 @@ export function getExerciseMeta(exercise) {
     primary: MUSCLE_GROUPS.find((g) => g.id === exercise?.group)?.label || exercise?.group || "–",
     secondary: "Je nach Ausführung",
     description: `${exercise?.name || "Übung"} – individuelle Technik und Bewegungsumfang beachten.`,
-    video: "",
   };
 }
 
@@ -9478,6 +9477,10 @@ function TrainingAppInner() {
                       // Wiederholungen mehr, in Verlauf, Kalender und
                       // Diagrammen.
                       targetUseTime: !!e.targetUseTime,
+                      // Eine Notiz, die erst während des Trainings im
+                      // Info-Blatt der Übung entstand, gehört zu dieser
+                      // Einheit genauso wie eine in der Karte getippte.
+                      notes: e.notes || exerciseNotes[e.exerciseId] || "",
                       // toNum, not Number: weights are held as typed ("62,5"),
                       // and Number("62,5") is NaN - which would silently store
                       // the set as 0 kg.
@@ -13359,7 +13362,6 @@ function NewExerciseForm({
   const [newSecondarySubgroups, setNewSecondarySubgroups] = useState({});
   const [newEquipment, setNewEquipment] = useState("Körpergewicht");
   const [newDescription, setNewDescription] = useState("");
-  const [newVideo, setNewVideo] = useState("");
   const [errorMsg, setErrorMsg] = useState("");
 
   const slugify = (s) =>
@@ -13402,7 +13404,6 @@ function NewExerciseForm({
         primary: MUSCLE_GROUPS.find((g) => g.id === newGroup)?.label || newGroup,
         secondary: "–",
         description: newDescription.trim() || `${trimmed} – eigene Übung.`,
-        video: newVideo.trim(),
       },
     };
     onAddCustom(newExercise);
@@ -13592,10 +13593,6 @@ function NewExerciseForm({
       <div style={{ marginTop: 10 }}>
         <label className="field-label">Beschreibung</label>
         <textarea value={newDescription} onChange={(e) => setNewDescription(e.target.value)} placeholder="Kurze Technik-/Hinweisbeschreibung" />
-      </div>
-      <div style={{ marginTop: 10 }}>
-        <label className="field-label">Video-Link (optional)</label>
-        <input type="text" inputMode="url" value={newVideo} onChange={(e) => setNewVideo(e.target.value)} placeholder="https://…" />
       </div>
       <div style={{ marginTop: 10 }}>
         <label className="field-label">Notiz (optional)</label>
@@ -14596,17 +14593,6 @@ function ExerciseDetailSheet({
 
           {detailTab === "info" && (
             <>
-          {meta.video && (
-            <a
-              className="btn btn-ghost btn-sm"
-              style={{ marginBottom: 10, display: "inline-flex" }}
-              href={meta.video}
-              target="_blank"
-              rel="noreferrer"
-            >
-              Video öffnen
-            </a>
-          )}
           <div className="quick-toggle-row">
             <button
               className={`chip chip-sm ${isTimeBasedExercise ? "active" : ""}`}
@@ -17489,7 +17475,9 @@ function LogView({
           targetUseTime: false,
           targetDuration: 0,
           sets: [],
-          notes: "",
+          // Die Dauer-Notiz der Übung steht gleich mit drin - wie bei einem
+          // Training, das aus einem Plan gestartet wurde.
+          notes: exerciseNotes?.[exerciseId] || "",
           ...vomLetztenMal(exerciseId),
         },
       ],
@@ -17516,7 +17504,7 @@ function LogView({
       ...session,
       entries: session.entries.map((e) =>
         e.id === entryId
-          ? { ...e, exerciseId: newExerciseId, sets: [], notes: "", ...letztesMal }
+          ? { ...e, exerciseId: newExerciseId, sets: [], notes: exerciseNotes?.[newExerciseId] || "", ...letztesMal }
           : e
       ),
     });
@@ -18011,7 +17999,7 @@ function LogView({
               </div>
               <div className={`entry-menu-wrap ${entryMenuUp && openEntryMenu === entry.id ? "drop-up" : ""}`}>
                 <button
-                  className={`note-toggle ${(entry.restSeconds != null || entry.notes) ? "has-note" : ""}`}
+                  className={`note-toggle ${(entry.restSeconds != null || entry.notes || exerciseNotes?.[entry.exerciseId]) ? "has-note" : ""}`}
                   onClick={(e) => {
                     const opening = openEntryMenu !== entry.id;
                     setEntryMenuUp(opening ? shouldDropUp(e.target) : false);
@@ -18035,7 +18023,7 @@ function LogView({
                       }}
                     >
                       <StickyNote size={14} />
-                      {entry.notes ? "Notiz bearbeiten" : "Notiz hinzufügen"}
+                      {entry.notes || exerciseNotes?.[entry.exerciseId] ? "Notiz bearbeiten" : "Notiz hinzufügen"}
                     </button>
                     <button
                       className="program-menu-item"
@@ -18184,12 +18172,14 @@ function LogView({
                 "Notiz bearbeiten") instead of its own button, so the entry
                 stays compact. Once a note has text it keeps showing here
                 permanently - no toggle needed to see it again later. */}
-            {(openNotes[entry.id] || entry.notes) && (
+            {/* Die Dauer-Notiz der Übung (Info-Blatt) zählt mit: wer sie
+                dort während des Trainings einträgt, sieht sie sofort hier. */}
+            {(openNotes[entry.id] || entry.notes || exerciseNotes?.[entry.exerciseId]) && (
               <textarea
                 className="session-notes note-inline"
                 placeholder="Notiz zu dieser Übung, z. B. Ausführung, Beschwerden, Griffweite…"
                 autoFocus={openNotes[entry.id]}
-                value={entry.notes || history.lastNote || ""}
+                value={entry.notes || exerciseNotes?.[entry.exerciseId] || history.lastNote || ""}
                 onChange={(e) => updateEntryNotes(entry.id, e.target.value)}
               />
             )}
@@ -20637,7 +20627,36 @@ function BreathingPage({ breathingExercises = [], breathingLogs = [], onBack, on
 // Blatt von unten. Am Griff oder an der Kopfzeile nach unten ziehen schließt
 // es, wie bei iOS. "width" wird nicht mehr gebraucht: ein Blatt ist so breit
 // wie die App.
+// Hält ein Fenster im sichtbaren Bereich über der Tastatur. iOS legt die
+// Tastatur über die Seite, statt sie zu verkleinern; ein unten verankertes
+// Blatt mit kurzem Inhalt (z. B. eine Suche mit wenigen Treffern) lag
+// dann komplett dahinter. Ohne Tastatur ist der sichtbare Bereich die ganze
+// Seite, dann ändert sich nichts. Beim Hineinzoomen bleibt alles, wie es ist.
+function useUeberTastatur(ref) {
+  useEffect(() => {
+    const vv = typeof window !== "undefined" ? window.visualViewport : null;
+    if (!vv) return;
+    const anpassen = () => {
+      const el = ref.current;
+      if (!el) return;
+      const tastatur = vv.scale < 1.01 && window.innerHeight - vv.height > 1;
+      el.style.top = tastatur ? `${Math.max(0, vv.offsetTop)}px` : "";
+      el.style.bottom = tastatur ? "auto" : "";
+      el.style.height = tastatur ? `${vv.height}px` : "";
+    };
+    anpassen();
+    vv.addEventListener("resize", anpassen);
+    vv.addEventListener("scroll", anpassen);
+    return () => {
+      vv.removeEventListener("resize", anpassen);
+      vv.removeEventListener("scroll", anpassen);
+    };
+  }, [ref]);
+}
+
 function Modal({ title, onClose, children }) {
+  const overlayRef = useRef(null);
+  useUeberTastatur(overlayRef);
   const cardRef = useRef(null);
   const drag = useRef(null);
   const dragStart = (e) => {
@@ -20674,7 +20693,7 @@ function Modal({ title, onClose, children }) {
   }, [onClose]);
 
   return (
-    <div className="modal-overlay" onClick={onClose}>
+    <div className="modal-overlay" ref={overlayRef} onClick={onClose}>
       <div
         className="modal-card"
         ref={cardRef}

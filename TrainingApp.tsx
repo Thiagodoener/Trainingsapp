@@ -14366,7 +14366,7 @@ function ExerciseDetailSheet({
   useEffect(() => {
     const onKeyDown = (e) => {
       if (e.key !== "Escape") return;
-      if (editingName || editingSubgroup || editingEquipment || editingSecondary) return;
+      if (editingName || editingSubgroup || editingEquipment || editingSecondary || editingGroup) return;
       onClose();
     };
     document.addEventListener("keydown", onKeyDown);
@@ -14377,7 +14377,7 @@ function ExerciseDetailSheet({
     // sondern gleich das ganze Blatt mit, weil die Bedingung oben immer den
     // Stand vom letzten Neuaufbau des Hakens sah (also "false"), nie den
     // aktuellen.
-  }, [editingName, editingSubgroup, editingEquipment, editingSecondary, onClose]);
+  }, [editingName, editingSubgroup, editingEquipment, editingSecondary, editingGroup, onClose]);
 
   const timeline = useMemo(
     () => getExerciseTimeline(logs, exercise.id),
@@ -14528,7 +14528,7 @@ function ExerciseDetailSheet({
                     className="tag-clickable"
                     style={{ display: "inline-flex", gap: 6 }}
                     onClick={() => setEditingGroup(true)}
-                    title="Hauptmuskelgruppe – zählt mit einem vollen Satz. Antippen: ändern."
+                    title="Hauptmuskelgruppe und Untergruppen – zählen mit einem vollen Satz. Antippen: ändern."
                   >
                     <MuscleTag exercise={exercise} subgroupOverrides={exerciseSubgroupOverrides} />
                   </span>
@@ -14873,27 +14873,59 @@ function ExerciseDetailSheet({
       )}
 
       {editingGroup && setzeHauptgruppe && (
-        <Modal title="Hauptmuskelgruppe wählen" onClose={() => setEditingGroup(false)}>
+        <Modal title="Muskelgruppe wählen" onClose={() => setEditingGroup(false)}>
           <p style={{ fontSize: 12.5, color: "var(--text-dim)", margin: "0 0 10px" }}>
-            Der Agonist – die Gruppe, die bei dieser Übung voll zählt. Gilt auch
-            rückwirkend für alle bisherigen Trainings. Beim Wechsel werden die
-            Untergruppen zurückgesetzt.
+            Der Agonist – die Gruppe, die bei dieser Übung voll zählt, darunter
+            optional die Untergruppen (mehrere möglich). Gilt auch rückwirkend
+            für alle bisherigen Trainings. Ein Wechsel der Hauptgruppe setzt
+            die Untergruppen zurück.
           </p>
           <div className="modal-list">
-            {MUSCLE_GROUPS.map((g) => (
-              <button
-                key={g.id}
-                className={`modal-option ${exercise.group === g.id ? "active" : ""}`}
-                onClick={() => {
-                  setzeHauptgruppe(exercise.id, g.id);
-                  setEditingGroup(false);
-                }}
-              >
-                {g.label}
-                {exercise.group === g.id && <Check size={15} />}
-              </button>
-            ))}
+            {/* Bleibt nach dem Antippen offen: Erst die Hauptgruppe, dann
+                darunter die Untergruppen - beides in einem Zug, statt die
+                Untergruppe im Reiter "Info" suchen zu muessen. */}
+            {MUSCLE_GROUPS.map((g) => {
+              const aktiv = exercise.group === g.id;
+              const subDefs = aktiv ? SUBGROUPS[g.id] || [] : [];
+              return (
+                <div key={g.id}>
+                  <button
+                    className={`modal-option ${aktiv ? "active" : ""}`}
+                    onClick={() => setzeHauptgruppe(exercise.id, g.id)}
+                  >
+                    {g.label}
+                    {aktiv && <Check size={15} />}
+                  </button>
+                  {subDefs.length > 0 && onSetExerciseSubgroup && (
+                    <div className="chip-row chip-row-wrap" style={{ margin: "4px 0 8px 6px" }}>
+                      <span
+                        className={`chip chip-sm ${currentSubgroups.length === 0 ? "active" : ""}`}
+                        onClick={() => onSetExerciseSubgroup(exercise.id, null)}
+                      >
+                        Keine
+                      </span>
+                      {subDefs.map((sg) => (
+                        <span
+                          key={sg.id}
+                          className={`chip chip-sm ${currentSubgroups.includes(sg.id) ? "active" : ""}`}
+                          onClick={() => onSetExerciseSubgroup(exercise.id, sg.id)}
+                        >
+                          {sg.label}
+                        </span>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
           </div>
+          <button
+            className="btn btn-primary btn-sm btn-block"
+            style={{ marginTop: 12 }}
+            onClick={() => setEditingGroup(false)}
+          >
+            <Check size={14} /> Fertig
+          </button>
         </Modal>
       )}
 

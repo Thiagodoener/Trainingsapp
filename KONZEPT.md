@@ -860,6 +860,13 @@ wer zur ursprünglichen Gruppe zurückwechselt, löscht den Override, statt ihn 
 Hauptgruppe wird bewusst **nicht** automatisch zur Nebengruppe – ob sie mitarbeitet, ist eine eigene
 Entscheidung.
 
+Im selben Dialog („Muskelgruppe wählen") stehen unter der aktiven Hauptgruppe deren Untergruppen
+als Mehrfachauswahl samt „Keine". Der Dialog bleibt deshalb nach dem Antippen offen und schließt
+über „Fertig". Vorher ließ sich die Untergruppe nur über einen Knopf im Reiter „Info" ändern, den
+man kaum fand; der Knopf bleibt, das Antippen der Marke ist jetzt der naheliegende Weg. Escape
+schließt dabei nur den Dialog, nicht das ganze Blatt (`editingGroup` steht in der Bedingung und
+der Abhängigkeitsliste des Escape-Hakens – beim ersten Wurf fehlte es dort).
+
 **Ausdauer als eigene Trainingsart – gemessen am Puls, nicht am Gefühl.**
 Bis dahin kannte die App nur Kraft-Trainings und Atemübungen. Ein Lauf ließ sich allenfalls als
 „Aktion" im Kalender vermerken und tauchte in keiner Auswertung auf. Ausdauer-Einheiten sind jetzt

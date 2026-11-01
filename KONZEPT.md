@@ -841,6 +841,25 @@ Nebenmuskelgruppe) und nachträglich im „Nebenmuskelgruppen wählen"-Dialog je
 unter der jeweils aktiven Nebengruppe, nur wenn diese überhaupt Untergruppen hat). Die Nebenmuskel-
 Marke im Kopf des Übungs-Fensters zeigt die Wahl gleich mit an, z. B. „Arme (Trizeps)".
 
+**Die Hauptmuskelgruppe (Agonist) ist jetzt bei jeder Übung änderbar.**
+Bis dahin stand sie fest – bei mitgelieferten Übungen in `EXERCISES`, bei eigenen seit dem Anlegen.
+Wer Schrägbankdrücken lieber bei den Schultern zählen wollte, musste eine neue Übung anlegen und
+den Verlauf zusammenführen. Jetzt öffnet ein Tippen auf die Muskelgruppen-Marke im Kopf des
+Übungs-Fensters „Hauptmuskelgruppe wählen".
+
+Verdrahtet wie die Nebenmuskelgruppen: Override-Tabelle `exercise-group-overrides`
+(`{ [exerciseId]: groupId }`, in der Sicherung enthalten), angewendet von `withGroupOverride` direkt
+am Objekt in `allExercises` – jede Rechnung über `exBy[...].group` sieht die neue Gruppe, auch
+rückwirkend für alle bisherigen Trainings. Weil die Übungsseite an fünf Prop-Ketten hängt, kommt die
+Funktion als Context (`HauptgruppeAendernContext`) wie Löschen und Zusammenführen.
+
+Was beim Wechsel mitgeht, steht in `hauptgruppeWechseln` (getestet): Die Untergruppen der alten
+Hauptgruppe werden entfernt („Obere Brust" ergibt bei Schultern keinen Sinn); ist die neue
+Hauptgruppe bisher Nebengruppe, fällt sie dort heraus (samt ihrer Nebengruppen-Untergruppen); und
+wer zur ursprünglichen Gruppe zurückwechselt, löscht den Override, statt ihn zu speichern. Die alte
+Hauptgruppe wird bewusst **nicht** automatisch zur Nebengruppe – ob sie mitarbeitet, ist eine eigene
+Entscheidung.
+
 **Ausdauer als eigene Trainingsart – gemessen am Puls, nicht am Gefühl.**
 Bis dahin kannte die App nur Kraft-Trainings und Atemübungen. Ein Lauf ließ sich allenfalls als
 „Aktion" im Kalender vermerken und tauchte in keiner Auswertung auf. Ausdauer-Einheiten sind jetzt

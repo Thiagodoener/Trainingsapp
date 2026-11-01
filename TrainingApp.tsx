@@ -351,6 +351,11 @@ const UebungLoeschenContext = React.createContext(null);
 // Dasselbe für das Zusammenführen doppelter Übungen: { kandidaten, zusammenfuehren }
 // mit zusammenfuehren(quelle, ziel, danach).
 const UebungZusammenfuehrenContext = React.createContext(null);
+// Hauptmuskelgruppe (Agonist) einer Übung ändern - aus demselben Grund als
+// Context wie das Löschen: Die Übungsseite hängt an fünf Prop-Ketten. Der
+// Wert ist eine Funktion (exerciseId, groupId) => void; ohne Provider lässt
+// sich die Hauptgruppe auf der Übungsseite nur ansehen, nicht ändern.
+const HauptgruppeAendernContext = React.createContext(null);
 export const exerciseName = (ex) => (ex && ex.name) || GELOESCHTE_UEBUNG;
 
 // Saved logs are read defensively everywhere: an entry written by an older
@@ -790,6 +795,74 @@ export function withSecondarySubgroupOverride(exercise, secondarySubgroupOverrid
     return exercise;
   }
   return { ...exercise, secondarySubgroups: secondarySubgroupOverrides[exercise.id] };
+}
+
+// Hauptmuskelgruppe (Agonist) je Uebung - dasselbe Muster wie
+// withSecondaryOverride: direkt am Objekt ersetzt, damit jede Auswertung, die
+// ueber exBy[...].group geht (Saetze und Belastung pro Muskelgruppe, Filter,
+// Warnungen), die neue Gruppe ohne eigene Nachschlagetabelle sieht. Ein
+// unbekannter Wert (z.B. aus einer alten Sicherung) wird ignoriert - eine
+// Uebung ohne gueltige Hauptgruppe fiele sonst aus jeder Statistik.
+export function withGroupOverride(exercise, groupOverrides) {
+  const g = groupOverrides && exercise ? groupOverrides[exercise.id] : null;
+  if (!g || g === exercise.group || !MUSCLE_GROUPS.some((m) => m.id === g)) return exercise;
+  return { ...exercise, group: g };
+}
+
+// Was sich aendert, wenn die Hauptgruppe einer Uebung wechselt. Rein
+// rechnerisch, damit es sich testen laesst; gespeichert wird im Wurzel-Bauteil.
+//
+// - Die Untergruppen der Hauptgruppe gehoeren zur alten Gruppe ("Obere
+//   Brust" ergibt bei Schultern keinen Sinn) und werden entfernt.
+// - Ist die neue Hauptgruppe bisher Nebengruppe, faellt sie dort heraus -
+//   eine Gruppe kann nicht beides sein (siehe exerciseGroupShares). Sonst
+//   stuende sie unsichtbar weiter in der Liste und kaeme beim Zurueckwechseln
+//   ungefragt wieder zum Vorschein.
+// - Ist groupId die urspruengliche Gruppe der Uebung, wird der Override
+//   geloescht statt gespeichert: dann ist sie wieder im Grundzustand.
+//
+// exercise ist der aktuelle Stand (alle Overrides angewendet), baseGroup die
+// Gruppe aus EXERCISES bzw. vom Anlegen der eigenen Uebung. Gibt null
+// zurueck, wenn sich nichts aendert.
+export function hauptgruppeWechseln({
+  exercise,
+  baseGroup,
+  groupId,
+  groupOverrides = {},
+  subgroupOverrides = {},
+  secondaryOverrides = {},
+  secondarySubgroupOverrides = {},
+}) {
+  if (!exercise || !groupId || !MUSCLE_GROUPS.some((m) => m.id === groupId)) return null;
+  if (groupId === exercise.group) return null;
+  const id = exercise.id;
+  const nextGroups = { ...groupOverrides };
+  if (groupId === baseGroup) delete nextGroups[id];
+  else nextGroups[id] = groupId;
+
+  const nextSubgroups = { ...subgroupOverrides };
+  delete nextSubgroups[id];
+
+  let nextSecondary = secondaryOverrides;
+  const secondary = Array.isArray(exercise.secondary) ? exercise.secondary : [];
+  if (secondary.includes(groupId)) {
+    nextSecondary = { ...secondaryOverrides, [id]: secondary.filter((g) => g !== groupId) };
+  }
+
+  let nextSecondarySubgroups = secondarySubgroupOverrides;
+  const secSubs = exercise.secondarySubgroups || {};
+  if (Object.prototype.hasOwnProperty.call(secSubs, groupId)) {
+    const rest = { ...secSubs };
+    delete rest[groupId];
+    nextSecondarySubgroups = { ...secondarySubgroupOverrides, [id]: rest };
+  }
+
+  return {
+    groupOverrides: nextGroups,
+    subgroupOverrides: nextSubgroups,
+    secondaryOverrides: nextSecondary,
+    secondarySubgroupOverrides: nextSecondarySubgroups,
+  };
 }
 
 // Untergruppe(n) einer bestimmten Nebenmuskelgruppe dieser Uebung. Anders als
@@ -4518,6 +4591,7 @@ const BACKUP_KEYS = [
   // gibt man weiter oder legt sie in eine Cloud - ein Schlüssel gehört da
   // nicht hinein. Nach dem Zurückspielen bleiben Sportler-Nummer und
   // Helfer-Adresse erhalten, der Schlüssel ist einmal neu einzutragen.
+  "exercise-group-overrides",
   "exercise-subgroup-overrides",
   "exercise-equipment-overrides",
   "exercise-secondary-overrides",
@@ -4819,6 +4893,10 @@ function TrainingAppInner() {
   // - sonst kaeme bei der naechsten Anzeige wieder die urspruengliche Liste
   // zum Vorschein, obwohl sie bewusst entfernt wurde.
   const [exerciseSecondaryOverrides, setExerciseSecondaryOverrides] = useState({});
+  // Hauptmuskelgruppe (Agonist) je Übung: { [exerciseId]: groupId }.
+  // Überschreibt exercise.group aus EXERCISES bzw. vom Anlegen der eigenen
+  // Übung (siehe withGroupOverride).
+  const [exerciseGroupOverrides, setExerciseGroupOverrides] = useState({});
   // Untergruppe je Nebenmuskelgruppe, z.B. bei "Nebenmuskel Arme": Trizeps.
   // Form: { [exerciseId]: { [groupId]: [subgroupId, ...] } }. Anders als bei
   // exerciseSubgroupOverrides (Hauptgruppe) gibt es hier keinen erratenen
@@ -4929,7 +5007,7 @@ function TrainingAppInner() {
 
   useEffect(() => {
     (async () => {
-      const [p, l, c, f, en, no, tb, gi, statsEx, active, prog, activeProg, sg, ce, cc, eq, th, gy, activeGy, restEnd, brEx, brLogs, dw, di, dsh, bnd, snd, bw, sec, secSub, ausdauer, puls, abgleichSet, abgleichKey, externKraft, exTags, exTagAssign, deletedEx, warnSet] = await Promise.all([
+      const [p, l, c, f, en, no, tb, gi, statsEx, active, prog, activeProg, sg, ce, cc, eq, th, gy, activeGy, restEnd, brEx, brLogs, dw, di, dsh, bnd, snd, bw, sec, secSub, ausdauer, puls, abgleichSet, abgleichKey, externKraft, exTags, exTagAssign, deletedEx, warnSet, grpOv] = await Promise.all([
         loadJSON("training-plans", []),
         loadJSON("workout-logs", []),
         loadJSON("custom-exercises", []),
@@ -4969,6 +5047,7 @@ function TrainingAppInner() {
         loadJSON("exercise-tag-assignments", {}),
         loadJSON("deleted-exercises", []),
         loadJSON("load-warning-settings", null),
+        loadJSON("exercise-group-overrides", {}),
       ]);
       // Migration: users who already had folders before "programs" existed
       // get one default program that all their existing folders are
@@ -4997,6 +5076,7 @@ function TrainingAppInner() {
       setDeletedExercises(Array.isArray(deletedEx) ? deletedEx : []);
       setExerciseSubgroupOverrides(sg);
       setExerciseSecondaryOverrides(sec && typeof sec === "object" ? sec : {});
+      setExerciseGroupOverrides(grpOv && typeof grpOv === "object" && !Array.isArray(grpOv) ? grpOv : {});
       setExerciseSecondarySubgroupOverrides(secSub && typeof secSub === "object" ? secSub : {});
       setTimeBasedExercises(tb);
       setGymIndependentExercises(gi);
@@ -5219,6 +5299,10 @@ function TrainingAppInner() {
     setExerciseEquipmentOverrides(next);
     await saveJSON("exercise-equipment-overrides", next);
   };
+  const persistExerciseGroupOverrides = async (next) => {
+    setExerciseGroupOverrides(next);
+    await saveJSON("exercise-group-overrides", next);
+  };
   const persistExerciseSecondaryOverrides = async (next) => {
     setExerciseSecondaryOverrides(next);
     await saveJSON("exercise-secondary-overrides", next);
@@ -5423,6 +5507,7 @@ function TrainingAppInner() {
   const allExercises = [...EXERCISES, ...customExercises].filter((e) => !deletedExercises.includes(e.id)).map((e) => {
     let ex = e;
     if (exerciseNameOverrides[e.id]) ex = { ...ex, name: exerciseNameOverrides[e.id] };
+    ex = withGroupOverride(ex, exerciseGroupOverrides);
     ex = withSecondaryOverride(ex, exerciseSecondaryOverrides);
     ex = withSecondarySubgroupOverride(ex, exerciseSecondarySubgroupOverrides);
     return ex;
@@ -5538,6 +5623,34 @@ function TrainingAppInner() {
   };
   const handleSetExerciseEquipment = async (exerciseId, equipment) => {
     await persistExerciseEquipmentOverrides({ ...exerciseEquipmentOverrides, [exerciseId]: equipment });
+  };
+  // Hauptmuskelgruppe wechseln. Was dabei mitgeht (Untergruppen weg, neue
+  // Hauptgruppe aus den Nebengruppen raus), steht in hauptgruppeWechseln.
+  const handleSetExerciseGroup = async (exerciseId, groupId) => {
+    const exercise = allExBy[exerciseId];
+    const baseGroup =
+      customExercises.find((e) => e.id === exerciseId)?.group ??
+      EXERCISES.find((e) => e.id === exerciseId)?.group;
+    const next = hauptgruppeWechseln({
+      exercise,
+      baseGroup,
+      groupId,
+      groupOverrides: exerciseGroupOverrides,
+      subgroupOverrides: exerciseSubgroupOverrides,
+      secondaryOverrides: exerciseSecondaryOverrides,
+      secondarySubgroupOverrides: exerciseSecondarySubgroupOverrides,
+    });
+    if (!next) return;
+    await persistExerciseGroupOverrides(next.groupOverrides);
+    if (next.subgroupOverrides !== exerciseSubgroupOverrides) {
+      await persistExerciseSubgroupOverrides(next.subgroupOverrides);
+    }
+    if (next.secondaryOverrides !== exerciseSecondaryOverrides) {
+      await persistExerciseSecondaryOverrides(next.secondaryOverrides);
+    }
+    if (next.secondarySubgroupOverrides !== exerciseSecondarySubgroupOverrides) {
+      await persistExerciseSecondarySubgroupOverrides(next.secondarySubgroupOverrides);
+    }
   };
   // groupId === null entfernt alle Nebenmuskeln dieser Übung. Sonst wird die
   // gegebene Gruppe umgeschaltet - dazu oder weg -, damit sich mehrere nach-
@@ -6378,6 +6491,7 @@ function TrainingAppInner() {
   return (
     <UebungLoeschenContext.Provider value={requestDeleteExercise}>
     <UebungZusammenfuehrenContext.Provider value={{ kandidaten: allExercises, zusammenfuehren: requestMergeExercise }}>
+    <HauptgruppeAendernContext.Provider value={handleSetExerciseGroup}>
     <div className={`app-shell ${theme === "light" ? "theme-light" : ""}`}>
       <style>{`
         @import url('https://fonts.googleapis.com/css2?family=Nunito:wght@500;600;700;800&family=Inter:wght@400;500;600;700&display=swap');
@@ -10920,6 +11034,7 @@ function TrainingAppInner() {
         </nav>
       </div>
     </div>
+    </HauptgruppeAendernContext.Provider>
     </UebungZusammenfuehrenContext.Provider>
     </UebungLoeschenContext.Provider>
   );
@@ -14197,6 +14312,8 @@ function ExerciseDetailSheet({
   const [editingName, setEditingName] = useState(false);
   const loescheUebung = React.useContext(UebungLoeschenContext);
   const zusammenfuehrenCtx = React.useContext(UebungZusammenfuehrenContext);
+  const setzeHauptgruppe = React.useContext(HauptgruppeAendernContext);
+  const [editingGroup, setEditingGroup] = useState(false);
   // null = Auswahl zu; sonst der Suchtext der Auswahl.
   const [mergeQuery, setMergeQuery] = useState(null);
   const mergeKandidaten = useMemo(() => {
@@ -14406,7 +14523,18 @@ function ExerciseDetailSheet({
             )}
             {!editingName && (
               <span style={{ marginTop: 6, display: "inline-flex", gap: 6, flexWrap: "wrap" }}>
-                <MuscleTag exercise={exercise} subgroupOverrides={exerciseSubgroupOverrides} />
+                {setzeHauptgruppe ? (
+                  <span
+                    className="tag-clickable"
+                    style={{ display: "inline-flex", gap: 6 }}
+                    onClick={() => setEditingGroup(true)}
+                    title="Hauptmuskelgruppe – zählt mit einem vollen Satz. Antippen: ändern."
+                  >
+                    <MuscleTag exercise={exercise} subgroupOverrides={exerciseSubgroupOverrides} />
+                  </span>
+                ) : (
+                  <MuscleTag exercise={exercise} subgroupOverrides={exerciseSubgroupOverrides} />
+                )}
                 {/* Die Nebengruppen. Sie waren bis Sept. 2026 nur in der
                     Rechnung sichtbar (halber Satz je Nebengruppe), nirgends
                     in der Bedienung - man konnte also nicht nachsehen, warum
@@ -14740,6 +14868,31 @@ function ExerciseDetailSheet({
             >
               <Check size={14} /> Fertig
             </button>
+          </div>
+        </Modal>
+      )}
+
+      {editingGroup && setzeHauptgruppe && (
+        <Modal title="Hauptmuskelgruppe wählen" onClose={() => setEditingGroup(false)}>
+          <p style={{ fontSize: 12.5, color: "var(--text-dim)", margin: "0 0 10px" }}>
+            Der Agonist – die Gruppe, die bei dieser Übung voll zählt. Gilt auch
+            rückwirkend für alle bisherigen Trainings. Beim Wechsel werden die
+            Untergruppen zurückgesetzt.
+          </p>
+          <div className="modal-list">
+            {MUSCLE_GROUPS.map((g) => (
+              <button
+                key={g.id}
+                className={`modal-option ${exercise.group === g.id ? "active" : ""}`}
+                onClick={() => {
+                  setzeHauptgruppe(exercise.id, g.id);
+                  setEditingGroup(false);
+                }}
+              >
+                {g.label}
+                {exercise.group === g.id && <Check size={15} />}
+              </button>
+            ))}
           </div>
         </Modal>
       )}

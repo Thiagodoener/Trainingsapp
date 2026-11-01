@@ -14874,12 +14874,6 @@ function ExerciseDetailSheet({
 
       {editingGroup && setzeHauptgruppe && (
         <Modal title="Muskelgruppe wählen" onClose={() => setEditingGroup(false)}>
-          <p style={{ fontSize: 12.5, color: "var(--text-dim)", margin: "0 0 10px" }}>
-            Der Agonist – die Gruppe, die bei dieser Übung voll zählt, darunter
-            optional die Untergruppen (mehrere möglich). Gilt auch rückwirkend
-            für alle bisherigen Trainings. Ein Wechsel der Hauptgruppe setzt
-            die Untergruppen zurück.
-          </p>
           <div className="modal-list">
             {/* Bleibt nach dem Antippen offen: Erst die Hauptgruppe, dann
                 darunter die Untergruppen - beides in einem Zug, statt die

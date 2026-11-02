@@ -9396,27 +9396,19 @@ function TrainingAppInner() {
           border-radius: 50%;
           border: 1.5px dashed color-mix(in srgb, ${BREATHING_COLOR} 45%, transparent);
         }
-        /* Box: quadratisch, der Punkt sitzt wie bei der Linie als eigenes
-           Element darüber. Etwas Rand, damit sein Schein nicht abgeschnitten
-           wird. */
+        /* Box: ein Quadrat mit gleichmäßigem Rahmen, der Punkt sitzt wie bei
+           der Linie als eigenes Element darüber. Bewusst kein SVG - die
+           globale svg-Regel begrenzt jedes SVG auf 32 px. */
         .breathing-box-wrap {
           position: relative;
-          width: min(62vw, 240px);
-          height: min(62vw, 240px);
+          width: min(70vw, 280px);
+          height: min(70vw, 280px);
         }
         .breathing-box {
           position: absolute;
-          inset: -2%;
-          width: 104%;
-          height: 104%;
-          display: block;
-          overflow: visible;
-        }
-        .breathing-box rect {
-          stroke: color-mix(in srgb, ${BREATHING_COLOR} 35%, transparent);
-        }
-        .breathing-box-active {
-          stroke: color-mix(in srgb, ${BREATHING_COLOR} 75%, transparent);
+          inset: -1px;
+          border: 2px solid color-mix(in srgb, ${BREATHING_COLOR} 45%, transparent);
+          border-radius: 4px;
         }
         .breathing-line-wrap {
           position: relative;
@@ -19933,23 +19925,6 @@ function boxPoint(u) {
   return { x: 1 - f, y: 1 };
 }
 
-// Die Strecke einer Phase auf dem Quadrat als SVG-Punkte (0..100), mit den
-// Ecken dazwischen - bei weniger als vier Phasen geht sie um eine Ecke.
-function boxPolyline(phaseIndex, phaseCount) {
-  const n = Math.max(1, phaseCount);
-  const u0 = phaseIndex / n;
-  const u1 = (phaseIndex + 1) / n;
-  const us = [u0];
-  for (let k = 1; k < 4; k++) if (k / 4 > u0 + 1e-9 && k / 4 < u1 - 1e-9) us.push(k / 4);
-  us.push(u1);
-  return us
-    .map((u) => {
-      const pt = boxPoint(u);
-      return `${(pt.x * 100).toFixed(2)},${(pt.y * 100).toFixed(2)}`;
-    })
-    .join(" ");
-}
-
 // Der Countdown einer getakteten Phase. Bei ganzen Sekunden wie bisher
 // aufgerundet ("4, 3, 2, 1"). Hat die Phase Kommasekunden, zählt er in
 // Zehnteln - sonst stünde bei 4,5 s zuerst eine "5" da, und die Phase sähe
@@ -20145,20 +20120,7 @@ function BreathingSessionView({ session, onFinish, onCancel }) {
       >
         {isBox ? (
           <div className="breathing-box-wrap">
-            <svg className="breathing-box" viewBox="-2 -2 104 104" aria-hidden="true">
-              <rect x="0" y="0" width="100" height="100" rx="3" fill="none" strokeWidth="1.5" vectorEffect="non-scaling-stroke" />
-              {/* Die Strecke der laufenden Phase kräftiger, damit man auch bei
-                  mehr oder weniger als vier Phasen sieht, wo sie endet. */}
-              <polyline
-                className="breathing-box-active"
-                points={boxPolyline(phaseIndex, phases.length)}
-                fill="none"
-                strokeWidth="3"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                vectorEffect="non-scaling-stroke"
-              />
-            </svg>
+            <span className="breathing-box" />
             <span
               className="breathing-dot"
               style={{ left: `${(boxDot.x * 100).toFixed(2)}%`, top: `${(boxDot.y * 100).toFixed(2)}%` }}

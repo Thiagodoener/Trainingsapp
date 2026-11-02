@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   breathingCountdownLabel,
+  boxDotPosition,
   signalBreathingPhaseEnd,
   lastBreathingExercise,
   breathingWeekSummary,
@@ -3666,5 +3667,21 @@ describe("Doppelte Übungen zusammenführen", () => {
 
   it("kommt ohne laufendes Training aus", () => {
     expect(uebungZusammenfuehren({ logs: [], plans: [], session: null }, "a", "b").session).toBeNull();
+  });
+});
+
+describe("boxDotPosition", () => {
+  it("fährt bei vier Phasen je eine Kante im Uhrzeigersinn ab, links unten beginnend", () => {
+    expect(boxDotPosition(0, 4, 0)).toEqual({ x: 0, y: 1 });
+    expect(boxDotPosition(0, 4, 0.5)).toEqual({ x: 0, y: 0.5 });
+    expect(boxDotPosition(1, 4, 0)).toEqual({ x: 0, y: 0 });
+    expect(boxDotPosition(1, 4, 0.5)).toEqual({ x: 0.5, y: 0 });
+    expect(boxDotPosition(2, 4, 0.5)).toEqual({ x: 1, y: 0.5 });
+    expect(boxDotPosition(3, 4, 0.5)).toEqual({ x: 0.5, y: 1 });
+    expect(boxDotPosition(3, 4, 1)).toEqual({ x: 0, y: 1 });
+  });
+  it("verteilt andere Phasenzahlen gleichmäßig über den Umfang", () => {
+    expect(boxDotPosition(0, 2, 1)).toEqual({ x: 1, y: 0 });
+    expect(boxDotPosition(0, 1, 0.25)).toEqual({ x: 0, y: 0 });
   });
 });

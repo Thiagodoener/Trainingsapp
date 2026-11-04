@@ -104,6 +104,14 @@ import {
   set1RM,
   bodyWeightEntries,
   bodyWeightAt,
+  schmerzEintraege,
+  schmerzSetzen,
+  schmerzAm,
+  schmerzSchnitt,
+  schmerzRueckblick,
+  schmerzVerlauf,
+  tagVerschieben,
+  SEHNE_STANDARD,
   getStrengthVolumeSeries,
   halfPeriodChange,
   typicalWeekFloor,
@@ -3683,5 +3691,100 @@ describe("boxDotPosition", () => {
   it("verteilt andere Phasenzahlen gleichmäßig über den Umfang", () => {
     expect(boxDotPosition(0, 2, 1)).toEqual({ x: 1, y: 0 });
     expect(boxDotPosition(0, 1, 0.25)).toEqual({ x: 0, y: 0 });
+  });
+});
+
+describe("Sehnen-Tagebuch", () => {
+  it("bereinigt den Speicherstand: ein Eintrag je Tag, Werte 0-10, sortiert", () => {
+    const liste = schmerzEintraege([
+      { date: "2026-11-03", anlauf: 4, alltag: 2 },
+      { date: "2026-11-01", anlauf: 12.4, alltag: -3 },
+      { date: "2026-11-03", anlauf: 3 },
+      { date: "kaputt", anlauf: 5 },
+      { date: "2026-11-02" },
+      null,
+    ]);
+    expect(liste).toEqual([
+      { date: "2026-11-01", sehne: SEHNE_STANDARD.id, anlauf: 10, alltag: 0 },
+      { date: "2026-11-03", sehne: SEHNE_STANDARD.id, anlauf: 3, alltag: null },
+    ]);
+    expect(schmerzEintraege(null)).toEqual([]);
+  });
+
+  it("setzt beide Werte unabhängig und nimmt einen doppelt getippten wieder heraus", () => {
+    let liste = schmerzSetzen([], "2026-11-04", "anlauf", 3);
+    liste = schmerzSetzen(liste, "2026-11-04", "alltag", 1);
+    expect(schmerzAm(liste, "2026-11-04")).toMatchObject({ anlauf: 3, alltag: 1 });
+    liste = schmerzSetzen(liste, "2026-11-04", "anlauf", 5);
+    expect(schmerzAm(liste, "2026-11-04")).toMatchObject({ anlauf: 5, alltag: 1 });
+    liste = schmerzSetzen(liste, "2026-11-04", "anlauf", 5);
+    expect(schmerzAm(liste, "2026-11-04")).toMatchObject({ anlauf: null, alltag: 1 });
+    liste = schmerzSetzen(liste, "2026-11-04", "alltag", 1);
+    expect(liste).toEqual([]);
+  });
+
+  it("speichert 0 als echten Wert - schmerzfrei ist nicht dasselbe wie leer", () => {
+    const liste = schmerzSetzen([], "2026-11-04", "anlauf", 0);
+    expect(schmerzAm(liste, "2026-11-04")?.anlauf).toBe(0);
+  });
+
+  it("ignoriert unbekannte Felder und ungültige Daten", () => {
+    expect(schmerzSetzen([], "2026-11-04", "nacht", 3)).toEqual([]);
+    expect(schmerzSetzen([], "4.11.2026", "anlauf", 3)).toEqual([]);
+  });
+
+  it("zählt leere Tage im Schnitt weder als 0 noch im Nenner", () => {
+    const liste = [
+      { date: "2026-11-01", anlauf: 2 },
+      { date: "2026-11-03", anlauf: 4 },
+      { date: "2026-11-05", anlauf: 6 },
+    ];
+    expect(schmerzSchnitt(liste, "anlauf", "2026-11-01", "2026-11-07")).toEqual({ schnitt: 4, tage: 3 });
+    // Unter drei Tagen gibt es keinen Schnitt, nur die Zahl der Tage.
+    expect(schmerzSchnitt(liste, "anlauf", "2026-11-01", "2026-11-03")).toEqual({ schnitt: null, tage: 2 });
+  });
+
+  it("vergleicht einen Tag mit dem Vortag und den sieben Tagen davor, ohne sich selbst", () => {
+    const liste = [
+      { date: "2026-10-28", anlauf: 2 },
+      { date: "2026-10-30", anlauf: 2 },
+      { date: "2026-11-03", anlauf: 5 },
+      { date: "2026-11-04", anlauf: 9 },
+    ];
+    expect(schmerzRueckblick(liste, "2026-11-04", "anlauf")).toEqual({ vortag: 5, schnitt: 3, tage: 3 });
+    expect(schmerzRueckblick(liste, "2026-11-04", "alltag")).toEqual({ vortag: null, schnitt: null, tage: 0 });
+  });
+
+  it("verschiebt Tage über die Zeitumstellung hinweg korrekt", () => {
+    expect(tagVerschieben("2026-10-25", 1)).toBe("2026-10-26");
+    expect(tagVerschieben("2026-03-29", -1)).toBe("2026-03-28");
+    expect(tagVerschieben("2026-03-01", -1)).toBe("2026-02-28");
+  });
+
+  it("baut eine Tagesreihe mit Lücken und markiert Trainings- und Ausdauertage", () => {
+    const verlauf = schmerzVerlauf(
+      [
+        { date: "2026-11-01", anlauf: 2, alltag: 1 },
+        { date: "2026-11-03", anlauf: 4 },
+      ],
+      {
+        bisKey: "2026-11-04",
+        tage: 365,
+        logs: [{ date: new Date(2026, 10, 2, 18).toISOString(), planName: "Beine" }],
+        enduranceLogs: [{ date: new Date(2026, 10, 2, 7).toISOString(), sport: "laufen" }],
+      }
+    );
+    // Beginnt am ersten Eintrag statt ein Jahr vorher.
+    expect(verlauf.map((p) => p.date)).toEqual(["2026-11-01", "2026-11-02", "2026-11-03", "2026-11-04"]);
+    expect(verlauf[1]).toEqual({ date: "2026-11-02", anlauf: null, alltag: null, training: ["Beine", "Laufen"] });
+    expect(verlauf[2]).toMatchObject({ anlauf: 4, alltag: null, training: [] });
+    expect(schmerzVerlauf([], { bisKey: "2026-11-04" })).toEqual([]);
+  });
+
+  it("schneidet die Reihe auf den gewählten Zeitraum zu", () => {
+    const verlauf = schmerzVerlauf([{ date: "2026-01-01", anlauf: 2 }], { bisKey: "2026-11-04", tage: 28 });
+    expect(verlauf).toHaveLength(28);
+    expect(verlauf[0].date).toBe("2026-10-08");
+    expect(verlauf.at(-1).date).toBe("2026-11-04");
   });
 });

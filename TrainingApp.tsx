@@ -2205,6 +2205,159 @@ export function bodyWeightAt(entries, ts) {
   return (treffer || liste[0]).kg;
 }
 
+// ---------------------------------------------------------------------------
+// Sehnen-Tagebuch
+// ---------------------------------------------------------------------------
+//
+// Zwei Werte am Tag, beide 0-10: der Anlaufschmerz (die ersten Schritte am
+// Morgen bzw. das erste Belasten nach Ruhe) und der Schmerz im Alltag. Bewusst
+// 0-10 statt der fuenf Wort-Stufen des Sitzungsgefuehls: Schmerz wird in
+// Physiotherapie und Studien auf dieser Skala erfasst, die Kurve laesst sich
+// so ohne Uebersetzung zeigen - siehe KONZEPT.md.
+//
+// Ein Tag ohne Eintrag ist eine Luecke, keine 0 - genau wie ein
+// ausgefallenes Training. "Nichts eingetragen" und "schmerzfrei" sind zwei
+// verschiedene Aussagen.
+//
+// Bewusst ohne Ampel und ohne Grenzwert: Die App zeigt Verlauf und den
+// Vergleich mit dem eigenen Schnitt, sie urteilt nicht (Regel 3).
+export const SEHNE_STANDARD = { id: "achilles-links", name: "Achillessehne links" };
+export const SCHMERZ_MAX = 10;
+export const SCHMERZ_FELDER = [
+  { key: "anlauf", label: "Anlaufschmerz", hinweis: "erste Schritte am Morgen" },
+  { key: "alltag", label: "Alltag", hinweis: "über den Tag" },
+];
+// Ab so vielen eingetragenen Tagen im Fenster steht ein Schnitt da - aus ein
+// oder zwei Tagen waere er nur der Einzelwert mit Nachkommastelle.
+export const SCHMERZ_SCHNITT_MIN_TAGE = 3;
+export const SCHMERZ_SCHNITT_TAGE = 7;
+
+const DATUMS_SCHLUESSEL = /^\d{4}-\d{2}-\d{2}$/;
+
+function schmerzWert(v) {
+  if (v === null || v === undefined || v === "" || typeof v === "boolean") return null;
+  const n = Number(v);
+  if (!Number.isFinite(n)) return null;
+  return Math.max(0, Math.min(SCHMERZ_MAX, Math.round(n)));
+}
+
+// Ein Tag weiter oder zurueck, auf dem Datumsschluessel. Ueber das Datum
+// gerechnet statt mit 86400000 ms, damit die Zeitumstellung keinen Tag
+// verschluckt oder doppelt zaehlt.
+export function tagVerschieben(dateKey, tage) {
+  const d = dateFromKey(dateKey);
+  if (!d) return dateKey;
+  d.setDate(d.getDate() + tage);
+  return toDateKey(d);
+}
+
+// Bereinigt den Speicherstand: ein Eintrag je Sehne und Tag (der spaetere
+// gewinnt), Werte ganzzahlig 0-10, Eintraege ohne jeden Wert fallen weg,
+// sortiert nach Datum.
+export function schmerzEintraege(raw) {
+  if (!Array.isArray(raw)) return [];
+  const proTag = new Map();
+  raw.forEach((e) => {
+    if (!e || typeof e !== "object") return;
+    if (typeof e.date !== "string" || !DATUMS_SCHLUESSEL.test(e.date) || !dateFromKey(e.date)) return;
+    const sehne = typeof e.sehne === "string" && e.sehne ? e.sehne : SEHNE_STANDARD.id;
+    const anlauf = schmerzWert(e.anlauf);
+    const alltag = schmerzWert(e.alltag);
+    if (anlauf == null && alltag == null) return;
+    proTag.set(`${sehne}|${e.date}`, { date: e.date, sehne, anlauf, alltag });
+  });
+  return [...proTag.values()].sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
+}
+
+// Setzt einen Wert fuer einen Tag. Denselben Wert noch einmal anzutippen
+// nimmt ihn wieder heraus - so laesst sich ein versehentlicher Tipp
+// zuruecknehmen, ohne dass es dafuer einen eigenen Knopf braucht.
+export function schmerzSetzen(raw, dateKey, feld, wert, sehne = SEHNE_STANDARD.id) {
+  const liste = schmerzEintraege(raw);
+  if (!SCHMERZ_FELDER.some((f) => f.key === feld)) return liste;
+  if (typeof dateKey !== "string" || !DATUMS_SCHLUESSEL.test(dateKey)) return liste;
+  const alt = liste.find((e) => e.date === dateKey && e.sehne === sehne) || null;
+  const n = schmerzWert(wert);
+  const neu = { date: dateKey, sehne, anlauf: alt?.anlauf ?? null, alltag: alt?.alltag ?? null };
+  neu[feld] = alt && alt[feld] === n ? null : n;
+  return schmerzEintraege([...liste.filter((e) => e !== alt), neu]);
+}
+
+export function schmerzAm(raw, dateKey, sehne = SEHNE_STANDARD.id) {
+  return schmerzEintraege(raw).find((e) => e.date === dateKey && e.sehne === sehne) || null;
+}
+
+// Schnitt eines Wertes ueber die Tage von vonKey bis bisKey (beide
+// eingeschlossen). Leere Tage zaehlen nicht mit - weder als 0 noch im
+// Nenner. Unter SCHMERZ_SCHNITT_MIN_TAGE eingetragenen Tagen gibt es keinen
+// Schnitt, nur die Zahl der Tage.
+export function schmerzSchnitt(raw, feld, vonKey, bisKey, sehne = SEHNE_STANDARD.id) {
+  const werte = schmerzEintraege(raw)
+    .filter((e) => e.sehne === sehne && e.date >= vonKey && e.date <= bisKey && e[feld] != null)
+    .map((e) => e[feld]);
+  return {
+    schnitt: werte.length >= SCHMERZ_SCHNITT_MIN_TAGE
+      ? werte.reduce((s, v) => s + v, 0) / werte.length
+      : null,
+    tage: werte.length,
+  };
+}
+
+// Die Rueckmeldung direkt unter der Eingabe: der Vortag und der Schnitt der
+// sieben Tage davor. Der Tag selbst bleibt aus dem Schnitt heraus - er soll
+// daran gemessen werden, nicht sich selbst hineinrechnen.
+export function schmerzRueckblick(raw, dateKey, feld, sehne = SEHNE_STANDARD.id) {
+  const vortag = schmerzAm(raw, tagVerschieben(dateKey, -1), sehne);
+  const { schnitt, tage } = schmerzSchnitt(
+    raw, feld, tagVerschieben(dateKey, -SCHMERZ_SCHNITT_TAGE), tagVerschieben(dateKey, -1), sehne
+  );
+  return { vortag: vortag?.[feld] ?? null, schnitt, tage };
+}
+
+// Die Tagesreihe fuer die Kurve: ein Punkt je Kalendertag (leere Tage mit
+// null, damit die Linie dort reisst statt eine Luecke zu ueberbruecken) und
+// je Tag die Trainings und Ausdauer-Einheiten. Gerade bei Sehnen zeigt sich
+// oft erst am naechsten Morgen, was eine Belastung bewirkt hat - deshalb
+// stehen beide in derselben Reihe.
+//
+// Die Reihe beginnt fruehestens am ersten Eintrag, damit eine Jahresansicht
+// nach zwei Wochen Tagebuch nicht aus 350 leeren Tagen besteht.
+export function schmerzVerlauf(raw, { bisKey, tage = 28, logs = [], enduranceLogs = [], sehne = SEHNE_STANDARD.id } = {}) {
+  const liste = schmerzEintraege(raw).filter((e) => e.sehne === sehne);
+  if (liste.length === 0 || !bisKey) return [];
+  let vonKey = tagVerschieben(bisKey, -(Math.max(1, tage) - 1));
+  if (liste[0].date > vonKey) vonKey = liste[0].date;
+  if (vonKey > bisKey) return [];
+
+  const proTag = new Map(liste.map((e) => [e.date, e]));
+  const belastung = new Map();
+  const merke = (iso, text) => {
+    if (!iso) return;
+    const d = new Date(iso);
+    if (!Number.isFinite(d.getTime())) return;
+    const key = toDateKey(d);
+    if (key < vonKey || key > bisKey) return;
+    if (!belastung.has(key)) belastung.set(key, []);
+    belastung.get(key).push(text);
+  };
+  (Array.isArray(logs) ? logs : []).forEach((l) => merke(l?.date, l?.planName || "Training"));
+  (Array.isArray(enduranceLogs) ? enduranceLogs : []).forEach((e) =>
+    merke(e?.date, ausdauerSportart(e?.sport)?.label || "Ausdauer")
+  );
+
+  const punkte = [];
+  for (let key = vonKey; key <= bisKey; key = tagVerschieben(key, 1)) {
+    const e = proTag.get(key);
+    punkte.push({
+      date: key,
+      anlauf: e?.anlauf ?? null,
+      alltag: e?.alltag ?? null,
+      training: belastung.get(key) || [],
+    });
+  }
+  return punkte;
+}
+
 // Gibt es ueberhaupt eine Angabe? Davon haengt ab, ob eine
 // Koerpergewichts-Uebung in Kilogramm oder in Wiederholungen gemessen wird -
 // und das muss fuer die ganze Reihe gleich bleiben, sonst mischen sich
@@ -4613,6 +4766,7 @@ const BACKUP_KEYS = [
   "resistance-bands",
   "rest-sound",
   "body-weight",
+  "pain-log",
 ];
 
 async function buildBackup() {
@@ -4957,6 +5111,8 @@ function TrainingAppInner() {
   // (siehe bodyWeightEntries). Eine Umrechnungseinheit fuer
   // Koerpergewichts-Uebungen, kein Messwert, den die App auswerten wuerde.
   const [bodyWeights, setBodyWeights] = useState([]);
+  // Sehnen-Tagebuch: Anlauf- und Alltagsschmerz je Tag (siehe schmerzEintraege).
+  const [schmerzLog, setSchmerzLog] = useState([]);
 
   // Native window.confirm()/alert() are unreliable inside a sandboxed
   // artifact preview — they can silently no-op, which made every delete
@@ -5008,7 +5164,7 @@ function TrainingAppInner() {
 
   useEffect(() => {
     (async () => {
-      const [p, l, c, f, en, no, tb, gi, statsEx, active, prog, activeProg, sg, ce, cc, eq, th, gy, activeGy, restEnd, brEx, brLogs, dw, di, dsh, bnd, snd, bw, sec, secSub, ausdauer, puls, abgleichSet, abgleichKey, externKraft, exTags, exTagAssign, deletedEx, warnSet, grpOv] = await Promise.all([
+      const [p, l, c, f, en, no, tb, gi, statsEx, active, prog, activeProg, sg, ce, cc, eq, th, gy, activeGy, restEnd, brEx, brLogs, dw, di, dsh, bnd, snd, bw, sec, secSub, ausdauer, puls, abgleichSet, abgleichKey, externKraft, exTags, exTagAssign, deletedEx, warnSet, grpOv, schmerz] = await Promise.all([
         loadJSON("training-plans", []),
         loadJSON("workout-logs", []),
         loadJSON("custom-exercises", []),
@@ -5049,6 +5205,7 @@ function TrainingAppInner() {
         loadJSON("deleted-exercises", []),
         loadJSON("load-warning-settings", null),
         loadJSON("exercise-group-overrides", {}),
+        loadJSON("pain-log", []),
       ]);
       // Migration: users who already had folders before "programs" existed
       // get one default program that all their existing folders are
@@ -5110,6 +5267,7 @@ function TrainingAppInner() {
       setBands(Array.isArray(bnd) ? bnd : []);
       setSoundOn(snd !== false);
       setBodyWeights(bodyWeightEntries(bw));
+      setSchmerzLog(schmerzEintraege(schmerz));
       setGyms(gy);
       setActiveGymId(activeGy && gy.some((g) => g.id === activeGy) ? activeGy : gy[0]?.id || null);
       setExerciseEquipmentOverrides(eq);
@@ -5476,6 +5634,17 @@ function TrainingAppInner() {
   };
   const removeBodyWeight = async (id) => {
     await persistBodyWeights(bodyWeights.filter((e) => e.id !== id));
+  };
+
+  // Ueber die funktionale Form, damit zwei schnelle Tipps hintereinander
+  // (Anlauf, dann Alltag) nicht auf demselben alten Stand aufsetzen und der
+  // erste verloren geht.
+  const setzeSchmerz = (dateKey, feld, wert) => {
+    setSchmerzLog((alt) => {
+      const neu = schmerzSetzen(alt, dateKey, feld, wert);
+      saveJSON("pain-log", neu);
+      return neu;
+    });
   };
 
   const updateSoundOn = async (value) => {
@@ -6660,6 +6829,11 @@ function TrainingAppInner() {
           gap: 24px;
           margin-bottom: 14px;
           border-bottom: 1px solid var(--border-strong);
+        }
+        /* Seit dem vierten Reiter (Sehne) passen 24px Abstand auf einem
+           schmalen Handy nicht mehr in eine Zeile. */
+        @media (max-width: 420px) {
+          .sub-tab-row { gap: 14px; }
         }
         .sub-tab {
           flex: 0 0 auto;
@@ -9100,6 +9274,67 @@ function TrainingAppInner() {
           color: var(--text);
         }
         .deload-toggle .deload-remove { color: #fff; }
+
+        /* Sehnen-Tagebuch */
+        .pain-entry { display: flex; flex-direction: column; gap: 14px; }
+        .pain-row-head {
+          display: flex;
+          align-items: baseline;
+          gap: 8px;
+          margin-bottom: 6px;
+        }
+        .pain-row-label { font-size: 13.5px; font-weight: 600; color: var(--text); }
+        .pain-row-hint { font-size: 12px; color: var(--text-faint); }
+        .pain-scale {
+          display: grid;
+          grid-template-columns: repeat(11, minmax(0, 1fr));
+          gap: 4px;
+        }
+        .pain-step {
+          min-width: 0;
+          height: 34px;
+          padding: 0;
+          border: none;
+          border-radius: 8px;
+          background: var(--fill);
+          color: var(--text-dim);
+          font-family: var(--font-ui);
+          font-size: 13px;
+          font-variant-numeric: tabular-nums;
+          cursor: pointer;
+          -webkit-tap-highlight-color: transparent;
+        }
+        .pain-step.active {
+          background: var(--accent);
+          color: #fff;
+          font-weight: 600;
+        }
+        .pain-row-meta {
+          margin-top: 6px;
+          font-size: 12px;
+          color: var(--text-dim);
+        }
+        .pain-anchors {
+          display: flex;
+          justify-content: space-between;
+          gap: 8px;
+          margin-top: -4px;
+          font-size: 11px;
+          color: var(--text-faint);
+        }
+        .pain-toggle.is-open { color: var(--text); }
+        .pain-legend { display: flex; gap: 12px; font-size: 11.5px; color: var(--text-dim); }
+        .pain-legend span { display: inline-flex; align-items: center; gap: 5px; }
+        .pain-legend i { display: inline-block; width: 12px; height: 3px; border-radius: 2px; }
+        .cal-pain-dot {
+          display: inline-block;
+          width: 5px;
+          height: 5px;
+          margin-left: 3px;
+          border-radius: 50%;
+          background: var(--accent);
+          vertical-align: 1px;
+        }
         .deload-toggle {
           display: flex;
           align-items: center;
@@ -9786,6 +10021,8 @@ function TrainingAppInner() {
             exerciseEquipmentOverrides={exerciseEquipmentOverrides}
             bodyWeights={bodyWeights}
             bodyWeightNow={bodyWeightNow}
+            schmerzLog={schmerzLog}
+            onSetzeSchmerz={setzeSchmerz}
             plans={allPlans}
             logs={logs}
             exBy={allExBy}
@@ -9903,6 +10140,8 @@ function TrainingAppInner() {
             deloadStatusInfo={deloadInfo}
             deloadSuggestionHidden={deloadSuggestionHidden}
             onHideDeloadSuggestion={hideDeloadSuggestion}
+            schmerzLog={schmerzLog}
+            onSetzeSchmerz={setzeSchmerz}
           />
         ) : tab === "exercises" ? (
           <ExercisesView
@@ -10050,6 +10289,7 @@ function TrainingAppInner() {
           null
         ) : (
           <ProgressView
+            schmerzLog={schmerzLog}
             bodyWeights={bodyWeights}
             focusLogId={historyFocusLogId}
             onFocusHandled={() => setHistoryFocusLogId(null)}
@@ -11328,6 +11568,242 @@ function countLogPRs(log, logs, exBy, timeBasedExercises, gymIndependentExercise
   return prs;
 }
 
+// ---------------------------------------------------------------------------
+// Sehnen-Tagebuch: Eingabe und Verlauf
+// ---------------------------------------------------------------------------
+
+// Elf Felder 0-10 nebeneinander. Bewusst einfarbig, ohne Ampel - welche Zahl
+// "zu viel" ist, entscheidet nicht die App (Regel 3).
+function SchmerzSkala({ wert, onWaehlen, label }) {
+  return (
+    <div className="pain-scale" role="group" aria-label={label}>
+      {Array.from({ length: SCHMERZ_MAX + 1 }, (_, n) => (
+        <button
+          key={n}
+          type="button"
+          className={`pain-step ${wert === n ? "active" : ""}`}
+          aria-pressed={wert === n}
+          onClick={() => onWaehlen(n)}
+        >
+          {n}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+// Die Rueckmeldung zu einem Wert (Regel 4): der Vortag und der Schnitt der
+// sieben Tage davor. Feststellungen, kein Urteil.
+function schmerzRueckblickText(rb, istHeute) {
+  const teile = [];
+  if (rb.vortag != null) teile.push(`${istHeute ? "gestern" : "Vortag"} ${rb.vortag}`);
+  if (rb.schnitt != null) {
+    teile.push(`Ø ${SCHMERZ_SCHNITT_TAGE} Tage davor ${fmtDecimal(Math.round(rb.schnitt * 10) / 10)}`);
+  } else if (rb.tage > 0) {
+    teile.push(`Schnitt ab ${SCHMERZ_SCHNITT_MIN_TAGE} Tagen`);
+  }
+  return teile.join(" · ");
+}
+
+function SchmerzEingabe({ schmerzLog = [], dateKey, onSetzen, istHeute = false }) {
+  const eintrag = schmerzAm(schmerzLog, dateKey);
+  return (
+    <div className="pain-entry">
+      {SCHMERZ_FELDER.map((f) => {
+        const text = schmerzRueckblickText(schmerzRueckblick(schmerzLog, dateKey, f.key), istHeute);
+        return (
+          <div className="pain-row" key={f.key}>
+            <div className="pain-row-head">
+              <span className="pain-row-label">{f.label}</span>
+              <span className="pain-row-hint">{f.hinweis}</span>
+            </div>
+            <SchmerzSkala
+              label={f.label}
+              wert={eintrag?.[f.key] ?? null}
+              onWaehlen={(n) => onSetzen(dateKey, f.key, n)}
+            />
+            {text && <div className="pain-row-meta">{text}</div>}
+          </div>
+        );
+      })}
+      <div className="pain-anchors">
+        <span>0 = kein Schmerz</span>
+        <span>10 = stärkster vorstellbarer</span>
+      </div>
+    </div>
+  );
+}
+
+const SCHMERZ_ZEITRAEUME = [
+  [28, "4 Wochen"],
+  [84, "12 Wochen"],
+  [365, "1 Jahr"],
+];
+
+function SchmerzTooltip({ active, payload, chartColors }) {
+  if (!active || !payload?.length) return null;
+  const pt = payload[0]?.payload;
+  if (!pt) return null;
+  const vortag = pt.vortagTraining || [];
+  return (
+    <div
+      style={{
+        background: chartColors.tooltipBg,
+        border: `1px solid ${chartColors.tooltipBorder}`,
+        borderRadius: 10,
+        fontSize: 12,
+        padding: "8px 10px",
+        maxWidth: 220,
+      }}
+    >
+      <div style={{ fontWeight: 600, marginBottom: 4 }}>
+        {dateFromKey(pt.date)?.toLocaleDateString("de-DE", { weekday: "short", day: "2-digit", month: "2-digit" })}
+      </div>
+      <div>Anlauf: {pt.anlauf ?? "–"}</div>
+      <div>Alltag: {pt.alltag ?? "–"}</div>
+      {pt.training.length > 0 && (
+        <div style={{ marginTop: 4, color: "var(--text-dim)" }}>Training: {pt.training.join(", ")}</div>
+      )}
+      {vortag.length > 0 && (
+        <div style={{ marginTop: 4, color: "var(--text-dim)" }}>Am Vortag: {vortag.join(", ")}</div>
+      )}
+    </div>
+  );
+}
+
+function SehnenVerlaufView({ schmerzLog = [], logs = [], enduranceLogs = [], theme }) {
+  const chartColors = useChartColors(theme);
+  const [tage, setTage] = useState(28);
+  const heute = toDateKey(new Date());
+  const punkte = useMemo(
+    () => schmerzVerlauf(schmerzLog, { bisKey: heute, tage, logs, enduranceLogs })
+      // Fuer den Tooltip: was am Tag davor war - der Anlaufschmerz am Morgen
+      // antwortet auf den Vortag, nicht auf den Tag selbst.
+      .map((pt, i, alle) => ({ ...pt, vortagTraining: i > 0 ? alle[i - 1].training : [] })),
+    [schmerzLog, heute, tage, logs, enduranceLogs]
+  );
+
+  // Letzte sieben Tage gegen die sieben davor - beide mit dem Tag-Zaehler,
+  // damit sichtbar ist, worauf ein Schnitt beruht.
+  const vergleich = useMemo(() => SCHMERZ_FELDER.map((f) => ({
+    ...f,
+    jetzt: schmerzSchnitt(schmerzLog, f.key, tagVerschieben(heute, -6), heute),
+    davor: schmerzSchnitt(schmerzLog, f.key, tagVerschieben(heute, -13), tagVerschieben(heute, -7)),
+  })), [schmerzLog, heute]);
+
+  if (schmerzEintraege(schmerzLog).length === 0) {
+    return (
+      <div className="empty-state">
+        <Activity size={26} />
+        <p>Noch keine Einträge im Sehnen-Tagebuch. Trag deinen Anlauf- und Alltagsschmerz auf der Startseite ein – hier entsteht daraus der Verlauf.</p>
+      </div>
+    );
+  }
+
+  const fmtSchnitt = (r) => (r.schnitt == null ? "–" : fmtDecimal(Math.round(r.schnitt * 10) / 10));
+  const trainingsTage = punkte.filter((pt) => pt.training.length > 0).map((pt) => pt.date);
+  const kurzDatum = (key) => {
+    const d = dateFromKey(key);
+    return d ? `${d.getDate()}.${d.getMonth() + 1}.` : key;
+  };
+
+  return (
+    <div>
+      <span className="stat-section-title">{SEHNE_STANDARD.name}</span>
+      <div className="stats-grid stats-grid-secondary stats-grid-zwei">
+        {vergleich.map((v) => (
+          <div className="stat-item" key={v.key}>
+            <span className="stat-value">{fmtSchnitt(v.jetzt)}</span>
+            <span className="stat-label">
+              Ø {v.label}, letzte 7 Tage
+              {v.jetzt.schnitt == null && v.jetzt.tage > 0 && ` (erst ${v.jetzt.tage} von ${SCHMERZ_SCHNITT_MIN_TAGE} Tagen)`}
+              {v.davor.schnitt != null && ` · davor ${fmtSchnitt(v.davor)}`}
+            </span>
+          </div>
+        ))}
+      </div>
+
+      <div className="card chart-card">
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8 }}>
+          <span className="plan-title">Verlauf</span>
+          <span className="pain-legend">
+            <span><i style={{ background: chartColors.series.accent }} />Anlauf</span>
+            <span><i style={{ background: chartColors.series.gold }} />Alltag</span>
+          </span>
+        </div>
+        <div className="chip-row" style={{ marginTop: 10, marginBottom: 0 }}>
+          {SCHMERZ_ZEITRAEUME.map(([t, label]) => (
+            <span
+              key={t}
+              className={`chip chip-sm ${tage === t ? "active" : ""}`}
+              onClick={() => setTage(t)}
+            >
+              {label}
+            </span>
+          ))}
+        </div>
+        <div style={{ height: 210, marginTop: 14 }}>
+          <ResponsiveContainer width="99%" height="100%" debounce={1}>
+            <LineChart data={punkte} margin={{ top: 6, right: 4, left: 0, bottom: 0 }}>
+              <CartesianGrid strokeDasharray="3 3" stroke={chartColors.grid} vertical={false} />
+              <XAxis
+                dataKey="date"
+                stroke={chartColors.axis}
+                fontSize={11}
+                axisLine={false}
+                tickLine={false}
+                tickFormatter={kurzDatum}
+                minTickGap={18}
+              />
+              <YAxis
+                domain={[0, SCHMERZ_MAX]}
+                ticks={[0, 2, 4, 6, 8, 10]}
+                stroke={chartColors.axis}
+                fontSize={11}
+                axisLine={false}
+                tickLine={false}
+                width={28}
+                allowDecimals={false}
+              />
+              {/* Trainings- und Ausdauertage als dünne Linien im Hintergrund:
+                  So sieht man, ob der Anlaufschmerz am Morgen danach
+                  anders aussieht. */}
+              {trainingsTage.map((d) => (
+                <ReferenceLine key={d} x={d} stroke={chartColors.axis} strokeOpacity={0.45} strokeDasharray="2 3" />
+              ))}
+              <Tooltip content={<SchmerzTooltip chartColors={chartColors} />} />
+              <Line
+                type="monotone"
+                dataKey="anlauf"
+                name="Anlauf"
+                stroke={chartColors.series.accent}
+                strokeWidth={2.5}
+                dot={{ r: 2.5, fill: chartColors.series.accent }}
+                activeDot={{ r: 5 }}
+                isAnimationActive={false}
+              />
+              <Line
+                type="monotone"
+                dataKey="alltag"
+                name="Alltag"
+                stroke={chartColors.series.gold}
+                strokeWidth={2.5}
+                dot={{ r: 2.5, fill: chartColors.series.gold }}
+                activeDot={{ r: 5 }}
+                isAnimationActive={false}
+              />
+            </LineChart>
+          </ResponsiveContainer>
+        </div>
+        <p className="deload-basis">
+          Gestrichelt: Tage mit Training oder Ausdauer. Leere Tage bleiben Lücken –
+          „nicht eingetragen“ ist nicht dasselbe wie „schmerzfrei“.
+        </p>
+      </div>
+    </div>
+  );
+}
+
 function DashboardView({
   plans,
   logs,
@@ -11341,6 +11817,8 @@ function DashboardView({
   gymIndependentExercises,
   bodyWeights = [],
   bodyWeightNow = 0,
+  schmerzLog = [],
+  onSetzeSchmerz = () => {},
   pulsProfil = null,
   onEditPulsProfil = () => {},
   abgleichAktiv = false,
@@ -11689,6 +12167,14 @@ function DashboardView({
         </>
       )}
 
+      {/* Sehnen-Tagebuch: einmal am Tag, beide Werte unabhängig voneinander -
+          den Anlaufschmerz morgens, den Alltag abends oder wann es passt.
+          Nachtragen geht über den Tag im Kalender. */}
+      <span className="stat-section-title">{SEHNE_STANDARD.name}</span>
+      <div className="card">
+        <SchmerzEingabe schmerzLog={schmerzLog} dateKey={todayKey} onSetzen={onSetzeSchmerz} istHeute />
+      </div>
+
       {/* Atemübungen direkt von der Startseite - vorher lagen sie nur im
           Zahnrad-Menü zwischen Gyms und Bändern, als wären sie eine
           Einstellung und nicht etwas, das man macht. Führt auf ihre eigene
@@ -11884,6 +12370,8 @@ function CalendarView({
   deloadStatusInfo = null,
   deloadSuggestionHidden = false,
   onHideDeloadSuggestion,
+  schmerzLog = [],
+  onSetzeSchmerz = () => {},
 }) {
   const today = new Date();
   const [viewYear, setViewYear] = useState(today.getFullYear());
@@ -11930,6 +12418,12 @@ function CalendarView({
 
   // Workouts actually done, grouped by day. The calendar was purely a plan
   // until now - what you really trained was only visible in the history.
+  const schmerzTage = useMemo(
+    () => new Set(schmerzEintraege(schmerzLog).map((e) => e.date)),
+    [schmerzLog]
+  );
+  const selectedSchmerz = schmerzAm(schmerzLog, selectedDate);
+  const [schmerzOffen, setSchmerzOffen] = useState(false);
   const logsByDate = useMemo(() => {
     const map = {};
     (logs || []).forEach((l) => {
@@ -12199,7 +12693,10 @@ function CalendarView({
                     ].filter(Boolean).join(" ")}
                     onClick={() => (deloadDraft ? finishDraft(key) : setSelectedDate(key))}
                   >
-                    <span className="cal-day-num">{d.getDate()}</span>
+                    <span className="cal-day-num">
+                      {d.getDate()}
+                      {schmerzTage.has(key) && <span className="cal-pain-dot" title="Sehnen-Tagebuch eingetragen" />}
+                    </span>
                     {/* Nur der erste Tag wird beschriftet, und zwar ohne
                         Symbol davor: In einer Spalte von rund 46 Pixeln passt
                         beides zusammen nicht, das Wort wuerde abgeschnitten. */}
@@ -12359,6 +12856,36 @@ function CalendarView({
               </span>
             </div>
           </div>
+        )}
+
+        {/* Sehnen-Tagebuch für diesen Tag - zum Nachtragen oder Korrigieren.
+            Zugeklappt, solange man es nicht braucht; in der Zukunft gibt es
+            nichts einzutragen. */}
+        {selectedDate <= todayKey && (
+          <>
+            <div
+              className={`deload-toggle pain-toggle ${schmerzOffen ? "is-open" : ""}`}
+              onClick={() => setSchmerzOffen((o) => !o)}
+            >
+              <Activity size={14} />
+              <span>
+                {selectedSchmerz
+                  ? `Sehne: Anlauf ${selectedSchmerz.anlauf ?? "–"} · Alltag ${selectedSchmerz.alltag ?? "–"}`
+                  : "Sehne eintragen"}
+              </span>
+              <ChevronDown size={14} style={{ marginLeft: "auto", transform: schmerzOffen ? "rotate(180deg)" : undefined }} />
+            </div>
+            {schmerzOffen && (
+              <div style={{ marginTop: 10 }}>
+                <SchmerzEingabe
+                  schmerzLog={schmerzLog}
+                  dateKey={selectedDate}
+                  onSetzen={onSetzeSchmerz}
+                  istHeute={selectedDate === todayKey}
+                />
+              </div>
+            )}
+          </>
         )}
 
         {selectedEntries.length === 0 && selectedLogs.length === 0 && !addOpen && (
@@ -21132,6 +21659,7 @@ function LoadSignalBadge({ signal }) {
 
 function ProgressView({
   logs,
+  schmerzLog = [],
   plans = [],
   folders = [],
   exBy,
@@ -21221,6 +21749,12 @@ function ProgressView({
         onClick={() => setProgressTab("breathing")}
       >
         <Wind size={14} /> Atem
+      </button>
+      <button
+        className={`sub-tab ${progressTab === "sehne" ? "active" : ""}`}
+        onClick={() => setProgressTab("sehne")}
+      >
+        <Activity size={14} /> Sehne
       </button>
     </div>
   );
@@ -21625,6 +22159,16 @@ function ProgressView({
       <div>
         {subTabs}
         <BreathingProgressView breathingExercises={breathingExercises} breathingLogs={breathingLogs} />
+      </div>
+    );
+  }
+  // Wie der Atem-Reiter vor der Prüfung auf Trainingsdaten: Das Tagebuch
+  // braucht kein einziges Training, um etwas zu zeigen.
+  if (progressTab === "sehne") {
+    return (
+      <div>
+        {subTabs}
+        <SehnenVerlaufView schmerzLog={schmerzLog} logs={logs} enduranceLogs={enduranceLogs} theme={theme} />
       </div>
     );
   }

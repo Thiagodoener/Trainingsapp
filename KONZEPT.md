@@ -190,6 +190,10 @@ Spalte „Stand": ✅ gebaut, ⬜ noch nicht.
 | | Wirkung | „Leistung je Satz +3,4 % · Gefühl 3,7 statt 3,2" | 2 Wochen nach der Entlastung | ✅ |
 | **Schätzung nach der Entlastung** | Abgleich Wahrnehmung ↔ Zahlen | „Du hattest ‚besser' geschätzt – gemessen: gleich." | sofort nach der Abgabe | ✅ |
 | **Antwort auf eine Warnung** | persönliche Schwellen | Warnung kommt später oder gar nicht mehr | nach ~3 Antworten | ⬜ |
+| **Anlauf- und Alltagsschmerz (Sehne, 0–10)** | Rückmeldung zum Tag | „gestern 3 · Ø 7 Tage davor 2,4" direkt unter der Eingabe | Vortag sofort, Schnitt ab 3 eingetragenen Tagen | ✅ |
+| | Verlauf | Kurve im Fortschritt (Reiter „Sehne"), Trainings- und Ausdauertage gestrichelt, Ø letzte 7 Tage gegen die 7 davor | ab dem 2. Tag | ✅ |
+| | Kalender | Punkt am Tag, Werte in der Tagesansicht (auch nachtragbar) | sofort | ✅ |
+| | Reaktion am Folgetag | „Nach Tagen mit X liegt dein Anlaufschmerz am nächsten Morgen im Schnitt +1,5 höher (aus 6 Trainings)" | ~3–5 Trainings je Übung | ⬜ |
 
 Ehrlich dazu: Die Kalibrierungs-Auswertungen brauchen Datenpunkte und liefern in den ersten
 Wochen nichts. Die RIR-Effekte auf Rekorde, „Letztes Mal" und Intensität wirken sofort.
@@ -1154,12 +1158,37 @@ Textfeld aktiv ist, darf iOS die Seite verschieben.
 
 ---
 
+### Sehnen-Tagebuch (Nov. 2026)
+
+Anlass: Probleme mit der linken Achillessehne. Erfasst werden zwei Werte je Tag – der
+**Anlaufschmerz** (erste Schritte am Morgen bzw. erstes Belasten nach Ruhe) und der Schmerz
+im **Alltag**. Gespeichert unter `pain-log`, ein Eintrag je Sehne und Tag
+(`{ date, sehne, anlauf, alltag }`).
+
+- **0–10 statt der fünf Wort-Stufen des Sitzungsgefühls.** Bewusste Ausnahme: Schmerz wird in
+  Physiotherapie und Studien auf der numerischen 0–10-Skala erfasst (auch das
+  Schmerz-Monitoring-Modell nach Silbernagel für Sehnen arbeitet damit). So lässt sich die Kurve
+  ohne Übersetzung in der Physio zeigen, und ein Unterschied von etwa 2 Punkten gilt als spürbar.
+- **Ohne Ampel und ohne Grenzwert.** Die App zeigt den Verlauf und den Vergleich mit dem eigenen
+  Schnitt, sie sagt nicht, ab welcher Zahl es „zu viel" ist (Regel 3). Von Max so gewählt.
+- **Ein leerer Tag ist eine Lücke, keine 0.** „Nicht eingetragen" und „schmerzfrei" sind zwei
+  verschiedene Aussagen – die 0 wird deshalb als echter Wert gespeichert, und die Kurve reißt an
+  leeren Tagen. Der Schnitt zählt nur eingetragene Tage und steht erst ab 3 Tagen da.
+- **Beide Werte unabhängig eintragbar.** Anlauf morgens, Alltag abends; denselben Wert noch
+  einmal antippen nimmt ihn wieder heraus.
+- **Zunächst nur die täglichen Werte**, kein Schmerz während des Trainings je Übung, und die Sehne
+  wird keiner Muskelgruppe zugeordnet – für die geplante Folgetag-Auswertung zählen alle Trainings
+  und Ausdauer-Einheiten.
+
 ## Offene Punkte
 
 - **Unterbelastung erkennen** (Stufe 2, Normalbereich je Muskelgruppe) – die letzte offene der
   drei Zielsetzungen. Braucht das Fortschritts-Signal darunter als zweites Standbein.
 - **Antworten auf Warnungen justieren die Schwellen** (Regel 2). Die Warnungen stellen derzeit
   etwas fest und hören auf; die Rückfrage und das Merken der Antwort fehlen.
+- **Sehnen-Tagebuch: Reaktion am Folgetag** – Anlaufschmerz am Morgen nach einem Training gegen
+  den Morgen davor, je Übung bzw. Ausdauer-Sportart, mit Tendenz ab wenigen Trainings und immer mit
+  der Angabe, worauf sie beruht (wie bei Gefühl gegen Leistung).
 - **Ausdauer** – als eigene Einheiten gebaut (siehe oben), aber mit dem Puls statt Session-RPE als
   Maß. Die „gemeinsame Belastungswährung" für Kraft und Ausdauer ist damit bewusst **nicht**
   entstanden und bleibt offen, falls sie je gewollt ist.

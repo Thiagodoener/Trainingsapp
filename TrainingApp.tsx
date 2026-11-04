@@ -8384,6 +8384,11 @@ function TrainingAppInner() {
           justify-content: center;
           z-index: 200;
         }
+        /* Die Übungsdetails lassen sich auch aus dem Fenster „Übung
+           hinzufügen“ öffnen und müssen dann darüber liegen. */
+        .exercise-detail-overlay {
+          z-index: 310;
+        }
         .ex-row-clickable {
           cursor: pointer;
         }
@@ -14431,7 +14436,7 @@ function ExerciseDetailSheet({
   };
 
   return (
-    <div className="move-overlay" onClick={onClose}>
+    <div className="move-overlay exercise-detail-overlay" onClick={onClose}>
       <div className="exercise-detail-sheet" onClick={(e) => e.stopPropagation()}>
         <div className="exercise-detail-header">
           <div style={{ flex: 1, minWidth: 0 }}>
@@ -18832,7 +18837,13 @@ function LogView({
                 .map((e) => {
                   const addedCount = session.entries.filter((se) => se.exerciseId === e.id).length;
                   return (
-                    <div className="ex-row" key={e.id}>
+                    // Tippen auf die Zeile öffnet die Übungsdetails (Verlauf,
+                    // Notizen …); nur der Knopf fügt die Übung hinzu.
+                    <div
+                      className="ex-row ex-row-clickable"
+                      key={e.id}
+                      onClick={() => setSelectedExerciseId(e.id)}
+                    >
                       <span className="ex-name">{e.name}</span>
                       {addedCount > 0 && (
                         <span className="tag" title="So oft ist die Übung schon im Training">
@@ -18841,7 +18852,7 @@ function LogView({
                       )}
                       <button
                         className="btn btn-sm btn-ghost"
-                        onClick={() => addExerciseToSession(e.id)}
+                        onClick={(ev) => { ev.stopPropagation(); addExerciseToSession(e.id); }}
                       >
                         <Plus size={14} /> Hinzufügen
                       </button>

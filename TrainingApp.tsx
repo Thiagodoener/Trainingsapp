@@ -17067,24 +17067,23 @@ function PlansView({
               </button>
             ))}
             <div className="program-menu-divider" />
+            {/* Ordner legt man selten an - deshalb steht das hier im
+                Programm-Menü statt als großer Knopf neben "+ Workout". Dort
+                sitzt stattdessen "Leeres Training", das man öfter braucht. */}
             <button
               className="program-menu-item"
               onClick={() => {
                 setProgramMenuOpen(false);
-                // Reuses the exact same start flow as a real plan (gym
-                // picker included) - just with an empty exercise list.
-                // Exercises get added afterwards via "+ Übung hinzufügen",
-                // already there in the live logging screen.
-                onStart({ id: null, name: "Freies Training", items: [] });
+                setCreatingFolder(true);
               }}
             >
-              <Play size={14} /> Training ohne Plan starten
+              <Folder size={14} /> Neuer Ordner
             </button>
             {/* Gyms, Atemübungen, Sicherung und der Hell/Dunkel-Umschalter
                 standen früher hier mit drin. Sie gehören nicht zu einem
                 Programm, sondern zur ganzen App - und stehen deshalb jetzt im
                 Zahnrad links oben auf der Startseite. Hier bleibt, was mit
-                Plänen und Programmen zu tun hat, plus das freie Training. */}
+                Plänen, Ordnern und Programmen zu tun hat. */}
             <div className="program-menu-divider" />
             <button
               className="program-menu-item"
@@ -17188,9 +17187,15 @@ function PlansView({
         <button
           className="btn btn-ghost btn-sm"
           style={{ flex: 1 }}
-          onClick={() => setCreatingFolder((s) => !s)}
+          onClick={() => {
+            // Reuses the exact same start flow as a real plan (gym
+            // picker included) - just with an empty exercise list.
+            // Exercises get added afterwards via "+ Übung hinzufügen",
+            // already there in the live logging screen.
+            onStart({ id: null, name: "Freies Training", items: [] });
+          }}
         >
-          <Plus size={15} /> Ordner
+          <Play size={15} /> Leeres Training
         </button>
       </div>
 
@@ -17231,7 +17236,14 @@ function PlansView({
 
       {programFolders.length === 0 && (
         <div className="empty-state">
-          Noch keine Ordner in diesem Programm. Erstelle z. B. „Push“, „Pull“ oder „Beine“.
+          <div>Noch keine Ordner in diesem Programm. Erstelle z. B. „Push“, „Pull“ oder „Beine“.</div>
+          <button
+            className="btn btn-ghost btn-sm"
+            style={{ marginTop: 10 }}
+            onClick={() => setCreatingFolder(true)}
+          >
+            Ordner erstellen
+          </button>
         </div>
       )}
 

@@ -19611,8 +19611,14 @@ export function shortSet(s, isTimeBased = false) {
   if (!s) return "";
   // Bei einer Zeitübung mit Band gehört das Band dazu - "30s" allein sagt
   // nicht, ob es das schwarze oder das rote war.
-  if (isTimeBased) return s.bandName ? `${s.bandName} · ${toNum(s.duration)}s` : `${toNum(s.duration)}s`;
   const weight = toNum(s.weight);
+  if (isTimeBased) {
+    if (s.bandName) return `${s.bandName} · ${toNum(s.duration)}s`;
+    // Eine Zeitübung kann mit Gewicht gemacht werden (Langhantel drehen,
+    // Farmer's Walk, Unterarmstütz mit Scheibe). Dann gehört das Gewicht
+    // dazu wie bei "11×20kg" - "70s" allein verschweigt, womit.
+    return weight > 0 ? `${toNum(s.duration)}s×${fmtDecimal(weight)}kg` : `${toNum(s.duration)}s`;
+  }
   const reps = toNum(s.reps);
   // Bei einem Band sagt der Name mehr als die Kilogramm: "15×Rot" ist die
   // Angabe, mit der man am Gerät wieder etwas anfangen kann.
@@ -19683,7 +19689,9 @@ function ExerciseCharts({ logs, exerciseId, isTimeBased, theme, gyms = [], gymIn
       // eingebrochen - dabei gab es diese Zahl an dem Tag schlicht nicht.
       // Lieber eine Luecke als eine Null (siehe KONZEPT.md).
       const hatGewicht = workingSets.some((s) => toNum(s.weight) > 0);
-      const maxWeight = selectedIsTimeBased || !hatGewicht
+      // Auch bei einer Zeitübung: Wer mit Gewicht auf Zeit trainiert, will
+      // sehen, wie sich die Kilogramm entwickeln, nicht nur die Sekunden.
+      const maxWeight = !hatGewicht
         ? null
         // toNum: Math.max("62,5") ist NaN, und ein NaN in der Reihe reisst
         // die ganze Kurve mit.
@@ -19798,6 +19806,11 @@ function ExerciseCharts({ logs, exerciseId, isTimeBased, theme, gyms = [], gymIn
     ? [
         { key: "maxDuration", title: "Längster Satz (Sek.)", color: chartColors.series.accent },
         { key: "totalDuration", title: "Gesamtzeit pro Training (Sek.)", color: chartColors.series.gold },
+        // Zeitübung mit Gewicht: die Kilogramm als eigene Kurve - Sekunden
+        // und Gewicht lassen sich nicht sinnvoll zu einer Zahl verrechnen.
+        ...(hasAnyWeight
+          ? [{ key: "maxWeight", title: "Maximalgewicht pro Training (kg)", color: chartColors.series.teal }]
+          : []),
       ]
     : !hasAnyWeight
     ? [

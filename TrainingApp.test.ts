@@ -2935,6 +2935,12 @@ describe("Bänder mit Art und Farbe", () => {
     expect(shortSet({ duration: 30, bandName: "Schwarz (lang)" }, true)).toBe("Schwarz (lang) · 30s");
     expect(shortSet({ duration: 30 }, true)).toBe("30s");
   });
+
+  it("zeigt bei Zeituebungen mit Gewicht auch die Kilogramm", () => {
+    expect(shortSet({ duration: 70, weight: 20 }, true)).toBe("70s×20kg");
+    expect(shortSet({ duration: 60, weight: "12,5" }, true)).toBe("60s×12,5kg");
+    expect(shortSet({ duration: 60, weight: 0 }, true)).toBe("60s");
+  });
 });
 
 describe("Satzplan im Workout", () => {
